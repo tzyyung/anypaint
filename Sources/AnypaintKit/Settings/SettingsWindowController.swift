@@ -4,8 +4,7 @@ import KeyboardShortcuts
 /// 設定視窗：重新錄製截圖 / 貼圖的全域快鍵，並調整框選逾時（看門狗）秒數。
 public final class SettingsWindowController: NSWindowController {
 
-    private let watchdogStepper = NSStepper()
-    private let watchdogValueLabel = NSTextField(labelWithString: "")
+    private let watchdogPopup = NSPopUpButton()
 
     public init() {
         let window = NSWindow(
@@ -41,7 +40,11 @@ public final class SettingsWindowController: NSWindowController {
 
         let watchdogRow = buildWatchdogRow()
 
-        let watchdogHint = NSTextField(labelWithString: "無任何操作達此秒數就自動取消框選（免按鍵的安全保險）。")
+        let watchdogHint = NSTextField(labelWithString:
+            "無任何操作達此時間就自動取消框選（免按鍵的安全保險）。\n選「關閉」後將沒有免按鍵的自動逃生；Esc、右鍵、再按快鍵、工具列取消仍可用。")
+        watchdogHint.usesSingleLineMode = false
+        watchdogHint.cell?.wraps = true
+        watchdogHint.preferredMaxLayoutWidth = 360
         watchdogHint.font = .systemFont(ofSize: 11)
         watchdogHint.textColor = .secondaryLabelColor
 
@@ -78,34 +81,32 @@ public final class SettingsWindowController: NSWindowController {
     }
 
     private func buildWatchdogRow() -> NSView {
-        let label = NSTextField(labelWithString: "逾時")
+        let label = NSTextField(labelWithString: "自動取消")
         label.alignment = .right
         label.setContentHuggingPriority(.required, for: .horizontal)
         label.widthAnchor.constraint(equalToConstant: 64).isActive = true
 
-        watchdogStepper.minValue = 15
-        watchdogStepper.maxValue = 300
-        watchdogStepper.increment = 15
-        watchdogStepper.valueWraps = false
-        watchdogStepper.doubleValue = AppSettings.overlayWatchdogSeconds
-        watchdogStepper.target = self
-        watchdogStepper.action = #selector(watchdogChanged)
+        for seconds in AppSettings.watchdogOptions {
+            let title = seconds == 0 ? "關閉" : "\(Int(seconds) / 60) 分鐘"
+            watchdogPopup.addItem(withTitle: title)
+            watchdogPopup.lastItem?.tag = Int(seconds)
+        }
+        // 舊值（含 stepper 時代的任意秒數）對應到最接近的選項
+        let current = AppSettings.overlayWatchdogSeconds
+        let nearest = AppSettings.watchdogOptions.min {
+            abs($0 - current) < abs($1 - current)
+        } ?? 60
+        _ = watchdogPopup.selectItem(withTag: Int(nearest))   // 回傳 Bool（是否選中），這裡不需要
+        watchdogPopup.target = self
+        watchdogPopup.action = #selector(watchdogChanged)
 
-        watchdogValueLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        updateWatchdogLabel()
-
-        let row = NSStackView(views: [label, watchdogStepper, watchdogValueLabel])
+        let row = NSStackView(views: [label, watchdogPopup])
         row.orientation = .horizontal
         row.spacing = 10
         return row
     }
 
-    private func updateWatchdogLabel() {
-        watchdogValueLabel.stringValue = "\(Int(AppSettings.overlayWatchdogSeconds)) 秒"
-    }
-
     @objc private func watchdogChanged() {
-        AppSettings.overlayWatchdogSeconds = watchdogStepper.doubleValue
-        updateWatchdogLabel()
+        AppSettings.overlayWatchdogSeconds = Double(watchdogPopup.selectedTag())
     }
 }
