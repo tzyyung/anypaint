@@ -47,6 +47,7 @@ public struct Annotation: Identifiable, Equatable {
         case line(from: CGPoint, to: CGPoint)
         case arrow(from: CGPoint, to: CGPoint)
         case counter(center: CGPoint)
+        case text(origin: CGPoint, string: String)
     }
 
     public let id: UUID
@@ -62,6 +63,9 @@ public struct Annotation: Identifiable, Equatable {
     /// 序號圓標半徑：直徑隨粗細（spec）。
     public var counterRadius: CGFloat { 8 + style.lineWidth * 2 }
 
+    /// 文字字級（spec 修訂：12＋線寬×2，滾輪熱狀態調整＝調字級）。
+    public var textFontSize: CGFloat { 12 + style.lineWidth * 2 }
+
     /// 外接框（線段類為端點正規化矩形，寬或高可為 0）。
     public var bounds: CGRect {
         switch shape {
@@ -73,13 +77,16 @@ public struct Annotation: Identifiable, Equatable {
         case .counter(let c):
             let r = counterRadius
             return CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)
+        case .text(let origin, let string):
+            return CGRect(origin: origin,
+                          size: AnnotationGeometry.measureText(string, fontSize: textFontSize))
         }
     }
 
     /// 點選命中：面積類用外框外擴 threshold；線段類算點到線段距離（spec）。
     public func hitTest(_ point: CGPoint, threshold: CGFloat = 8) -> Bool {
         switch shape {
-        case .rect, .ellipse, .counter:
+        case .rect, .ellipse, .counter, .text:
             return bounds.insetBy(dx: -threshold, dy: -threshold).contains(point)
         case .line(let a, let b), .arrow(let a, let b):
             let d = AnnotationGeometry.distance(from: point, toSegmentFrom: a, to: b)
@@ -104,6 +111,9 @@ public struct Annotation: Identifiable, Equatable {
                            to: CGPoint(x: b.x + delta.dx, y: b.y + delta.dy))
         case .counter(let c):
             shape = .counter(center: CGPoint(x: c.x + delta.dx, y: c.y + delta.dy))
+        case .text(let origin, let string):
+            shape = .text(origin: CGPoint(x: origin.x + delta.dx, y: origin.y + delta.dy),
+                          string: string)
         }
     }
 }

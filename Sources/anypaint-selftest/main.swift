@@ -276,6 +276,23 @@ AnnotationStyleStore.save(bypassStyle, for: .line)
 checkEq("styleStore：save 對越界值自行 clamp", AnnotationStyleStore.style(for: .line).lineWidth, 24)
 AnnotationStyleStore.reset(for: .line)
 
+// 12) 文字標註：量測、bounds、hitTest、move（量測值依系統字型，斷言相對性質不釘死像素）
+let textSize = AnnotationGeometry.measureText("測試文字", fontSize: 20)
+checkTrue("text 量測：寬度為正", textSize.width > 0)
+checkTrue("text 量測：高度合理（>字級一半）", textSize.height > 10)
+checkTrue("text 量測：空字串寬 0", AnnotationGeometry.measureText("", fontSize: 20).width == 0)
+
+let textA = Annotation(shape: .text(origin: CGPoint(x: 10, y: 10), string: "測試文字"),
+                       style: AnnotationStyle(color: .red, lineWidth: 4))
+checkEq("text 字級規則：12+4×2", textA.textFontSize, 20)
+checkTrue("text bounds：origin 在左下", textA.bounds.origin == CGPoint(x: 10, y: 10))
+checkTrue("text bounds：尺寸＝量測值", textA.bounds.size == AnnotationGeometry.measureText("測試文字", fontSize: 20))
+checkTrue("text hitTest：中心命中", textA.hitTest(CGPoint(x: textA.bounds.midX, y: textA.bounds.midY), threshold: 0))
+checkTrue("text hitTest：遠處不中", !textA.hitTest(CGPoint(x: 500, y: 500), threshold: 8))
+var movedText = textA
+movedText.move(by: CGVector(dx: 5, dy: -3))
+checkTrue("text move：origin 平移", movedText.bounds.origin == CGPoint(x: 15, y: 7))
+
 // 10) 合成匯出：白底 + 紅框標註 → 像素驗證（「所見即所存」的離屏版）
 func compositeSmokeTest() {
     func solidWhite(w: Int, h: Int) -> CGImage? {

@@ -56,6 +56,9 @@ public enum AnnotationRenderer {
             // 序號渲染（圓＋數字，需編號與 CoreText）在階段 3 實作；
             // 編號來自 AnnotationDocument.counterNumber(for:)，renderer 屆時加參數。
             break
+
+        case .text:
+            break   // 文字渲染於階段 3 Task 2（CTLine），此 case 先佔位保持編譯綠
         }
     }
 
