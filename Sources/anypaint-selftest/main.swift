@@ -208,6 +208,21 @@ func rendererSmokeTest() {
 }
 rendererSmokeTest()
 
+// 9) 工具樣式記憶（UserDefaults round-trip）＋ rawValue 往返
+AnnotationStyleStore.reset(for: .rect)
+checkEq("styleStore：沒存過＝紅色中筆",
+        AnnotationStyleStore.style(for: .rect),
+        AnnotationStyle(color: .red, thickness: .medium))
+AnnotationStyleStore.save(AnnotationStyle(color: .blue, thickness: .thick), for: .arrow)
+checkEq("styleStore：save/load round-trip",
+        AnnotationStyleStore.style(for: .arrow),
+        AnnotationStyle(color: .blue, thickness: .thick))
+checkEq("styleStore：各工具互不影響",
+        AnnotationStyleStore.style(for: .rect),
+        AnnotationStyle(color: .red, thickness: .medium))
+checkEq("rawValue：color 往返", AnnotationColor(rawValue: AnnotationColor.green.rawValue), .green)
+checkEq("rawValue：thickness 往返", AnnotationThickness(rawValue: "thin"), AnnotationThickness.thin)
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")

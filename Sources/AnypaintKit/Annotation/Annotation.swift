@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 /// 標註顏色：固定色盤 7 色（spec 定案，不做任意色）。
-public enum AnnotationColor: CaseIterable, Equatable {
+public enum AnnotationColor: String, CaseIterable {
     case red, orange, yellow, green, blue, black, white
 
     public var cgColor: CGColor {
@@ -21,7 +21,7 @@ public enum AnnotationColor: CaseIterable, Equatable {
 }
 
 /// 粗細三檔（spec 定案：2/4/6pt）。
-public enum AnnotationThickness: CaseIterable, Equatable {
+public enum AnnotationThickness: String, CaseIterable {
     case thin, medium, thick
 
     public var lineWidth: CGFloat {
