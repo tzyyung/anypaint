@@ -388,6 +388,66 @@ func compositeOffsetTest() {
 }
 compositeOffsetTest()
 
+// 13) 文字渲染像素：用「█」（實心塊字）保證確定性覆蓋
+func textRenderSmokeTest() {
+    let w = 60, h = 40
+    var buf = [UInt8](repeating: 0, count: w * h * 4)
+    let a = Annotation(shape: .text(origin: CGPoint(x: 5, y: 5), string: "█"),
+                       style: AnnotationStyle(color: .red, lineWidth: 4))   // 字級 20
+    buf.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(
+            data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        AnnotationRenderer.render([a], in: ctx)
+    }
+    // 取樣文字框中心（bounds 由量測而來，中心必在 █ 的實心區）
+    let cx = Int(a.bounds.midX), cyTop = h - 1 - Int(a.bounds.midY)
+    let idx = (cyTop * w + cx) * 4
+    checkTrue("text 渲染：█ 中心為紅", buf[idx] > 150 && buf[idx + 3] > 150)
+}
+textRenderSmokeTest()
+
+// 14) 序號渲染像素：圓身取樣＋counterNumbers 查表 smoke
+func counterRenderSmokeTest() {
+    let w = 60, h = 60
+    var buf = [UInt8](repeating: 0, count: w * h * 4)
+    let a = Annotation(shape: .counter(center: CGPoint(x: 30, y: 30)),
+                       style: AnnotationStyle(color: .blue, lineWidth: 4))   // 半徑 16
+    buf.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(
+            data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        AnnotationRenderer.render([a], in: ctx, counterNumbers: [a.id: 3])
+    }
+    // 圓身（中心右偏 10px、避開數字）＝藍；圓外（角落）＝空
+    let bodyIdx = ((h - 1 - 30) * w + 40) * 4
+    checkTrue("counter 渲染：圓身為藍", buf[bodyIdx + 2] > 150 && buf[bodyIdx] < 90)
+    let outIdx = (2 * w + 2) * 4
+    checkTrue("counter 渲染：圓外空白", buf[outIdx + 3] == 0)
+}
+counterRenderSmokeTest()
+
+// 15) composite 帶 counterNumbers 編譯／執行 smoke（簽名回歸防護）
+func compositeCounterSmokeTest() {
+    guard let src = { () -> CGImage? in
+        guard let ctx = CGContext(data: nil, width: 20, height: 20, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 20, height: 20))
+        return ctx.makeImage()
+    }() else { failures += 1; print("❌ composite counter：白底失敗"); return }
+    let c = Annotation(shape: .counter(center: CGPoint(x: 5, y: 5)),
+                       style: AnnotationStyle(color: .red, lineWidth: 1))
+    let out = AnnotationRenderer.composite(objects: [c], overCropped: src,
+                                           selection: CGRect(x: 0, y: 0, width: 10, height: 10),
+                                           scale: 2, counterNumbers: [c.id: 1])
+    checkTrue("composite：counterNumbers 參數可用且非 nil", out != nil)
+}
+compositeCounterSmokeTest()
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")

@@ -400,7 +400,8 @@ final class SelectionView: NSView {
                 NSGraphicsContext.current?.saveGraphicsState()
                 NSBezierPath(rect: rect).addClip()
                 if let cg = NSGraphicsContext.current?.cgContext {
-                    AnnotationRenderer.render(annotations.objects, in: cg)
+                    AnnotationRenderer.render(annotations.objects, in: cg,
+                                              counterNumbers: counterNumbersMap())
                     if let shape = provisionalShape {
                         AnnotationRenderer.render(
                             [Annotation(shape: shape, style: currentStyle)], in: cg)
@@ -802,6 +803,17 @@ final class SelectionView: NSView {
         toolbar.setUndoState(canUndo: annotations.canUndo, canRedo: annotations.canRedo)
     }
 
+    /// 序號編號查表（渲染時算、不存死——刪除/undo 天然正確）。
+    private func counterNumbersMap() -> [UUID: Int] {
+        var m: [UUID: Int] = [:]
+        for a in annotations.objects {
+            if case .counter = a.shape, let n = annotations.counterNumber(for: a.id) {
+                m[a.id] = n
+            }
+        }
+        return m
+    }
+
     // MARK: 調整框幾何
 
     private func clampPoint(_ p: CGPoint) -> CGPoint {
@@ -862,7 +874,7 @@ final class SelectionView: NSView {
             final = cropped
         } else if let composed = AnnotationRenderer.composite(
             objects: annotations.objects, overCropped: cropped,
-            selection: sel, scale: snapshot.scale) {
+            selection: sel, scale: snapshot.scale, counterNumbers: counterNumbersMap()) {
             final = composed
         } else {
             NSLog("anypaint: 標註合成失敗，改輸出未標註裁切圖")
