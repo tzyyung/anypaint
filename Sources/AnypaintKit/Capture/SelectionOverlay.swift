@@ -273,6 +273,8 @@ final class SelectionView: NSView {
     private var editingTextID: UUID?
 
     var isEditingText: Bool { textEditor != nil }
+    /// 輸入法組字中（注音等 marked text）——此時 Esc 要讓給 IME 清組字，不能當 commit。
+    var isComposingText: Bool { textEditor?.hasMarkedText() ?? false }
 
     private let toolbar = SelectionToolbar()
 
@@ -822,6 +824,8 @@ final class SelectionView: NSView {
         }), case .text(let origin, let string) = hit.shape {
             openTextEditor(origin: origin, initialString: string, existing: hit)
         } else {
+            // 框外不開新編輯器：文字輸入成本高，不能等 commit 才靜默丟棄。
+            guard let sel = selection, sel.contains(p) else { return }
             openTextEditor(origin: p, initialString: "", existing: nil)
         }
     }
@@ -871,6 +875,7 @@ final class SelectionView: NSView {
     }
 
     private func undoAnnotation() {
+        commitTextEditing()   // 編輯中按 undo/redo：先落字，避免 update(id:) 對已消失物件靜默 no-op 丟字
         guard annotations.canUndo else { return }
         annotations.undo()
         clearHotAnnotation()   // spec：undo/redo 清除熱狀態
@@ -880,6 +885,7 @@ final class SelectionView: NSView {
     }
 
     private func redoAnnotation() {
+        commitTextEditing()   // 編輯中按 undo/redo：先落字，避免 update(id:) 對已消失物件靜默 no-op 丟字
         guard annotations.canRedo else { return }
         annotations.redo()
         clearHotAnnotation()
@@ -1061,6 +1067,11 @@ final class SelectionOverlayController {
                 //（多螢幕各開一個編輯器也保證最多兩下 Esc 離開）；否則取消 overlay。
                 let editing = (self?.windows ?? []).compactMap { $0.selectionView }
                     .filter { $0.isEditingText }
+                // IME 組字中（注音打到一半）：把 Esc 讓給輸入法清組字，
+                // 下一下 Esc 才輪到「完成編輯」——否則未組完的符號會被烙進字串。
+                if editing.contains(where: { $0.isComposingText }) {
+                    return event
+                }
                 if !editing.isEmpty {
                     editing.forEach { $0.commitTextEditing() }
                     return nil
@@ -1135,6 +1146,8 @@ final class SelectionOverlayController {
         // 效果等同擷取＝複製到剪貼簿），沒有就純取消。免輸入保證不變。
         // 多螢幕都有有效框時取快照順序的第一個（與 Enter/擷取按鈕的視窗歸屬同層級的
         // 既有模糊，總審查裁定可接受）；階段 5 若做「最後互動視圖」再一併精準化。
+        // 搶救前先把編輯中的文字落定（影像才會與所見一致；使用者已缺席，盡力保留）。
+        windows.compactMap { $0.selectionView }.forEach { $0.commitTextEditing() }
         if let image = windows.compactMap({ $0.selectionView?.currentCroppedImage() }).first {
             NSLog("anypaint: 框選看門狗逾時，已把目前框選內容存入剪貼簿（搶救）")
             finish(with: image)
