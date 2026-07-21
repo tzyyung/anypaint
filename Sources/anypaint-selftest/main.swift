@@ -299,13 +299,14 @@ func compositeOffsetTest() {
     guard let source = solid(w: 20, h: 20) else {
         failures += 1; print("❌ composite offset：白底建立失敗"); return
     }
-    // selection 原點 (4,3)：標註畫在絕對 view 座標 (6,5,4,4)，相對框內位置＝(2,2)，
-    // 期望像素與 10) 完全相同——translate 符號/順序錯任何一個都會偏移而失敗。
-    let a = Annotation(shape: .rect(CGRect(x: 6, y: 5, width: 4, height: 4)),
+    // selection 原點 (30,20)：標註畫在絕對 view 座標 (32,22,4,4)，相對框內位置＝(2,2)。
+    // 若 translate 符號寫反、或 scaleBy/translateBy 順序寫反（殘差 selMin×(scale−1)=(30,20)px，
+    // 遠大於框線帶寬），標註都會整個偏出 20×20 畫布 → 紅取樣必失敗。
+    let a = Annotation(shape: .rect(CGRect(x: 32, y: 22, width: 4, height: 4)),
                        style: AnnotationStyle(color: .red, thickness: .medium))
     guard let out = AnnotationRenderer.composite(
             objects: [a], overCropped: source,
-            selection: CGRect(x: 4, y: 3, width: 10, height: 10), scale: 2),
+            selection: CGRect(x: 30, y: 20, width: 10, height: 10), scale: 2),
           let buf = rgba(of: out) else {
         failures += 1; print("❌ composite offset：合成失敗"); return
     }
