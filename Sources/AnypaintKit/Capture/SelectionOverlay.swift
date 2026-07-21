@@ -181,6 +181,7 @@ final class SelectionView: NSView {
         if drag == nil, selection == nil { invalidateLoupe(around: nil, and: p) }
     }
     override func mouseMoved(with event: NSEvent) {
+        onInteraction?()
         let p = convert(event.locationInWindow, from: nil)
         cursor(at: p).set()
         let prev = hoverPoint
@@ -434,7 +435,14 @@ final class SelectionView: NSView {
         onCancel?()
     }
 
+    // 捲動也算互動（重置看門狗），事件本身照常往下傳。
+    override func scrollWheel(with event: NSEvent) {
+        onInteraction?()
+        super.scrollWheel(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
+        onInteraction?()
         switch event.keyCode {
         case 53:            // Esc → 取消
             onCancel?()
@@ -568,6 +576,7 @@ final class SelectionOverlayController {
 
         // 逃生路 2：本地事件監聽，Esc 一律取消
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.armWatchdog()          // 任何鍵都算互動（含工具列有焦點時）
             if event.keyCode == 53 { self?.cancel(); return nil }
             return event
         }
