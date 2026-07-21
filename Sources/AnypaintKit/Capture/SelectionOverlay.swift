@@ -258,6 +258,8 @@ final class SelectionView: NSView {
     private var provisionalShape: Annotation.Shape?
     private var shapeAnchor: CGPoint?
     private var currentStyle = AnnotationStyleStore.style(for: .rect)
+    /// 滾輪調粗細的累積量（觸控板會送大量小 delta，湊滿閾值才跳一檔）。
+    private var thicknessScrollAccum: CGFloat = 0
     /// 有任何標註就鎖框（spec）：控制點隱藏、框不可建/移/縮；undo 清空自動解鎖。
     private var frameLocked: Bool { !annotations.isEmpty }
 
@@ -684,10 +686,36 @@ final class SelectionView: NSView {
         onCancel?()
     }
 
-    // 捲動也算互動（重置看門狗），事件本身照常往下傳。
+    // 捲動也算互動（重置看門狗）。標註工具作用中：滾輪調整粗細（向上加粗），
+    // 事件吞掉不往下傳；未作用時照常傳遞。
     override func scrollWheel(with event: NSEvent) {
         onInteraction?()
-        super.scrollWheel(with: event)
+        guard activeTool != nil else {
+            super.scrollWheel(with: event)
+            return
+        }
+        thicknessScrollAccum += event.scrollingDeltaY
+        let step: CGFloat = 5
+        while thicknessScrollAccum >= step {
+            thicknessScrollAccum -= step
+            adjustThickness(by: 1)
+        }
+        while thicknessScrollAccum <= -step {
+            thicknessScrollAccum += step
+            adjustThickness(by: -1)
+        }
+    }
+
+    /// 粗細跳檔（細↔中↔粗，不繞圈），同步工具列與每工具記憶。
+    private func adjustThickness(by delta: Int) {
+        let all = AnnotationThickness.allCases
+        guard let i = all.firstIndex(of: currentStyle.thickness) else { return }
+        let ni = min(all.count - 1, max(0, i + delta))
+        guard ni != i else { return }
+        currentStyle.thickness = all[ni]
+        toolbar.setStyle(currentStyle)
+        if let tool = activeTool { AnnotationStyleStore.save(currentStyle, for: tool) }
+        needsDisplay = true   // 拖曳中的暫定形狀即時反映新粗細
     }
 
     override func keyDown(with event: NSEvent) {
