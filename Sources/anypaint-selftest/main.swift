@@ -271,6 +271,52 @@ func compositeSmokeTest() {
 }
 compositeSmokeTest()
 
+// 10b) 合成匯出：非零原點 selection——驗證 translate 的符號與順序
+//（原點 (0,0) 時 translate 是 no-op，錯了也測不出來；這裡補真實情境）
+func compositeOffsetTest() {
+    func solid(w: Int, h: Int) -> CGImage? {
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+    func rgba(of img: CGImage) -> [UInt8]? {
+        let w = img.width, h = img.height
+        var buf = [UInt8](repeating: 0, count: w * h * 4)
+        let ok: Bool = buf.withUnsafeMutableBytes { raw in
+            guard let ctx = CGContext(
+                data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        return ok ? buf : nil
+    }
+    guard let source = solid(w: 20, h: 20) else {
+        failures += 1; print("❌ composite offset：白底建立失敗"); return
+    }
+    // selection 原點 (4,3)：標註畫在絕對 view 座標 (6,5,4,4)，相對框內位置＝(2,2)，
+    // 期望像素與 10) 完全相同——translate 符號/順序錯任何一個都會偏移而失敗。
+    let a = Annotation(shape: .rect(CGRect(x: 6, y: 5, width: 4, height: 4)),
+                       style: AnnotationStyle(color: .red, thickness: .medium))
+    guard let out = AnnotationRenderer.composite(
+            objects: [a], overCropped: source,
+            selection: CGRect(x: 4, y: 3, width: 10, height: 10), scale: 2),
+          let buf = rgba(of: out) else {
+        failures += 1; print("❌ composite offset：合成失敗"); return
+    }
+    let redIdx = (11 * 20 + 4) * 4
+    checkTrue("composite offset：非零原點標註像素為紅", buf[redIdx] > 180 && buf[redIdx + 1] < 90)
+    let whiteIdx = (1 * 20 + 18) * 4
+    checkTrue("composite offset：非零原點框外仍白",
+              buf[whiteIdx] > 200 && buf[whiteIdx + 1] > 200 && buf[whiteIdx + 2] > 200)
+}
+compositeOffsetTest()
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
