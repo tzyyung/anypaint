@@ -8,7 +8,7 @@ public final class SettingsWindowController: NSWindowController {
 
     public init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 250),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 300), // 高度要容得下兩行 watchdogHint
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
