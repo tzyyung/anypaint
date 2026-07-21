@@ -293,6 +293,7 @@ final class SelectionView: NSView {
         toolbar.onCancel = { [weak self] in self?.onCancel?() }
         toolbar.onToolSelected = { [weak self] tool in
             guard let self else { return }
+            self.commitTextEditing()   // 編輯中切工具＝先落字，避免編輯器與工具狀態不同步
             self.activeTool = tool
             self.clearHotAnnotation()   // 切工具或取消作用 → 解除熱狀態（spec）
             if let tool {
@@ -1052,14 +1053,16 @@ final class SelectionOverlayController {
             windows.append(window)
         }
 
-        // 逃生路 2：本地事件監聽，Esc 一律取消
+        // 逃生路 2：本地事件監聽——Esc 分層（編輯中先完成編輯、否則取消）
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.armWatchdog()          // 任何鍵都算互動（含文字編輯中打字）
             if event.keyCode == 53 {
-                // Esc 分層：有 view 在文字編輯中 → 只完成編輯；否則取消 overlay。
-                if let editing = self?.windows.compactMap({ $0.selectionView })
-                    .first(where: { $0.isEditingText }) {
-                    editing.commitTextEditing()
+                // Esc 分層：有 view 在文字編輯中 → 一次完成「全部」視窗的編輯
+                //（多螢幕各開一個編輯器也保證最多兩下 Esc 離開）；否則取消 overlay。
+                let editing = (self?.windows ?? []).compactMap { $0.selectionView }
+                    .filter { $0.isEditingText }
+                if !editing.isEmpty {
+                    editing.forEach { $0.commitTextEditing() }
                     return nil
                 }
                 self?.cancel()
