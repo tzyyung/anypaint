@@ -19,26 +19,103 @@ enum NativeCursors {
 
 // MARK: - 工具列
 
-/// 選取框旁的浮動工具列。用一個會「吞掉滑鼠事件」的容器，避免點工具列時
-/// 誤觸底下的 SelectionView 而開始新框選。目前只有擷取/取消 + 尺寸；
-/// 之後 annotation 階段會在這排上加標註工具。
+/// 選取框旁的浮動工具列（兩排）：上排＝標註工具｜undo/redo｜取消/擷取，
+/// 下排＝樣式（7 色塊＋粗細三檔，選了工具才顯示）。
+/// 用一個會「吞掉滑鼠事件」的容器，避免點工具列時誤觸底下的 SelectionView。
 final class SelectionToolbar: NSView {
     var onConfirm: (() -> Void)?
     var onCancel: (() -> Void)?
+    /// 點工具按鈕；再點一次作用中的工具＝取消作用（回傳 nil）。
+    var onToolSelected: ((AnnotationTool?) -> Void)?
+    var onUndo: (() -> Void)?
+    var onRedo: (() -> Void)?
+    var onStyleChanged: ((AnnotationStyle) -> Void)?
+
+    private var toolButtons: [AnnotationTool: NSButton] = [:]
+    private var colorButtons: [AnnotationColor: NSButton] = [:]
+    private var thicknessButtons: [AnnotationThickness: NSButton] = [:]
+    private let undoButton = NSButton()
+    private let redoButton = NSButton()
+    private let styleRow = NSStackView()
+    private var activeTool: AnnotationTool?
+    private var currentStyle = AnnotationStyle(color: .red, thickness: .medium)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor(white: 0.15, alpha: 0.95).cgColor
         layer?.cornerRadius = 6
+        buildRows()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) 未實作") }
 
-        let cancel = makeButton("取消", #selector(cancelAction))
-        let confirm = makeButton("擷取", #selector(confirmAction))
+    private func buildRows() {
+        // 上排：工具（SF Symbol；階段 3–5 加工具時在這張表補 symbol）
+        let toolsRow = NSStackView()
+        toolsRow.orientation = .horizontal
+        toolsRow.spacing = 4
+        let symbols: [(AnnotationTool, String)] = [
+            (.rect, "rectangle"), (.ellipse, "circle"),
+            (.line, "line.diagonal"), (.arrow, "arrow.up.right")
+        ]
+        for (tool, symbol) in symbols {
+            let b = NSButton()
+            configureSymbolButton(b, symbol, #selector(toolTapped(_:)))
+            b.identifier = NSUserInterfaceItemIdentifier(tool.rawValue)
+            toolButtons[tool] = b
+            toolsRow.addArrangedSubview(b)
+        }
+        toolsRow.addArrangedSubview(separator())
+        configureSymbolButton(undoButton, "arrow.uturn.backward", #selector(undoTapped))
+        configureSymbolButton(redoButton, "arrow.uturn.forward", #selector(redoTapped))
+        undoButton.isEnabled = false
+        redoButton.isEnabled = false
+        toolsRow.addArrangedSubview(undoButton)
+        toolsRow.addArrangedSubview(redoButton)
+        toolsRow.addArrangedSubview(separator())
+        let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
+        cancel.bezelStyle = .rounded
+        cancel.controlSize = .small
+        let confirm = NSButton(title: "擷取", target: self, action: #selector(confirmAction))
+        confirm.bezelStyle = .rounded
+        confirm.controlSize = .small
         confirm.keyEquivalent = "\r"   // Enter = 擷取
+        toolsRow.addArrangedSubview(cancel)
+        toolsRow.addArrangedSubview(confirm)
 
-        let stack = NSStackView(views: [cancel, confirm])
-        stack.orientation = .horizontal
-        stack.spacing = 8
+        // 下排：色盤＋粗細（選了工具才顯示）
+        styleRow.orientation = .horizontal
+        styleRow.spacing = 4
+        for color in AnnotationColor.allCases {
+            let b = NSButton(title: "", target: self, action: #selector(colorTapped(_:)))
+            b.isBordered = false
+            b.wantsLayer = true
+            b.layer?.backgroundColor = color.cgColor
+            b.layer?.cornerRadius = 3
+            b.layer?.borderColor = NSColor.controlAccentColor.cgColor   // 選中框用強調色（白色塊也看得到）
+            b.identifier = NSUserInterfaceItemIdentifier(color.rawValue)
+            b.widthAnchor.constraint(equalToConstant: 18).isActive = true
+            b.heightAnchor.constraint(equalToConstant: 18).isActive = true
+            colorButtons[color] = b
+            styleRow.addArrangedSubview(b)
+        }
+        styleRow.addArrangedSubview(separator())
+        let thickTitles: [(AnnotationThickness, String)] = [(.thin, "細"), (.medium, "中"), (.thick, "粗")]
+        for (t, title) in thickTitles {
+            let b = NSButton(title: title, target: self, action: #selector(thicknessTapped(_:)))
+            b.bezelStyle = .rounded
+            b.controlSize = .small
+            b.setButtonType(.pushOnPushOff)   // .on 顯示按下狀態＝選中檔位
+            b.identifier = NSUserInterfaceItemIdentifier(t.rawValue)
+            thicknessButtons[t] = b
+            styleRow.addArrangedSubview(b)
+        }
+        styleRow.isHidden = true
+
+        let stack = NSStackView(views: [toolsRow, styleRow])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 5
         stack.edgeInsets = NSEdgeInsets(top: 5, left: 8, bottom: 5, right: 8)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
@@ -49,13 +126,75 @@ final class SelectionToolbar: NSView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
     }
-    required init?(coder: NSCoder) { fatalError("init(coder:) 未實作") }
 
-    private func makeButton(_ title: String, _ sel: Selector) -> NSButton {
-        let b = NSButton(title: title, target: self, action: sel)
-        b.bezelStyle = .rounded
-        b.controlSize = .small
-        return b
+    private func configureSymbolButton(_ b: NSButton, _ name: String, _ action: Selector) {
+        b.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        b.target = self
+        b.action = action
+        b.isBordered = false
+        b.wantsLayer = true
+        b.layer?.cornerRadius = 4
+        b.contentTintColor = .white
+        b.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 22).isActive = true
+    }
+
+    private func separator() -> NSView {
+        let v = NSView()
+        v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor(white: 1, alpha: 0.25).cgColor
+        v.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        v.heightAnchor.constraint(equalToConstant: 16).isActive = true
+        return v
+    }
+
+    // MARK: 外部狀態同步
+
+    func setActiveTool(_ tool: AnnotationTool?) {
+        activeTool = tool
+        for (t, b) in toolButtons {
+            b.layer?.backgroundColor = (t == tool)
+                ? NSColor.controlAccentColor.withAlphaComponent(0.6).cgColor
+                : NSColor.clear.cgColor
+        }
+        styleRow.isHidden = (tool == nil)
+    }
+
+    func setStyle(_ style: AnnotationStyle) {
+        currentStyle = style
+        for (c, b) in colorButtons { b.layer?.borderWidth = (c == style.color) ? 2 : 0 }
+        for (t, b) in thicknessButtons { b.state = (t == style.thickness) ? .on : .off }
+    }
+
+    func setUndoState(canUndo: Bool, canRedo: Bool) {
+        undoButton.isEnabled = canUndo
+        redoButton.isEnabled = canRedo
+    }
+
+    // MARK: 按鈕動作
+
+    @objc private func toolTapped(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue,
+              let tool = AnnotationTool(rawValue: id) else { return }
+        let newTool: AnnotationTool? = (tool == activeTool) ? nil : tool
+        setActiveTool(newTool)
+        onToolSelected?(newTool)
+    }
+    @objc private func undoTapped() { onUndo?() }
+    @objc private func redoTapped() { onRedo?() }
+    @objc private func colorTapped(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue,
+              let color = AnnotationColor(rawValue: id) else { return }
+        currentStyle.color = color
+        setStyle(currentStyle)
+        onStyleChanged?(currentStyle)
+    }
+    @objc private func thicknessTapped(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue,
+              let t = AnnotationThickness(rawValue: id) else { return }
+        currentStyle.thickness = t
+        setStyle(currentStyle)
+        onStyleChanged?(currentStyle)
     }
 
     // 吞掉滑鼠事件，別穿透到底下的 SelectionView。
