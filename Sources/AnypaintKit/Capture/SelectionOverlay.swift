@@ -649,9 +649,16 @@ final class SelectionView: NSView {
         if let tool = activeTool, let anchor = shapeAnchor {
             // ≥3pt 才成形（spec：防誤點）；add() 自帶 undo 快照
             if abs(p.x - anchor.x) >= 3 || abs(p.y - anchor.y) >= 3 {
-                annotations.add(Annotation(shape: makeShape(tool: tool, from: anchor, to: p),
-                                           style: currentStyle))
-                syncUndoButtons()
+                let annotation = Annotation(shape: makeShape(tool: tool, from: anchor, to: p),
+                                            style: currentStyle)
+                // 只收與框相交的標註：框外暗區拖出的標註被 clip 看不見、卻會無聲鎖框
+                //（總審查 Important）。用相交而非起點判定——從框外畫進框內的箭頭仍合法。
+                let half = currentStyle.thickness.lineWidth / 2
+                if let sel = selection,
+                   annotation.bounds.insetBy(dx: -half, dy: -half).intersects(sel) {
+                    annotations.add(annotation)
+                    syncUndoButtons()
+                }
             }
             shapeAnchor = nil
             provisionalShape = nil
@@ -687,6 +694,8 @@ final class SelectionView: NSView {
         onInteraction?()
         // ⌘Z / ⌘⇧Z：標註 undo/redo（手動攔，不經 menu——overlay 是 nonactivating panel）
         if event.modifierFlags.contains(.command),
+           !event.modifierFlags.contains(.option),
+           !event.modifierFlags.contains(.control),
            event.charactersIgnoringModifiers?.lowercased() == "z" {
             if event.modifierFlags.contains(.shift) {
                 redoAnnotation()
