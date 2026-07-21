@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>anypaint</string>
+	<key>CFBundleDisplayName</key>
+	<string>anypaint</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.aidaris.anypaint</string>
+	<key>CFBundleExecutable</key>
+	<string>anypaint</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<!-- 選單列常駐 app：無 Dock 圖示、不出現在 ⌘Tab -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- 螢幕錄製權限的系統彈窗會自動出現；此描述供系統設定顯示用途 -->
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>anypaint 需要螢幕錄製權限才能擷取畫面內容以供截圖與貼圖。</string>
+</dict>
+</plist>

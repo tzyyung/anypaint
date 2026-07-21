@@ -1,0 +1,40 @@
+import CoreGraphics
+
+/// 座標轉換工具（純函式、可單元測試）。
+///
+/// 為什麼需要：AppKit 螢幕/視窗座標原點在**左下**、Y 向上；
+/// 而 CGImage 的像素座標原點在**左上**、Y 向下。截圖裁切時必須翻轉 Y，
+/// 且要乘上 Retina 的 pixel scale 才能對到影像的實際像素。這是最容易錯的地方。
+public enum CoordinateUtils {
+
+    /// 把「overlay 視圖內的選取矩形（點、左下原點）」轉成
+    /// 「凍結影像的裁切矩形（像素、左上原點）」。
+    ///
+    /// - Parameters:
+    ///   - selection: 選取框，座標相對於該 display 的 overlay 視圖，單位為點，原點左下。
+    ///   - displayPointSize: 該 display 的邏輯尺寸（點）。
+    ///   - scale: 該 display 的 pixel scale（Retina 通常為 2）。
+    /// - Returns: 對齊整數的像素裁切矩形（左上原點），可直接餵給 CGImage.cropping。
+    public static func pixelCropRect(selection: CGRect,
+                                     displayPointSize: CGSize,
+                                     scale: CGFloat) -> CGRect {
+        let flippedY = displayPointSize.height - (selection.origin.y + selection.height)
+        let rect = CGRect(
+            x: selection.origin.x * scale,
+            y: flippedY * scale,
+            width: selection.width * scale,
+            height: selection.height * scale
+        )
+        return rect.integral
+    }
+
+    /// 由兩個拖曳端點算出正規化矩形（永遠正的寬高）。
+    public static func rect(from a: CGPoint, to b: CGPoint) -> CGRect {
+        CGRect(
+            x: min(a.x, b.x),
+            y: min(a.y, b.y),
+            width: abs(a.x - b.x),
+            height: abs(a.y - b.y)
+        )
+    }
+}
