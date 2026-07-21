@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import AnypaintKit
 
 // 純邏輯的自我測試。純 Command Line Tools 環境沒有 XCTest 執行器，
@@ -85,7 +86,7 @@ checkTrue("distance：零長線段（點）",
                                     toSegmentFrom: .zero, to: .zero) - 5) < 0.001)
 
 // 6) 標註 hitTest / bounds / move
-let style = AnnotationStyle(color: .red, thickness: .medium)
+let style = AnnotationStyle(color: .red, lineWidth: 4)
 let rectA = Annotation(shape: .rect(CGRect(x: 10, y: 10, width: 20, height: 20)), style: style)
 checkTrue("rect hitTest：框內命中", rectA.hitTest(CGPoint(x: 15, y: 15), threshold: 8))
 checkTrue("rect hitTest：外緣 threshold 內命中", rectA.hitTest(CGPoint(x: 35, y: 15), threshold: 8))
@@ -104,7 +105,7 @@ checkEq("move：id 不變", movedA.id, rectA.id)
 let counterA = Annotation(shape: .counter(center: CGPoint(x: 50, y: 50)), style: style)
 checkTrue("counter hitTest：圓心命中", counterA.hitTest(CGPoint(x: 50, y: 50), threshold: 0))
 checkTrue("counter bounds：以圓心為中心", counterA.bounds.midX == 50 && counterA.bounds.midY == 50)
-checkEq("counter bounds：半徑=8+線寬×2（medium→32）", counterA.bounds.width, 32)
+checkEq("counter bounds：半徑=8+線寬×2（4pt→32）", counterA.bounds.width, 32)
 checkEq("counter bounds：寬高一致", counterA.bounds.height, counterA.bounds.width)
 
 let arrowA = Annotation(shape: .arrow(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 100, y: 0)), style: style)
@@ -143,6 +144,28 @@ doc.updateWithoutSnapshot(id: a1.id) { $0.move(by: CGVector(dx: 1, dy: 0)) }
 checkEq("doc：拖曳後位置", doc.objects[0].bounds.minX, 2)
 doc.undo()
 checkEq("doc：整段拖曳一步復原", doc.objects[0].bounds.minX, 0)
+
+// 熱圖形滾輪調粗細語意（spec 2026-07-22 修訂）：beginChange 一次 +
+// 多次 updateWithoutSnapshot 改 lineWidth（模擬整段滾輪調整）→ undo 一步全回，
+// 不可每格滾動都 push 快照。
+let hotDoc = AnnotationDocument()
+let hotA = Annotation(shape: .rect(CGRect(x: 0, y: 0, width: 10, height: 10)),
+                      style: AnnotationStyle(color: .red, lineWidth: 4))
+hotDoc.add(hotA)
+hotDoc.beginChange()
+hotDoc.updateWithoutSnapshot(id: hotA.id) { $0.style.lineWidth = 5 }
+hotDoc.updateWithoutSnapshot(id: hotA.id) { $0.style.lineWidth = 6 }
+hotDoc.updateWithoutSnapshot(id: hotA.id) { $0.style.lineWidth = 8 }
+checkEq("熱圖形：多次滾輪調整後 lineWidth", hotDoc.objects[0].style.lineWidth, 8)
+checkTrue("熱圖形：整段調整只算一步 undo", hotDoc.canUndo)
+hotDoc.undo()
+checkEq("熱圖形：一步 undo 全回到調整前", hotDoc.objects[0].style.lineWidth, 4)
+// 注意：add(hotA) 本身也是一步 undo，所以這裡 undo 一次後 canUndo 仍為 true
+// （還能再 undo 掉「新增」那一步）；這正是驗證「整段滾輪調整只多算一步」的方式。
+checkTrue("熱圖形：undo 一次後仍可再 undo 掉新增那一步", hotDoc.canUndo)
+hotDoc.undo()
+checkTrue("熱圖形：兩步 undo 後document 清空（新增也復原）", hotDoc.isEmpty)
+checkTrue("熱圖形：沒有更多步可退", !hotDoc.canUndo)
 
 // z-order：陣列順序即 z-order，越後面越上層
 let a3 = Annotation(shape: .rect(CGRect(x: 5, y: 5, width: 10, height: 10)), style: style)
@@ -185,7 +208,7 @@ func rendererSmokeTest() {
     let w = 40, h = 40
     var buf = [UInt8](repeating: 0, count: w * h * 4)
     let a = Annotation(shape: .rect(CGRect(x: 5, y: 5, width: 30, height: 30)),
-                       style: AnnotationStyle(color: .red, thickness: .thick))
+                       style: AnnotationStyle(color: .red, lineWidth: 6))
     buf.withUnsafeMutableBytes { raw in
         guard let ctx = CGContext(
             data: raw.baseAddress, width: w, height: h,
@@ -208,20 +231,43 @@ func rendererSmokeTest() {
 }
 rendererSmokeTest()
 
-// 9) 工具樣式記憶（UserDefaults round-trip）＋ rawValue 往返
+// 9) 工具樣式記憶（UserDefaults round-trip，粗細改存 Double）＋ rawValue 往返
 AnnotationStyleStore.reset(for: .rect)
-checkEq("styleStore：沒存過＝紅色中筆",
+checkEq("styleStore：沒存過＝紅色、lineWidth 4",
         AnnotationStyleStore.style(for: .rect),
-        AnnotationStyle(color: .red, thickness: .medium))
-AnnotationStyleStore.save(AnnotationStyle(color: .blue, thickness: .thick), for: .arrow)
+        AnnotationStyle(color: .red, lineWidth: 4))
+AnnotationStyleStore.save(AnnotationStyle(color: .blue, lineWidth: 6), for: .arrow)
 checkEq("styleStore：save/load round-trip",
         AnnotationStyleStore.style(for: .arrow),
-        AnnotationStyle(color: .blue, thickness: .thick))
+        AnnotationStyle(color: .blue, lineWidth: 6))
 checkEq("styleStore：各工具互不影響",
         AnnotationStyleStore.style(for: .rect),
-        AnnotationStyle(color: .red, thickness: .medium))
+        AnnotationStyle(color: .red, lineWidth: 4))
 checkEq("rawValue：color 往返", AnnotationColor(rawValue: AnnotationColor.green.rawValue), .green)
-checkEq("rawValue：thickness 往返", AnnotationThickness(rawValue: "thin"), AnnotationThickness.thin)
+
+// 9a) lineWidth clamp（spec：1–24）
+checkEq("AnnotationStyle：lineWidth clamp 下限 0→1", AnnotationStyle(color: .red, lineWidth: 0).lineWidth, 1)
+checkEq("AnnotationStyle：lineWidth clamp 上限 30→24", AnnotationStyle(color: .red, lineWidth: 30).lineWidth, 24)
+AnnotationStyleStore.save(AnnotationStyle(color: .red, lineWidth: 0), for: .line)
+checkEq("styleStore：save 也 clamp 下限", AnnotationStyleStore.style(for: .line).lineWidth, 1)
+AnnotationStyleStore.save(AnnotationStyle(color: .red, lineWidth: 30), for: .line)
+checkEq("styleStore：save 也 clamp 上限", AnnotationStyleStore.style(for: .line).lineWidth, 24)
+AnnotationStyleStore.reset(for: .line)
+
+// 9b) 舊三檔字串鍵一次性遷移（spec：thin/medium/thick → 2/4/6）
+AnnotationStyleStore.reset(for: .ellipse)
+UserDefaults.standard.set("thick", forKey: "annotationStyle.ellipse.thickness")
+checkEq("styleStore：舊字串鍵 thick 遷移為 lineWidth 6",
+        AnnotationStyleStore.style(for: .ellipse).lineWidth, 6)
+AnnotationStyleStore.reset(for: .ellipse)
+UserDefaults.standard.set("thin", forKey: "annotationStyle.ellipse.thickness")
+checkEq("styleStore：舊字串鍵 thin 遷移為 lineWidth 2",
+        AnnotationStyleStore.style(for: .ellipse).lineWidth, 2)
+AnnotationStyleStore.reset(for: .ellipse)
+UserDefaults.standard.set("medium", forKey: "annotationStyle.ellipse.thickness")
+checkEq("styleStore：舊字串鍵 medium 遷移為 lineWidth 4",
+        AnnotationStyleStore.style(for: .ellipse).lineWidth, 4)
+AnnotationStyleStore.reset(for: .ellipse)   // 清乾淨，避免影響其他測試/重跑
 
 // 10) 合成匯出：白底 + 紅框標註 → 像素驗證（「所見即所存」的離屏版）
 func compositeSmokeTest() {
@@ -253,7 +299,7 @@ func compositeSmokeTest() {
     // 選取框 (0,0,10,10) 點、scale 2 → 輸出 20×20 像素。
     // 標註：view 座標 rect(2,2,4,4)、中筆（4pt→8px 寬 stroke）紅色。
     let a = Annotation(shape: .rect(CGRect(x: 2, y: 2, width: 4, height: 4)),
-                       style: AnnotationStyle(color: .red, thickness: .medium))
+                       style: AnnotationStyle(color: .red, lineWidth: 4))
     guard let out = AnnotationRenderer.composite(
             objects: [a], overCropped: source,
             selection: CGRect(x: 0, y: 0, width: 10, height: 10), scale: 2),
@@ -303,7 +349,7 @@ func compositeOffsetTest() {
     // 若 translate 符號寫反、或 scaleBy/translateBy 順序寫反（殘差 selMin×(scale−1)=(30,20)px，
     // 遠大於框線帶寬），標註都會整個偏出 20×20 畫布 → 紅取樣必失敗。
     let a = Annotation(shape: .rect(CGRect(x: 32, y: 22, width: 4, height: 4)),
-                       style: AnnotationStyle(color: .red, thickness: .medium))
+                       style: AnnotationStyle(color: .red, lineWidth: 4))
     guard let out = AnnotationRenderer.composite(
             objects: [a], overCropped: source,
             selection: CGRect(x: 30, y: 20, width: 10, height: 10), scale: 2),

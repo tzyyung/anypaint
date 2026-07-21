@@ -20,27 +20,19 @@ public enum AnnotationColor: String, CaseIterable {
     }
 }
 
-/// 粗細三檔（spec 定案：2/4/6pt）。
-public enum AnnotationThickness: String, CaseIterable {
-    case thin, medium, thick
-
-    public var lineWidth: CGFloat {
-        switch self {
-        case .thin: return 2
-        case .medium: return 4
-        case .thick: return 6
-        }
-    }
-}
-
-/// 一筆標註的樣式。
+/// 一筆標註的樣式。粗細是連續值（spec 2026-07-22 修訂：三檔改連續，1–24pt，預設 4）。
 public struct AnnotationStyle: Equatable {
     public var color: AnnotationColor
-    public var thickness: AnnotationThickness
+    public var lineWidth: CGFloat
 
-    public init(color: AnnotationColor, thickness: AnnotationThickness) {
+    public init(color: AnnotationColor, lineWidth: CGFloat) {
         self.color = color
-        self.thickness = thickness
+        self.lineWidth = AnnotationStyle.clampLineWidth(lineWidth)
+    }
+
+    /// 粗細範圍：1–24pt（spec）。所有寫入路徑（初始化、StyleStore、滾輪調整）都經這裡夾限。
+    public static func clampLineWidth(_ v: CGFloat) -> CGFloat {
+        min(24, max(1, v))
     }
 }
 
@@ -67,8 +59,8 @@ public struct Annotation: Identifiable, Equatable {
         self.shape = shape
     }
 
-    /// 序號圓標半徑：直徑隨粗細檔（spec）。
-    public var counterRadius: CGFloat { 8 + style.thickness.lineWidth * 2 }
+    /// 序號圓標半徑：直徑隨粗細（spec）。
+    public var counterRadius: CGFloat { 8 + style.lineWidth * 2 }
 
     /// 外接框（線段類為端點正規化矩形，寬或高可為 0）。
     public var bounds: CGRect {
@@ -91,7 +83,7 @@ public struct Annotation: Identifiable, Equatable {
             return bounds.insetBy(dx: -threshold, dy: -threshold).contains(point)
         case .line(let a, let b), .arrow(let a, let b):
             let d = AnnotationGeometry.distance(from: point, toSegmentFrom: a, to: b)
-            return d <= threshold + style.thickness.lineWidth / 2
+            return d <= threshold + style.lineWidth / 2
         }
     }
 

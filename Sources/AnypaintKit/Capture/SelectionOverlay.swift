@@ -20,7 +20,7 @@ enum NativeCursors {
 // MARK: - 工具列
 
 /// 選取框旁的浮動工具列（兩排）：上排＝標註工具｜undo/redo｜取消/擷取，
-/// 下排＝樣式（7 色塊＋粗細三檔，選了工具才顯示）。
+/// 下排＝樣式（7 色塊＋粗細 pt 數值標籤，選了工具才顯示）。
 /// 用一個會「吞掉滑鼠事件」的容器，避免點工具列時誤觸底下的 SelectionView。
 final class SelectionToolbar: NSView {
     var onConfirm: (() -> Void)?
@@ -33,12 +33,18 @@ final class SelectionToolbar: NSView {
 
     private var toolButtons: [AnnotationTool: NSButton] = [:]
     private var colorButtons: [AnnotationColor: NSButton] = [:]
-    private var thicknessButtons: [AnnotationThickness: NSButton] = [:]
+    /// 粗細數值標籤（spec 2026-07-22 修訂：三檔按鈕改連續值，工具列只顯示目前 pt 數）。
+    private let lineWidthLabel: NSTextField = {
+        let l = NSTextField(labelWithString: "4 pt")
+        l.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        l.textColor = .white
+        return l
+    }()
     private let undoButton = NSButton()
     private let redoButton = NSButton()
     private let styleRow = NSStackView()
     private var activeTool: AnnotationTool?
-    private var currentStyle = AnnotationStyle(color: .red, thickness: .medium)
+    private var currentStyle = AnnotationStyle(color: .red, lineWidth: 4)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -100,16 +106,7 @@ final class SelectionToolbar: NSView {
             styleRow.addArrangedSubview(b)
         }
         styleRow.addArrangedSubview(separator())
-        let thickTitles: [(AnnotationThickness, String)] = [(.thin, "細"), (.medium, "中"), (.thick, "粗")]
-        for (t, title) in thickTitles {
-            let b = NSButton(title: title, target: self, action: #selector(thicknessTapped(_:)))
-            b.bezelStyle = .rounded
-            b.controlSize = .small
-            b.setButtonType(.pushOnPushOff)   // .on 顯示按下狀態＝選中檔位
-            b.identifier = NSUserInterfaceItemIdentifier(t.rawValue)
-            thicknessButtons[t] = b
-            styleRow.addArrangedSubview(b)
-        }
+        styleRow.addArrangedSubview(lineWidthLabel)
         styleRow.isHidden = true
 
         let stack = NSStackView(views: [toolsRow, styleRow])
@@ -163,7 +160,7 @@ final class SelectionToolbar: NSView {
     func setStyle(_ style: AnnotationStyle) {
         currentStyle = style
         for (c, b) in colorButtons { b.layer?.borderWidth = (c == style.color) ? 2 : 0 }
-        for (t, b) in thicknessButtons { b.state = (t == style.thickness) ? .on : .off }
+        lineWidthLabel.stringValue = "\(Int(style.lineWidth.rounded())) pt"
     }
 
     func setUndoState(canUndo: Bool, canRedo: Bool) {
@@ -186,13 +183,6 @@ final class SelectionToolbar: NSView {
         guard let id = sender.identifier?.rawValue,
               let color = AnnotationColor(rawValue: id) else { return }
         currentStyle.color = color
-        setStyle(currentStyle)
-        onStyleChanged?(currentStyle)
-    }
-    @objc private func thicknessTapped(_ sender: NSButton) {
-        guard let id = sender.identifier?.rawValue,
-              let t = AnnotationThickness(rawValue: id) else { return }
-        currentStyle.thickness = t
         setStyle(currentStyle)
         onStyleChanged?(currentStyle)
     }
@@ -259,9 +249,22 @@ final class SelectionView: NSView {
     private var shapeAnchor: CGPoint?
     private var currentStyle = AnnotationStyleStore.style(for: .rect)
     /// 滾輪調粗細的累積量（觸控板會送大量小 delta，湊滿閾值才跳一檔）。
-    private var thicknessScrollAccum: CGFloat = 0
+    private var lineWidthScrollAccum: CGFloat = 0
     /// 有任何標註就鎖框（spec）：控制點隱藏、框不可建/移/縮；undo 清空自動解鎖。
     private var frameLocked: Bool { !annotations.isEmpty }
+
+    // MARK: 熱圖形（spec 2026-07-22 修訂）
+    /// mouseUp 成功 add() 的物件在解除前是「熱」的：滾輪直接調它的粗細（畫面即時反映）。
+    /// mouseDown（任何分支）、undo/redo、切工具／取消工具作用都清除。
+    private var hotAnnotationID: UUID?
+    /// 目前這段熱圖形滾輪調整是否已經 beginChange() 過一次
+    /// （首次實際改動才拍快照，整段調整合併一步 undo；不可每格滾動都 push 快照）。
+    private var hotScrollBegan = false
+
+    private func clearHotAnnotation() {
+        hotAnnotationID = nil
+        hotScrollBegan = false
+    }
 
     private let toolbar = SelectionToolbar()
 
@@ -283,6 +286,7 @@ final class SelectionView: NSView {
         toolbar.onToolSelected = { [weak self] tool in
             guard let self else { return }
             self.activeTool = tool
+            self.clearHotAnnotation()   // 切工具或取消作用 → 解除熱狀態（spec）
             if let tool {
                 self.currentStyle = AnnotationStyleStore.style(for: tool)
                 self.toolbar.setStyle(self.currentStyle)
@@ -593,6 +597,7 @@ final class SelectionView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         onInteraction?()
+        clearHotAnnotation()   // 任何 mouseDown 分支都解除熱狀態（spec）
         let p = convert(event.locationInWindow, from: nil)
         dragPoint = p
         // 標註工具作用中 → 拖曳＝畫暫定形狀（不進 document）
@@ -655,11 +660,12 @@ final class SelectionView: NSView {
                                             style: currentStyle)
                 // 只收與框相交的標註：框外暗區拖出的標註被 clip 看不見、卻會無聲鎖框
                 //（總審查 Important）。用相交而非起點判定——從框外畫進框內的箭頭仍合法。
-                let half = currentStyle.thickness.lineWidth / 2
+                let half = currentStyle.lineWidth / 2
                 if let sel = selection,
                    annotation.bounds.insetBy(dx: -half, dy: -half).intersects(sel) {
                     annotations.add(annotation)
                     syncUndoButtons()
+                    hotAnnotationID = annotation.id   // 剛畫完的圖形進入熱狀態（spec）
                 }
             }
             shapeAnchor = nil
@@ -686,7 +692,7 @@ final class SelectionView: NSView {
         onCancel?()
     }
 
-    // 捲動也算互動（重置看門狗）。標註工具作用中：滾輪調整粗細（向上加粗），
+    // 捲動也算互動（重置看門狗）。標註工具作用中：滾輪調整粗細（每 5 單位一步、一步 ±1pt），
     // 事件吞掉不往下傳；未作用時照常傳遞。
     override func scrollWheel(with event: NSEvent) {
         onInteraction?()
@@ -694,28 +700,49 @@ final class SelectionView: NSView {
             super.scrollWheel(with: event)
             return
         }
-        thicknessScrollAccum += event.scrollingDeltaY
+        lineWidthScrollAccum += event.scrollingDeltaY
         let step: CGFloat = 5
-        while thicknessScrollAccum >= step {
-            thicknessScrollAccum -= step
-            adjustThickness(by: 1)
+        while lineWidthScrollAccum >= step {
+            lineWidthScrollAccum -= step
+            adjustLineWidth(by: 1)
         }
-        while thicknessScrollAccum <= -step {
-            thicknessScrollAccum += step
-            adjustThickness(by: -1)
+        while lineWidthScrollAccum <= -step {
+            lineWidthScrollAccum += step
+            adjustLineWidth(by: -1)
         }
     }
 
-    /// 粗細跳檔（細↔中↔粗，不繞圈），同步工具列與每工具記憶。
-    private func adjustThickness(by delta: Int) {
-        let all = AnnotationThickness.allCases
-        guard let i = all.firstIndex(of: currentStyle.thickness) else { return }
-        let ni = min(all.count - 1, max(0, i + delta))
-        guard ni != i else { return }
-        currentStyle.thickness = all[ni]
-        toolbar.setStyle(currentStyle)
-        if let tool = activeTool { AnnotationStyleStore.save(currentStyle, for: tool) }
-        needsDisplay = true   // 拖曳中的暫定形狀即時反映新粗細
+    /// 粗細調整（spec 2026-07-22 修訂：連續值，一步 ±1pt，clamp 1–24）。
+    /// 有熱圖形＝優先改它（畫面即時反映、整段合併一步 undo）；否則只改 currentStyle
+    /// （含拖曳中的 provisional 形狀，因為 draw() 用 currentStyle 畫它）。
+    /// 兩種情況都同步 currentStyle、AnnotationStyleStore.save、toolbar.setStyle、needsDisplay。
+    private func adjustLineWidth(by delta: Int) {
+        if let hotID = hotAnnotationID,
+           let idx = annotations.objects.firstIndex(where: { $0.id == hotID }) {
+            let current = annotations.objects[idx].style.lineWidth
+            let newWidth = AnnotationStyle.clampLineWidth(current + CGFloat(delta))
+            guard newWidth != current else { return }
+            // 首次實際改動才 beginChange()（拍一次快照）；之後同一段調整都用
+            // updateWithoutSnapshot，不可每格滾動都 push 快照。
+            if !hotScrollBegan {
+                annotations.beginChange()
+                hotScrollBegan = true
+            }
+            annotations.updateWithoutSnapshot(id: hotID) { $0.style.lineWidth = newWidth }
+            currentStyle.lineWidth = newWidth
+            if let tool = activeTool { AnnotationStyleStore.save(currentStyle, for: tool) }
+            toolbar.setStyle(currentStyle)
+            syncUndoButtons()   // beginChange 改變了 canUndo
+            needsDisplay = true
+        } else {
+            let current = currentStyle.lineWidth
+            let newWidth = AnnotationStyle.clampLineWidth(current + CGFloat(delta))
+            guard newWidth != current else { return }
+            currentStyle.lineWidth = newWidth
+            if let tool = activeTool { AnnotationStyleStore.save(currentStyle, for: tool) }
+            toolbar.setStyle(currentStyle)
+            needsDisplay = true   // 拖曳中的暫定形狀即時反映新粗細
+        }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -756,6 +783,7 @@ final class SelectionView: NSView {
     private func undoAnnotation() {
         guard annotations.canUndo else { return }
         annotations.undo()
+        clearHotAnnotation()   // spec：undo/redo 清除熱狀態
         syncUndoButtons()
         needsDisplay = true
         window?.invalidateCursorRects(for: self)   // 清空時解鎖 → 控制點/游標復原
@@ -764,6 +792,7 @@ final class SelectionView: NSView {
     private func redoAnnotation() {
         guard annotations.canRedo else { return }
         annotations.redo()
+        clearHotAnnotation()
         syncUndoButtons()
         needsDisplay = true
         window?.invalidateCursorRects(for: self)

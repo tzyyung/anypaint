@@ -16,7 +16,7 @@ public enum AnnotationRenderer {
         defer { ctx.restoreGState() }
 
         let color = a.style.color.cgColor
-        let lw = a.style.thickness.lineWidth
+        let lw = a.style.lineWidth
         ctx.setStrokeColor(color)
         ctx.setFillColor(color)
         ctx.setLineWidth(lw)
