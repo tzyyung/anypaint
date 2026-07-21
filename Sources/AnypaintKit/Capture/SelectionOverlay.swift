@@ -861,6 +861,8 @@ final class SelectionOverlayController {
     private var warningRemaining = 0
     /// 觸發前多久開始倒數警告（spec 定 15 秒；最小可設秒數 60 > 15，不會交叉）。
     private let warningLead: TimeInterval = 15
+    /// 上次重排看門狗的時間（防抖用）。
+    private var lastArmUptimeNs: UInt64 = 0
 
     private(set) var isActive = false
 
@@ -903,6 +905,12 @@ final class SelectionOverlayController {
     /// 重置看門狗：只在「無任何互動」達設定秒數才強制解除。
     /// 觸發前 warningLead 秒顯示倒數橫幅；秒數設 0 = 使用者選擇關閉，不排程。
     private func armWatchdog() {
+        // 高頻互動（mouseMoved 等）防抖：0.5 秒內已排程且未在倒數警告中就不重排，
+        // 避免堆積大量已取消的 work item（總審查建議）。誤差 ≤0.5 秒對 60 秒級逾時無感；
+        // 倒數警告顯示中（warningTimer != nil）一律立即重排，橫幅才會即時消失。
+        let now = DispatchTime.now().uptimeNanoseconds
+        if warningTimer == nil, watchdogFire != nil, now &- lastArmUptimeNs < 500_000_000 { return }
+        lastArmUptimeNs = now
         clearWatchdog()
         let total = AppSettings.overlayWatchdogSeconds
         guard total > 0 else { return }   // 0 = 關閉（使用者明確選擇）
@@ -946,6 +954,8 @@ final class SelectionOverlayController {
         guard isActive else { return }
         // 搶救：有有效框就把目前內容存進剪貼簿再解除（走 finish 同一條路，
         // 效果等同擷取＝複製到剪貼簿），沒有就純取消。免輸入保證不變。
+        // 多螢幕都有有效框時取快照順序的第一個（與 Enter/擷取按鈕的視窗歸屬同層級的
+        // 既有模糊，總審查裁定可接受）；階段 5 若做「最後互動視圖」再一併精準化。
         if let image = windows.compactMap({ $0.selectionView?.currentCroppedImage() }).first {
             NSLog("anypaint: 框選看門狗逾時，已把目前框選內容存入剪貼簿（搶救）")
             finish(with: image)
