@@ -16,6 +16,24 @@ func check(_ name: String, _ got: CGRect, _ want: CGRect) {
     }
 }
 
+func checkEq<T: Equatable>(_ name: String, _ got: T, _ want: T) {
+    if got == want {
+        print("✅ \(name)")
+    } else {
+        failures += 1
+        print("❌ \(name)\n   got : \(got)\n   want: \(want)")
+    }
+}
+
+func checkTrue(_ name: String, _ cond: Bool) {
+    if cond {
+        print("✅ \(name)")
+    } else {
+        failures += 1
+        print("❌ \(name)")
+    }
+}
+
 // 1) 座標翻轉 + Retina 縮放
 check(
     "pixelCropRect 翻轉Y並乘scale",
@@ -44,6 +62,13 @@ check(
     CoordinateUtils.rect(from: CGPoint(x: 30, y: 40), to: CGPoint(x: 10, y: 10)),
     CGRect(x: 10, y: 10, width: 20, height: 30)
 )
+
+// 4) 看門狗秒數正規化：0=關閉、非0最少60最多600（使用者規則）
+checkEq("watchdog 正規化：0 = 關閉", AppSettings.normalizedWatchdogSeconds(0), 0)
+checkEq("watchdog 正規化：負值視同關閉", AppSettings.normalizedWatchdogSeconds(-5), 0)
+checkEq("watchdog 正規化：1–59 拉到 60", AppSettings.normalizedWatchdogSeconds(30), 60)
+checkEq("watchdog 正規化：範圍內不變", AppSettings.normalizedWatchdogSeconds(120), 120)
+checkEq("watchdog 正規化：上限 600", AppSettings.normalizedWatchdogSeconds(900), 600)
 
 print("---")
 if failures == 0 {
