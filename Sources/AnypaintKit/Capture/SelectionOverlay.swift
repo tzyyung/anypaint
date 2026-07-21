@@ -62,7 +62,8 @@ final class SelectionToolbar: NSView {
         toolsRow.spacing = 4
         let symbols: [(AnnotationTool, String)] = [
             (.rect, "rectangle"), (.ellipse, "circle"),
-            (.line, "line.diagonal"), (.arrow, "arrow.up.right")
+            (.line, "line.diagonal"), (.arrow, "arrow.up.right"),
+            (.text, "textformat"), (.counter, "1.circle")
         ]
         for (tool, symbol) in symbols {
             let b = NSButton()
@@ -266,6 +267,13 @@ final class SelectionView: NSView {
         hotScrollBegan = false
     }
 
+    // MARK: 文字編輯（階段 3；唯一的子 view 特例）
+    private var textEditor: InlineTextView?
+    /// 重編輯中的既有文字物件（渲染時跳過避免重影；commit 時 update/remove）。
+    private var editingTextID: UUID?
+
+    var isEditingText: Bool { textEditor != nil }
+
     private let toolbar = SelectionToolbar()
 
     /// 按下「擷取」→ 回傳裁切影像。
@@ -400,8 +408,9 @@ final class SelectionView: NSView {
                 NSGraphicsContext.current?.saveGraphicsState()
                 NSBezierPath(rect: rect).addClip()
                 if let cg = NSGraphicsContext.current?.cgContext {
-                    AnnotationRenderer.render(annotations.objects, in: cg,
-                                              counterNumbers: counterNumbersMap())
+                    AnnotationRenderer.render(
+                        annotations.objects.filter { $0.id != editingTextID },
+                        in: cg, counterNumbers: counterNumbersMap())
                     if let shape = provisionalShape {
                         AnnotationRenderer.render(
                             [Annotation(shape: shape, style: currentStyle)], in: cg)
@@ -599,13 +608,25 @@ final class SelectionView: NSView {
     override func mouseDown(with event: NSEvent) {
         onInteraction?()
         clearHotAnnotation()   // 任何 mouseDown 分支都解除熱狀態（spec）
+        // 編輯中點任何地方＝先完成編輯（第一下點擊只結束編輯，不做別的）
+        if isEditingText {
+            commitTextEditing()
+            return
+        }
         let p = convert(event.locationInWindow, from: nil)
         dragPoint = p
-        // 標註工具作用中 → 拖曳＝畫暫定形狀（不進 document）
+        // 標註工具作用中 → 依工具型態路由
         if let tool = activeTool, selection != nil {
-            shapeAnchor = p
-            provisionalShape = makeShape(tool: tool, from: p, to: p)
-            needsDisplay = true
+            switch tool {
+            case .counter:
+                addCounter(at: p)
+            case .text:
+                handleTextClick(at: p)
+            case .rect, .ellipse, .line, .arrow:
+                shapeAnchor = p
+                provisionalShape = makeShape(tool: tool, from: p, to: p)
+                needsDisplay = true
+            }
             return
         }
         // 有標註鎖框：不建新框、不移動、不縮放
@@ -761,8 +782,8 @@ final class SelectionView: NSView {
             return
         }
         switch event.keyCode {
-        case 53:            // Esc → 取消
-            onCancel?()
+        case 53:            // Esc → 編輯中＝完成編輯；否則取消（分層，spec）
+            if isEditingText { commitTextEditing() } else { onCancel?() }
         case 36, 76:        // Return / Enter → 擷取
             confirm()
         default:
@@ -778,7 +799,74 @@ final class SelectionView: NSView {
         case .ellipse: return .ellipse(CoordinateUtils.rect(from: a, to: b))
         case .line:    return .line(from: a, to: b)
         case .arrow:   return .arrow(from: a, to: b)
+        case .text, .counter:
+            preconditionFailure("點擊型工具不走拖曳成形")
         }
+    }
+
+    /// 序號：點擊即生成下一號（編號渲染時算）；框外不入庫；進熱狀態（滾輪調大小）。
+    private func addCounter(at p: CGPoint) {
+        let a = Annotation(shape: .counter(center: p), style: currentStyle)
+        guard let sel = selection, a.bounds.intersects(sel) else { return }
+        annotations.add(a)
+        syncUndoButtons()
+        hotAnnotationID = a.id
+        needsDisplay = true
+    }
+
+    /// 文字：點擊命中既有文字＝重編輯；否則在點擊處開新編輯器。
+    private func handleTextClick(at p: CGPoint) {
+        if let hit = annotations.objects.reversed().first(where: {
+            if case .text = $0.shape { return $0.hitTest(p) } else { return false }
+        }), case .text(let origin, let string) = hit.shape {
+            openTextEditor(origin: origin, initialString: string, existing: hit)
+        } else {
+            openTextEditor(origin: p, initialString: "", existing: nil)
+        }
+    }
+
+    private func openTextEditor(origin: CGPoint, initialString: String, existing: Annotation?) {
+        commitTextEditing()   // 保險：一次只開一個
+        let style = existing?.style ?? currentStyle
+        let fontSize = 12 + style.lineWidth * 2
+        let color = NSColor(cgColor: style.color.cgColor) ?? .white
+        let editor = InlineTextView.make(origin: origin, fontSize: fontSize,
+                                         color: color, initialString: initialString)
+        editor.onCommit = { [weak self] in self?.commitTextEditing() }
+        addSubview(editor)
+        textEditor = editor
+        editingTextID = existing?.id
+        window?.makeFirstResponder(editor)
+        needsDisplay = true   // 重編輯時 draw 要立刻跳過原物件
+    }
+
+    /// 完成文字編輯：非空→入庫（新建 add／重編輯 update，各一步 undo）；
+    /// 空字串→丟棄（重編輯＝刪除原物件）。結束後 first responder 還給自己。
+    func commitTextEditing() {
+        guard let editor = textEditor else { return }
+        let string = editor.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let origin = editor.frame.origin
+        if let id = editingTextID {
+            if string.isEmpty {
+                annotations.remove(id: id)
+            } else {
+                annotations.update(id: id) { a in
+                    if case .text(let o, _) = a.shape { a.shape = .text(origin: o, string: string) }
+                }
+            }
+        } else if !string.isEmpty {
+            let a = Annotation(shape: .text(origin: origin, string: string), style: currentStyle)
+            if let sel = selection, a.bounds.intersects(sel) {   // 框外不入庫 guard 沿用
+                annotations.add(a)
+                hotAnnotationID = a.id
+            }
+        }
+        editor.removeFromSuperview()
+        textEditor = nil
+        editingTextID = nil
+        window?.makeFirstResponder(self)   // 還 first responder：Esc/Enter/⌘Z 恢復由本 view 處理
+        syncUndoButtons()
+        needsDisplay = true
     }
 
     private func undoAnnotation() {
@@ -886,6 +974,7 @@ final class SelectionView: NSView {
     }
 
     private func confirm() {
+        commitTextEditing()
         guard let sel = selection, sel.width > minSize, sel.height > minSize else { return }
         guard let image = currentCroppedImage() else {
             onCancel?()   // 有框但裁切失敗 → 維持原行為：取消
@@ -965,8 +1054,17 @@ final class SelectionOverlayController {
 
         // 逃生路 2：本地事件監聽，Esc 一律取消
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            self?.armWatchdog()          // 任何鍵都算互動（含工具列有焦點時）
-            if event.keyCode == 53 { self?.cancel(); return nil }
+            self?.armWatchdog()          // 任何鍵都算互動（含文字編輯中打字）
+            if event.keyCode == 53 {
+                // Esc 分層：有 view 在文字編輯中 → 只完成編輯；否則取消 overlay。
+                if let editing = self?.windows.compactMap({ $0.selectionView })
+                    .first(where: { $0.isEditingText }) {
+                    editing.commitTextEditing()
+                    return nil
+                }
+                self?.cancel()
+                return nil
+            }
             return event
         }
         // 逃生路 5：看門狗（免按鍵），互動即重置，秒數可在設定頁調
