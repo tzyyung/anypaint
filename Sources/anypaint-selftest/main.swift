@@ -223,6 +223,54 @@ checkEq("styleStore：各工具互不影響",
 checkEq("rawValue：color 往返", AnnotationColor(rawValue: AnnotationColor.green.rawValue), .green)
 checkEq("rawValue：thickness 往返", AnnotationThickness(rawValue: "thin"), AnnotationThickness.thin)
 
+// 10) 合成匯出：白底 + 紅框標註 → 像素驗證（「所見即所存」的離屏版）
+func compositeSmokeTest() {
+    func solidWhite(w: Int, h: Int) -> CGImage? {
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+    func rgbaBuffer(of img: CGImage) -> [UInt8]? {
+        let w = img.width, h = img.height
+        var buf = [UInt8](repeating: 0, count: w * h * 4)
+        let ok: Bool = buf.withUnsafeMutableBytes { raw in
+            guard let ctx = CGContext(
+                data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        return ok ? buf : nil
+    }
+    guard let source = solidWhite(w: 20, h: 20) else {
+        failures += 1; print("❌ composite：白底建立失敗"); return
+    }
+    // 選取框 (0,0,10,10) 點、scale 2 → 輸出 20×20 像素。
+    // 標註：view 座標 rect(2,2,4,4)、中筆（4pt→8px 寬 stroke）紅色。
+    let a = Annotation(shape: .rect(CGRect(x: 2, y: 2, width: 4, height: 4)),
+                       style: AnnotationStyle(color: .red, thickness: .medium))
+    guard let out = AnnotationRenderer.composite(
+            objects: [a], overCropped: source,
+            selection: CGRect(x: 0, y: 0, width: 10, height: 10), scale: 2),
+          let buf = rgbaBuffer(of: out) else {
+        failures += 1; print("❌ composite：合成失敗"); return
+    }
+    checkEq("composite：輸出尺寸同裁切圖", out.width, 20)
+    // 左邊框線：view x=2 → 像素欄 4；view y=4 → CG y=8 → 記憶體列 20-1-8=11
+    let redIdx = (11 * 20 + 4) * 4
+    checkTrue("composite：標註像素為紅", buf[redIdx] > 180 && buf[redIdx + 1] < 90)
+    // 框外（欄 18、列 1）離所有 stroke 帶 ≥2px，仍是白底
+    let whiteIdx = (1 * 20 + 18) * 4
+    checkTrue("composite：標註外仍是白底",
+              buf[whiteIdx] > 200 && buf[whiteIdx + 1] > 200 && buf[whiteIdx + 2] > 200)
+}
+compositeSmokeTest()
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")

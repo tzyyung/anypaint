@@ -58,4 +58,28 @@ public enum AnnotationRenderer {
             break
         }
     }
+
+    /// 把標註合成到「已裁切的選取框影像」上，回傳新圖（尺寸不變）。
+    /// - selection：凍結影像點座標的選取框（左下原點）。
+    /// - scale：點→像素倍率（Retina 2x 等）。
+    /// CGBitmapContext 與非翻轉 view 同為左下原點，所以只需 scale＋平移、不需翻轉；
+    /// 裁切階段的 Y 翻轉已由 CoordinateUtils.pixelCropRect 處理。
+    /// 注意：pixelCropRect 有 .integral 取整，與 selection 的平移可能有 <1px 誤差，可接受。
+    public static func composite(objects: [Annotation],
+                                 overCropped cropped: CGImage,
+                                 selection: CGRect,
+                                 scale: CGFloat) -> CGImage? {
+        let w = cropped.width, h = cropped.height
+        guard w > 0, h > 0,
+              let ctx = CGContext(
+                  data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                  space: cropped.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)))
+        ctx.scaleBy(x: scale, y: scale)
+        ctx.translateBy(x: -selection.minX, y: -selection.minY)
+        render(objects, in: ctx)
+        return ctx.makeImage()
+    }
 }
