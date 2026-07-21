@@ -104,6 +104,16 @@ checkEq("move：id 不變", movedA.id, rectA.id)
 let counterA = Annotation(shape: .counter(center: CGPoint(x: 50, y: 50)), style: style)
 checkTrue("counter hitTest：圓心命中", counterA.hitTest(CGPoint(x: 50, y: 50), threshold: 0))
 checkTrue("counter bounds：以圓心為中心", counterA.bounds.midX == 50 && counterA.bounds.midY == 50)
+checkEq("counter bounds：半徑=8+線寬×2（medium→32）", counterA.bounds.width, 32)
+checkEq("counter bounds：寬高一致", counterA.bounds.height, counterA.bounds.width)
+
+let arrowA = Annotation(shape: .arrow(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 100, y: 0)), style: style)
+checkTrue("arrow hitTest：線附近命中", arrowA.hitTest(CGPoint(x: 50, y: 9), threshold: 8))
+checkTrue("arrow hitTest：太遠不命中", !arrowA.hitTest(CGPoint(x: 50, y: 11), threshold: 8))
+checkEq("arrow bounds：端點正規化", arrowA.bounds, CGRect(x: 0, y: 0, width: 100, height: 0))
+var movedArrow = arrowA
+movedArrow.move(by: CGVector(dx: 5, dy: -3))
+checkEq("arrow move：端點平移", movedArrow.bounds, CGRect(x: 5, y: -3, width: 100, height: 0))
 
 print("---")
 if failures == 0 {
