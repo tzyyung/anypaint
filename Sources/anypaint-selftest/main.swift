@@ -115,6 +115,71 @@ var movedArrow = arrowA
 movedArrow.move(by: CGVector(dx: 5, dy: -3))
 checkEq("arrow move：端點平移", movedArrow.bounds, CGRect(x: 5, y: -3, width: 100, height: 0))
 
+// 7) AnnotationDocument：快照 undo/redo、z-order、序號重編號
+let doc = AnnotationDocument()
+checkTrue("doc：初始為空", doc.isEmpty && !doc.canUndo && !doc.canRedo)
+
+let a1 = Annotation(shape: .rect(CGRect(x: 0, y: 0, width: 10, height: 10)), style: style)
+let a2 = Annotation(shape: .rect(CGRect(x: 20, y: 20, width: 10, height: 10)), style: style)
+doc.add(a1)
+doc.add(a2)
+checkEq("doc：add 兩筆", doc.objects.count, 2)
+checkTrue("doc：canUndo", doc.canUndo)
+
+doc.undo()
+checkEq("doc：undo 回一筆", doc.objects.count, 1)
+checkTrue("doc：undo 後 canRedo", doc.canRedo)
+doc.redo()
+checkEq("doc：redo 回兩筆", doc.objects.count, 2)
+
+doc.undo()
+doc.add(a2)   // undo 後做新操作 → redo 歷史清空
+checkTrue("doc：新操作清空 redo", !doc.canRedo)
+
+// 拖曳語意：beginChange 一次 + 多次 updateWithoutSnapshot = 一步 undo
+doc.beginChange()
+doc.updateWithoutSnapshot(id: a1.id) { $0.move(by: CGVector(dx: 1, dy: 0)) }
+doc.updateWithoutSnapshot(id: a1.id) { $0.move(by: CGVector(dx: 1, dy: 0)) }
+checkEq("doc：拖曳後位置", doc.objects[0].bounds.minX, 2)
+doc.undo()
+checkEq("doc：整段拖曳一步復原", doc.objects[0].bounds.minX, 0)
+
+// z-order：陣列順序即 z-order，越後面越上層
+let a3 = Annotation(shape: .rect(CGRect(x: 5, y: 5, width: 10, height: 10)), style: style)
+doc.add(a3)
+doc.bringToFront(id: a1.id)
+checkEq("doc：bringToFront 移到最後", doc.objects.last?.id, a1.id)
+doc.sendToBack(id: a1.id)
+checkEq("doc：sendToBack 移到最前", doc.objects.first?.id, a1.id)
+checkTrue("doc：z-order 可 undo", doc.canUndo)
+
+// hitTest：由上往下（陣列尾端優先）
+let top = doc.hitTest(at: CGPoint(x: 7, y: 7), threshold: 0)
+checkEq("doc：hitTest 命中最上層", top?.id, doc.objects.last?.id)
+
+// 選取狀態：undo 後清除
+doc.selectedID = a1.id
+doc.undo()
+checkTrue("doc：undo 清除選取", doc.selectedID == nil)
+
+// 序號重編號：編號＝「第幾個 counter」，渲染時算、不存死
+let c1 = Annotation(shape: .counter(center: CGPoint(x: 0, y: 0)), style: style)
+let c2 = Annotation(shape: .counter(center: CGPoint(x: 10, y: 0)), style: style)
+let c3 = Annotation(shape: .counter(center: CGPoint(x: 20, y: 0)), style: style)
+let cdoc = AnnotationDocument()
+cdoc.add(c1)
+cdoc.add(a1)   // 中間夾一個非 counter，不影響編號
+cdoc.add(c2)
+cdoc.add(c3)
+checkEq("counter：第 1 號", cdoc.counterNumber(for: c1.id), 1)
+checkEq("counter：第 2 號（跳過非 counter）", cdoc.counterNumber(for: c2.id), 2)
+checkEq("counter：第 3 號", cdoc.counterNumber(for: c3.id), 3)
+cdoc.remove(id: c2.id)
+checkEq("counter：刪 2 號後 3 號變 2 號", cdoc.counterNumber(for: c3.id), 2)
+cdoc.undo()
+checkEq("counter：undo 恢復編號", cdoc.counterNumber(for: c3.id), 3)
+checkTrue("counter：非 counter 無編號", cdoc.counterNumber(for: a1.id) == nil)
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
