@@ -105,6 +105,11 @@ final class SelectionView: NSView {
     private let loupeSide: CGFloat = 110
     private let loupeSrcPixels: CGFloat = 22
 
+    /// 看門狗倒數警告秒數（nil = 不顯示）。由 overlay controller 寫入。
+    var watchdogWarningSeconds: Int? {
+        didSet { if watchdogWarningSeconds != oldValue { needsDisplay = true } }
+    }
+
     private let toolbar = SelectionToolbar()
 
     /// 按下「擷取」→ 回傳裁切影像。
@@ -229,6 +234,8 @@ final class SelectionView: NSView {
         if let lp = activeLoupePoint() {
             drawLoupe(at: lp)
         }
+
+        if let secs = watchdogWarningSeconds { drawWatchdogBanner(seconds: secs) }
     }
 
     private func loupeRect(at p: CGPoint) -> CGRect {
@@ -352,6 +359,25 @@ final class SelectionView: NSView {
         NSColor(white: 0, alpha: 0.6).setFill()
         NSBezierPath(roundedRect: badge, xRadius: 3, yRadius: 3).fill()
         str.draw(at: CGPoint(x: badge.minX + pad, y: badge.minY + pad))
+    }
+
+    /// 看門狗倒數橫幅：置頂中央、醒目紅底。任何輸入會讓 controller 清掉它。
+    private func drawWatchdogBanner(seconds: Int) {
+        let text = "無操作，\(seconds) 秒後自動取消——動一下滑鼠即繼續" as NSString
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.boldSystemFont(ofSize: 14),
+            .foregroundColor: NSColor.white
+        ]
+        let size = text.size(withAttributes: attrs)
+        let pad: CGFloat = 14
+        let rect = CGRect(x: (bounds.width - size.width) / 2 - pad,
+                          y: bounds.height - 80,
+                          width: size.width + pad * 2,
+                          height: size.height + 16)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        NSColor(calibratedRed: 0.8, green: 0.1, blue: 0.1, alpha: 0.9).setFill()
+        path.fill()
+        text.draw(at: CGPoint(x: rect.minX + pad, y: rect.minY + 8), withAttributes: attrs)
     }
 
     // MARK: 控制點幾何
@@ -501,16 +527,25 @@ final class SelectionView: NSView {
 
     // MARK: 完成擷取
 
-    private func confirm() {
-        guard let sel = selection, sel.width > minSize, sel.height > minSize else { return }
+    /// 目前有效框的裁切影像；沒有有效框（太小/未框）回 nil。
+    /// 供「擷取」與看門狗逾時搶救共用。
+    func currentCroppedImage() -> NSImage? {
+        guard let sel = selection, sel.width > minSize, sel.height > minSize else { return nil }
         let pixelRect = CoordinateUtils.pixelCropRect(
             selection: sel, displayPointSize: bounds.size, scale: snapshot.scale)
-        guard let cropped = snapshot.cgImage.cropping(to: pixelRect) else {
-            onCancel?(); return
-        }
+        guard let cropped = snapshot.cgImage.cropping(to: pixelRect) else { return nil }
         let pointSize = NSSize(width: pixelRect.width / snapshot.scale,
                                height: pixelRect.height / snapshot.scale)
-        onConfirm?(NSImage(cgImage: cropped, size: pointSize))
+        return NSImage(cgImage: cropped, size: pointSize)
+    }
+
+    private func confirm() {
+        guard let sel = selection, sel.width > minSize, sel.height > minSize else { return }
+        guard let image = currentCroppedImage() else {
+            onCancel?()   // 有框但裁切失敗 → 維持原行為：取消
+            return
+        }
+        onConfirm?(image)
     }
 }
 
@@ -545,13 +580,19 @@ final class SelectionOverlayWindow: NSPanel {
 
 // MARK: - 協調者
 
-/// 協調多螢幕 overlay：單飛、不疊加、多條逃生路徑 + 免按鍵看門狗（互動即重置、秒數可設）。
+/// 協調多螢幕 overlay：單飛、不疊加、多條逃生路徑 + 免按鍵看門狗
+/// （所有輸入即重置、觸發前倒數警告、逾時搶救存剪貼簿、0=關閉、秒數可設）。
 final class SelectionOverlayController {
     private var windows: [SelectionOverlayWindow] = []
     private var onSelect: ((NSImage) -> Void)?
     private var onCancel: (() -> Void)?
     private var keyMonitor: Any?
-    private var watchdog: DispatchWorkItem?
+    private var watchdogWarn: DispatchWorkItem?
+    private var watchdogFire: DispatchWorkItem?
+    private var warningTimer: Timer?
+    private var warningRemaining = 0
+    /// 觸發前多久開始倒數警告（spec 定 15 秒；最小可設秒數 60 > 15，不會交叉）。
+    private let warningLead: TimeInterval = 15
 
     private(set) var isActive = false
 
@@ -591,16 +632,59 @@ final class SelectionOverlayController {
         cancel()
     }
 
-    /// 重置看門狗：只在「無互動」達設定秒數才強制解除，正常調整框不會被打斷。
+    /// 重置看門狗：只在「無任何互動」達設定秒數才強制解除。
+    /// 觸發前 warningLead 秒顯示倒數橫幅；秒數設 0 = 使用者選擇關閉，不排程。
     private func armWatchdog() {
-        watchdog?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.isActive else { return }
-            NSLog("anypaint: 框選看門狗逾時（無互動），強制解除")
-            self.cancel()
+        clearWatchdog()
+        let total = AppSettings.overlayWatchdogSeconds
+        guard total > 0 else { return }   // 0 = 關閉（使用者明確選擇）
+        let warn = DispatchWorkItem { [weak self] in self?.beginWarningCountdown() }
+        let fire = DispatchWorkItem { [weak self] in self?.watchdogDidFire() }
+        watchdogWarn = warn
+        watchdogFire = fire
+        DispatchQueue.main.asyncAfter(deadline: .now() + total - warningLead, execute: warn)
+        DispatchQueue.main.asyncAfter(deadline: .now() + total, execute: fire)
+    }
+
+    private func clearWatchdog() {
+        watchdogWarn?.cancel(); watchdogWarn = nil
+        watchdogFire?.cancel(); watchdogFire = nil
+        warningTimer?.invalidate(); warningTimer = nil
+        setWarning(nil)
+    }
+
+    private func beginWarningCountdown() {
+        warningRemaining = Int(warningLead)
+        setWarning(warningRemaining)
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] t in
+            guard let self, self.isActive else { t.invalidate(); return }
+            self.warningRemaining -= 1
+            if self.warningRemaining > 0 {
+                self.setWarning(self.warningRemaining)
+            } else {
+                t.invalidate()   // 歸零後由 watchdogFire 收尾
+            }
         }
-        watchdog = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + AppSettings.overlayWatchdogSeconds, execute: work)
+        // .common：事件追蹤（拖曳）期間也要跳；預設模式會停擺。
+        RunLoop.main.add(timer, forMode: .common)
+        warningTimer = timer
+    }
+
+    private func setWarning(_ seconds: Int?) {
+        for window in windows { window.selectionView?.watchdogWarningSeconds = seconds }
+    }
+
+    private func watchdogDidFire() {
+        guard isActive else { return }
+        // 搶救：有有效框就把目前內容存進剪貼簿再解除（走 finish 同一條路，
+        // 效果等同擷取＝複製到剪貼簿），沒有就純取消。免輸入保證不變。
+        if let image = windows.compactMap({ $0.selectionView?.currentCroppedImage() }).first {
+            NSLog("anypaint: 框選看門狗逾時，已把目前框選內容存入剪貼簿（搶救）")
+            finish(with: image)
+        } else {
+            NSLog("anypaint: 框選看門狗逾時（無互動），強制解除")
+            cancel()
+        }
     }
 
     private func finish(with image: NSImage) {
@@ -616,7 +700,7 @@ final class SelectionOverlayController {
     }
 
     private func dismiss() {
-        watchdog?.cancel(); watchdog = nil
+        clearWatchdog()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         NSCursor.arrow.set()
