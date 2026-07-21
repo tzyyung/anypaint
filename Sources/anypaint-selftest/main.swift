@@ -180,6 +180,34 @@ cdoc.undo()
 checkEq("counter：undo 恢復編號", cdoc.counterNumber(for: c3.id), 3)
 checkTrue("counter：非 counter 無編號", cdoc.counterNumber(for: a1.id) == nil)
 
+// 8) 渲染煙霧測試：離屏 40×40 bitmap 畫一個粗紅框，驗證左緣像素是紅的
+func rendererSmokeTest() {
+    let w = 40, h = 40
+    var buf = [UInt8](repeating: 0, count: w * h * 4)
+    let a = Annotation(shape: .rect(CGRect(x: 5, y: 5, width: 30, height: 30)),
+                       style: AnnotationStyle(color: .red, thickness: .thick))
+    buf.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(
+            data: raw.baseAddress, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            failures += 1
+            print("❌ renderer 煙霧測試：CGContext 建立失敗")
+            return
+        }
+        AnnotationRenderer.render([a], in: ctx)
+    }
+    // 取樣 (x=5, 中間列)：正好在左邊框線上。RGBA、列 0 在影像頂端。
+    let idx = (20 * w + 5) * 4
+    checkTrue("renderer：紅框像素（R 高 G 低 A 滿）",
+              buf[idx] > 180 && buf[idx + 1] < 90 && buf[idx + 3] > 200)
+    checkTrue("renderer：框中央是空的（沒被填滿）",
+              buf[(20 * w + 20) * 4 + 3] == 0)
+}
+rendererSmokeTest()
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
