@@ -249,6 +249,18 @@ final class SelectionView: NSView {
         didSet { if watchdogWarningSeconds != oldValue { needsDisplay = true } }
     }
 
+    // MARK: 標註狀態（階段 2）
+    /// 作用中的標註工具（nil＝調框模式）。
+    private var activeTool: AnnotationTool?
+    /// 標註文件（undo/z-order 都在裡面）。
+    private let annotations = AnnotationDocument()
+    /// 拖曳中的暫定形狀——不進 document，mouseUp 位移 ≥3pt 才 add()（總審查裁定的慣例）。
+    private var provisionalShape: Annotation.Shape?
+    private var shapeAnchor: CGPoint?
+    private var currentStyle = AnnotationStyleStore.style(for: .rect)
+    /// 有任何標註就鎖框（spec）：控制點隱藏、框不可建/移/縮；undo 清空自動解鎖。
+    private var frameLocked: Bool { !annotations.isEmpty }
+
     private let toolbar = SelectionToolbar()
 
     /// 按下「擷取」→ 回傳裁切影像。
@@ -266,6 +278,26 @@ final class SelectionView: NSView {
         toolbar.isHidden = true
         toolbar.onConfirm = { [weak self] in self?.confirm() }
         toolbar.onCancel = { [weak self] in self?.onCancel?() }
+        toolbar.onToolSelected = { [weak self] tool in
+            guard let self else { return }
+            self.activeTool = tool
+            if let tool {
+                self.currentStyle = AnnotationStyleStore.style(for: tool)
+                self.toolbar.setStyle(self.currentStyle)
+            }
+            self.onInteraction?()
+            // 樣式列顯隱改變工具列高度 → 重新定位
+            if let sel = self.selection { self.layoutToolbar(for: sel) }
+            self.needsDisplay = true
+        }
+        toolbar.onStyleChanged = { [weak self] style in
+            guard let self else { return }
+            self.currentStyle = style
+            if let tool = self.activeTool { AnnotationStyleStore.save(style, for: tool) }
+            self.onInteraction?()
+        }
+        toolbar.onUndo = { [weak self] in self?.undoAnnotation() }
+        toolbar.onRedo = { [weak self] in self?.redoAnnotation() }
         addSubview(toolbar)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) 未實作") }
@@ -296,7 +328,8 @@ final class SelectionView: NSView {
 
     private func cursor(at point: CGPoint) -> NSCursor {
         if !toolbar.isHidden, toolbar.frame.contains(point) { return .arrow }
-        if let sel = selection {
+        if activeTool != nil { return .crosshair }   // 繪製工具＝十字線（spec）
+        if let sel = selection, !frameLocked {       // 鎖框時無控制點、不可移動
             if let h = hitHandle(point, in: sel) {
                 switch h {
                 case .topLeft, .bottomRight: return Self.cursorNWSE
@@ -355,8 +388,23 @@ final class SelectionView: NSView {
             // 即時尺寸標籤（拖曳/調整時每次重繪就更新）
             drawSizeBadge(for: rect)
 
+            // 標註（含拖曳中的暫定形狀）疊在亮區上、裁到框內——畫面上看得到的
+            // 才會被擷取（所見即所存；框外部分匯出時被裁掉，乾脆不畫）。
+            if !annotations.isEmpty || provisionalShape != nil {
+                NSGraphicsContext.current?.saveGraphicsState()
+                NSBezierPath(rect: rect).addClip()
+                if let cg = NSGraphicsContext.current?.cgContext {
+                    AnnotationRenderer.render(annotations.objects, in: cg)
+                    if let shape = provisionalShape {
+                        AnnotationRenderer.render(
+                            [Annotation(shape: shape, style: currentStyle)], in: cg)
+                    }
+                }
+                NSGraphicsContext.current?.restoreGraphicsState()
+            }
+
             // 拖曳中不畫控制點（畫面乾淨）；靜止時畫 8 個控制點
-            if drag == nil {
+            if drag == nil, !frameLocked {
                 NSColor.controlAccentColor.setFill()
                 NSColor.white.setStroke()
                 for p in handlePoints(rect) {
@@ -388,9 +436,9 @@ final class SelectionView: NSView {
         return CGRect(x: lx, y: ly, width: side, height: side)
     }
 
-    /// 放大鏡顯示點：拖曳中→拖曳點；尚未框選→hover 點；已框選靜止→不顯示（免擋控制點）。
+    /// 放大鏡顯示點：任何拖曳中（調框或畫標註）→拖曳點；尚未框選→hover 點；其餘不顯示。
     private func activeLoupePoint() -> CGPoint? {
-        if drag != nil { return dragPoint }
+        if drag != nil || shapeAnchor != nil { return dragPoint }
         if selection == nil { return hoverPoint }
         return nil
     }
@@ -545,6 +593,15 @@ final class SelectionView: NSView {
         onInteraction?()
         let p = convert(event.locationInWindow, from: nil)
         dragPoint = p
+        // 標註工具作用中 → 拖曳＝畫暫定形狀（不進 document）
+        if let tool = activeTool, selection != nil {
+            shapeAnchor = p
+            provisionalShape = makeShape(tool: tool, from: p, to: p)
+            needsDisplay = true
+            return
+        }
+        // 有標註鎖框：不建新框、不移動、不縮放
+        if frameLocked { return }
         if let sel = selection {
             if let h = hitHandle(p, in: sel) {
                 drag = .resizing(handle: h, startRect: sel)
@@ -564,9 +621,14 @@ final class SelectionView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         onInteraction?()
-        guard let drag else { return }
         let p = convert(event.locationInWindow, from: nil)
         dragPoint = p
+        if let tool = activeTool, let anchor = shapeAnchor {
+            provisionalShape = makeShape(tool: tool, from: anchor, to: p)
+            needsDisplay = true
+            return
+        }
+        guard let drag else { return }
         switch drag {
         case .creating(let anchor):
             selection = CoordinateUtils.rect(from: anchor, to: p)
@@ -583,6 +645,21 @@ final class SelectionView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         onInteraction?()
+        let p = convert(event.locationInWindow, from: nil)
+        if let tool = activeTool, let anchor = shapeAnchor {
+            // ≥3pt 才成形（spec：防誤點）；add() 自帶 undo 快照
+            if abs(p.x - anchor.x) >= 3 || abs(p.y - anchor.y) >= 3 {
+                annotations.add(Annotation(shape: makeShape(tool: tool, from: anchor, to: p),
+                                           style: currentStyle))
+                syncUndoButtons()
+            }
+            shapeAnchor = nil
+            provisionalShape = nil
+            dragPoint = nil
+            needsDisplay = true
+            window?.invalidateCursorRects(for: self)
+            return
+        }
         drag = nil
         dragPoint = nil
         if let sel = selection, sel.width > minSize, sel.height > minSize {
@@ -608,6 +685,16 @@ final class SelectionView: NSView {
 
     override func keyDown(with event: NSEvent) {
         onInteraction?()
+        // ⌘Z / ⌘⇧Z：標註 undo/redo（手動攔，不經 menu——overlay 是 nonactivating panel）
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "z" {
+            if event.modifierFlags.contains(.shift) {
+                redoAnnotation()
+            } else {
+                undoAnnotation()
+            }
+            return
+        }
         switch event.keyCode {
         case 53:            // Esc → 取消
             onCancel?()
@@ -616,6 +703,37 @@ final class SelectionView: NSView {
         default:
             super.keyDown(with: event)
         }
+    }
+
+    // MARK: 標註操作
+
+    private func makeShape(tool: AnnotationTool, from a: CGPoint, to b: CGPoint) -> Annotation.Shape {
+        switch tool {
+        case .rect:    return .rect(CoordinateUtils.rect(from: a, to: b))
+        case .ellipse: return .ellipse(CoordinateUtils.rect(from: a, to: b))
+        case .line:    return .line(from: a, to: b)
+        case .arrow:   return .arrow(from: a, to: b)
+        }
+    }
+
+    private func undoAnnotation() {
+        guard annotations.canUndo else { return }
+        annotations.undo()
+        syncUndoButtons()
+        needsDisplay = true
+        window?.invalidateCursorRects(for: self)   // 清空時解鎖 → 控制點/游標復原
+    }
+
+    private func redoAnnotation() {
+        guard annotations.canRedo else { return }
+        annotations.redo()
+        syncUndoButtons()
+        needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+    }
+
+    private func syncUndoButtons() {
+        toolbar.setUndoState(canUndo: annotations.canUndo, canRedo: annotations.canRedo)
     }
 
     // MARK: 調整框幾何
@@ -666,16 +784,27 @@ final class SelectionView: NSView {
 
     // MARK: 完成擷取
 
-    /// 目前有效框的裁切影像；沒有有效框（太小/未框）回 nil。
-    /// 供「擷取」與看門狗逾時搶救共用。
+    /// 目前有效框的輸出影像（有標註就合成進去）；沒有有效框回 nil。
+    /// 供「擷取」與看門狗逾時搶救共用——搶救因此自動含標註。
     func currentCroppedImage() -> NSImage? {
         guard let sel = selection, sel.width > minSize, sel.height > minSize else { return nil }
         let pixelRect = CoordinateUtils.pixelCropRect(
             selection: sel, displayPointSize: bounds.size, scale: snapshot.scale)
         guard let cropped = snapshot.cgImage.cropping(to: pixelRect) else { return nil }
+        let final: CGImage
+        if annotations.isEmpty {
+            final = cropped
+        } else if let composed = AnnotationRenderer.composite(
+            objects: annotations.objects, overCropped: cropped,
+            selection: sel, scale: snapshot.scale) {
+            final = composed
+        } else {
+            NSLog("anypaint: 標註合成失敗，改輸出未標註裁切圖")
+            final = cropped
+        }
         let pointSize = NSSize(width: pixelRect.width / snapshot.scale,
                                height: pixelRect.height / snapshot.scale)
-        return NSImage(cgImage: cropped, size: pointSize)
+        return NSImage(cgImage: final, size: pointSize)
     }
 
     private func confirm() {
