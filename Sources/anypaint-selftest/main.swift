@@ -269,6 +269,13 @@ checkEq("styleStore：舊字串鍵 medium 遷移為 lineWidth 4",
         AnnotationStyleStore.style(for: .ellipse).lineWidth, 4)
 AnnotationStyleStore.reset(for: .ellipse)   // 清乾淨，避免影響其他測試/重跑
 
+// 9c) 繞過 init 直接改欄位製造越界值 → save() 自身必須 clamp（防未來重構漏掉）
+var bypassStyle = AnnotationStyleStore.style(for: .line)
+bypassStyle.lineWidth = 999
+AnnotationStyleStore.save(bypassStyle, for: .line)
+checkEq("styleStore：save 對越界值自行 clamp", AnnotationStyleStore.style(for: .line).lineWidth, 24)
+AnnotationStyleStore.reset(for: .line)
+
 // 10) 合成匯出：白底 + 紅框標註 → 像素驗證（「所見即所存」的離屏版）
 func compositeSmokeTest() {
     func solidWhite(w: Int, h: Int) -> CGImage? {
