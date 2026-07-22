@@ -63,6 +63,7 @@ final class SelectionToolbar: NSView {
         let symbols: [(AnnotationTool, String)] = [
             (.rect, "rectangle"), (.ellipse, "circle"),
             (.line, "line.diagonal"), (.arrow, "arrow.up.right"),
+            (.freehand, "pencil"), (.highlighter, "highlighter"), (.pixelate, "squareshape.split.3x3"),
             (.text, "textformat"), (.counter, "1.circle")
         ]
         for (tool, symbol) in symbols {
@@ -248,6 +249,8 @@ final class SelectionView: NSView {
     /// 拖曳中的暫定形狀——不進 document，mouseUp 位移 ≥3pt 才 add()（總審查裁定的慣例）。
     private var provisionalShape: Annotation.Shape?
     private var shapeAnchor: CGPoint?
+    /// 畫筆/螢光筆的累積點（拖曳中）；mouseUp 成形。
+    private var strokePoints: [CGPoint] = []
     private var currentStyle = AnnotationStyleStore.style(for: .rect)
     /// 滾輪調粗細的累積量（觸控板會送大量小 delta，湊滿閾值才跳一檔）。
     private var lineWidthScrollAccum: CGFloat = 0
@@ -669,9 +672,14 @@ final class SelectionView: NSView {
                 } else {
                     handleTextClick(at: p)
                 }
-            case .rect, .ellipse, .line, .arrow:
+            case .rect, .ellipse, .line, .arrow, .pixelate:
                 shapeAnchor = p
                 provisionalShape = makeShape(tool: tool, from: p, to: p)
+                needsDisplay = true
+            case .freehand, .highlighter:
+                strokePoints = [p]
+                provisionalShape = (tool == .freehand) ? .freehand(points: strokePoints)
+                                                       : .highlighter(points: strokePoints)
                 needsDisplay = true
             }
             return
@@ -720,6 +728,14 @@ final class SelectionView: NSView {
             }
             return
         }
+        if let tool = activeTool, !strokePoints.isEmpty,
+           tool == .freehand || tool == .highlighter {
+            strokePoints.append(p)
+            provisionalShape = (tool == .freehand) ? .freehand(points: strokePoints)
+                                                   : .highlighter(points: strokePoints)
+            needsDisplay = true
+            return
+        }
         if let tool = activeTool, let anchor = shapeAnchor {
             provisionalShape = makeShape(tool: tool, from: anchor, to: p)
             needsDisplay = true
@@ -757,6 +773,26 @@ final class SelectionView: NSView {
             textDragBegan = false
             needsDisplay = true
             window?.invalidateCursorRects(for: self)
+            return
+        }
+        if let tool = activeTool, !strokePoints.isEmpty,
+           tool == .freehand || tool == .highlighter {
+            defer { strokePoints = []; provisionalShape = nil; dragPoint = nil
+                    needsDisplay = true; window?.invalidateCursorRects(for: self) }
+            let first = strokePoints[0]
+            guard strokePoints.count > 1,
+                  strokePoints.contains(where: { abs($0.x - first.x) >= 3 || abs($0.y - first.y) >= 3 })
+            else { return }
+            let shape: Annotation.Shape = (tool == .freehand)
+                ? .freehand(points: strokePoints) : .highlighter(points: strokePoints)
+            let annotation = Annotation(shape: shape, style: currentStyle)
+            let half = annotation.effectiveStrokeWidth / 2
+            if let sel = selection,
+               annotation.bounds.insetBy(dx: -half, dy: -half).intersects(sel) {
+                annotations.add(annotation)
+                syncUndoButtons()
+                hotAnnotationID = annotation.id
+            }
             return
         }
         if let tool = activeTool, let anchor = shapeAnchor {
@@ -883,8 +919,9 @@ final class SelectionView: NSView {
         case .ellipse: return .ellipse(CoordinateUtils.rect(from: a, to: b))
         case .line:    return .line(from: a, to: b)
         case .arrow:   return .arrow(from: a, to: b)
-        case .text, .counter:
-            preconditionFailure("點擊型工具不走拖曳成形")
+        case .pixelate: return .pixelate(rect: CoordinateUtils.rect(from: a, to: b))
+        case .text, .counter, .freehand, .highlighter:
+            preconditionFailure("此工具不走兩點成形")
         }
     }
 
