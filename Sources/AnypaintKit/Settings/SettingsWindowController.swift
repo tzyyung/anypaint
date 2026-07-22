@@ -84,6 +84,7 @@ public final class SettingsWindowController: NSWindowController {
         // 視窗高度依內容實算（別再手猜 magic number——存檔區加入後 380 不夠，審查抓到）。
         stack.layoutSubtreeIfNeeded()
         window?.setContentSize(NSSize(width: 420, height: stack.fittingSize.height + 40))
+        window?.center()   // resize 是頂邊固定向下長，init 時的 center 已偏——重新置中（審查 Minor）
     }
 
     private func shortcutRow(title: String, name: KeyboardShortcuts.Name) -> NSView {
