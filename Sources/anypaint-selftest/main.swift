@@ -478,6 +478,81 @@ var movedPx = pxA
 movedPx.move(by: CGVector(dx: -5, dy: -5))
 checkEq("pixelate move", movedPx.bounds.origin, CGPoint.zero)
 
+// 17) 螢光筆渲染：multiply 半透明——白底上偏原色、不全遮
+func highlighterRenderSmokeTest() {
+    let w = 40, h = 40
+    var buf = [UInt8](repeating: 255, count: w * h * 4)   // 白底（先填滿 255）
+    let a = Annotation(shape: .highlighter(points: [CGPoint(x: 5, y: 20), CGPoint(x: 35, y: 20)]),
+                       style: AnnotationStyle(color: .red, lineWidth: 4))   // 有效寬 8
+    buf.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(
+            data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        AnnotationRenderer.render([a], in: ctx)
+    }
+    let idx = ((h - 1 - 20) * w + 20) * 4   // 線中央
+    checkTrue("highlighter：紅通道仍高", buf[idx] > 200)
+    checkTrue("highlighter：綠通道被壓但未歸零（半透明 multiply）", buf[idx + 1] > 100 && buf[idx + 1] < 240)
+}
+highlighterRenderSmokeTest()
+
+// 18) 畫筆渲染：平滑筆跡有像素
+func freehandRenderSmokeTest() {
+    let w = 40, h = 40
+    var buf = [UInt8](repeating: 0, count: w * h * 4)
+    let a = Annotation(shape: .freehand(points: [CGPoint(x: 5, y: 20), CGPoint(x: 20, y: 25), CGPoint(x: 35, y: 20)]),
+                       style: AnnotationStyle(color: .blue, lineWidth: 4))
+    buf.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(
+            data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        AnnotationRenderer.render([a], in: ctx)
+    }
+    let idx = ((h - 1 - 20) * w + 5) * 4   // 起點附近
+    checkTrue("freehand：起點附近為藍", buf[idx + 2] > 150)
+}
+freehandRenderSmokeTest()
+
+// 19) 馬賽克渲染：紅色底圖 → 馬賽克區仍為紅（非破壞、取樣自 provider）；無 provider＝灰佔位不 crash
+func pixelateRenderSmokeTest() {
+    func solidRed(w: Int, h: Int) -> CGImage? {
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(srgbRed: 0.93, green: 0.13, blue: 0.16, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+    let w = 40, h = 40
+    var buf = [UInt8](repeating: 0, count: w * h * 4)
+    let a = Annotation(shape: .pixelate(rect: CGRect(x: 8, y: 8, width: 24, height: 24)),
+                       style: AnnotationStyle(color: .red, lineWidth: 4))   // 格子 8pt
+    buf.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(
+            data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        AnnotationRenderer.render([a], in: ctx,
+                                  sourceProvider: { rect in solidRed(w: Int(rect.width), h: Int(rect.height)) })
+    }
+    let idx = ((h - 1 - 20) * w + 20) * 4
+    checkTrue("pixelate：取樣紅底 → 馬賽克區為紅", buf[idx] > 180 && buf[idx + 1] < 90)
+    // 無 provider：不 crash、畫灰佔位
+    var buf2 = [UInt8](repeating: 0, count: w * h * 4)
+    buf2.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(
+            data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        AnnotationRenderer.render([a], in: ctx)
+    }
+    let idx2 = ((h - 1 - 20) * w + 20) * 4
+    checkTrue("pixelate：無 provider 畫灰佔位", buf2[idx2 + 3] > 0)
+}
+pixelateRenderSmokeTest()
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")

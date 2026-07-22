@@ -432,10 +432,10 @@ final class SelectionView: NSView {
                 if let cg = NSGraphicsContext.current?.cgContext {
                     AnnotationRenderer.render(
                         annotations.objects.filter { $0.id != editingTextID },
-                        in: cg, counterNumbers: counterNumbersMap())
+                        in: cg, counterNumbers: counterNumbersMap(), sourceProvider: frozenImageProvider())
                     if let shape = provisionalShape {
                         AnnotationRenderer.render(
-                            [Annotation(shape: shape, style: currentStyle)], in: cg)
+                            [Annotation(shape: shape, style: currentStyle)], in: cg, sourceProvider: frozenImageProvider())
                     }
                 }
                 NSGraphicsContext.current?.restoreGraphicsState()
@@ -992,6 +992,15 @@ final class SelectionView: NSView {
         return m
     }
 
+    /// 馬賽克取樣：view 點座標矩形 → 原始凍結影像該區像素圖（非破壞鐵則：永遠取原始底圖）。
+    private func frozenImageProvider() -> (CGRect) -> CGImage? {
+        { [snapshot, boundsSize = bounds.size] rect in
+            let pixelRect = CoordinateUtils.pixelCropRect(
+                selection: rect, displayPointSize: boundsSize, scale: snapshot.scale)
+            return snapshot.cgImage.cropping(to: pixelRect)
+        }
+    }
+
     // MARK: 調整框幾何
 
     private func clampPoint(_ p: CGPoint) -> CGPoint {
@@ -1052,7 +1061,7 @@ final class SelectionView: NSView {
             final = cropped
         } else if let composed = AnnotationRenderer.composite(
             objects: annotations.objects, overCropped: cropped,
-            selection: sel, scale: snapshot.scale, counterNumbers: counterNumbersMap()) {
+            selection: sel, scale: snapshot.scale, counterNumbers: counterNumbersMap(), sourceProvider: frozenImageProvider()) {
             final = composed
         } else {
             NSLog("anypaint: 標註合成失敗，改輸出未標註裁切圖")

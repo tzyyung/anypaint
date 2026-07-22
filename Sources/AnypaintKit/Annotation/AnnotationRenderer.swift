@@ -10,11 +10,13 @@ public enum AnnotationRenderer {
     /// 依陣列順序（＝z-order）逐一渲染。counterNumbers：序號物件的編號查表
     /// （由 AnnotationDocument.counterNumber(for:) 產生；預設空＝序號只畫圓不畫字）。
     public static func render(_ objects: [Annotation], in ctx: CGContext,
-                              counterNumbers: [UUID: Int] = [:]) {
-        for a in objects { render(a, in: ctx, counterNumbers: counterNumbers) }
+                              counterNumbers: [UUID: Int] = [:],
+                              sourceProvider: ((CGRect) -> CGImage?)? = nil) {
+        for a in objects { render(a, in: ctx, counterNumbers: counterNumbers, sourceProvider: sourceProvider) }
     }
 
-    static func render(_ a: Annotation, in ctx: CGContext, counterNumbers: [UUID: Int]) {
+    static func render(_ a: Annotation, in ctx: CGContext, counterNumbers: [UUID: Int],
+                       sourceProvider: ((CGRect) -> CGImage?)?) {
         ctx.saveGState()
         defer { ctx.restoreGState() }
 
@@ -72,8 +74,19 @@ public enum AnnotationRenderer {
                      baselineAt: { ascent, descent in
                          CGPoint(x: origin.x, y: origin.y + descent) })
 
-        case .freehand, .highlighter, .pixelate:
-            break   // 渲染於階段 4 Task 2，此佔位保持編譯綠
+        case .freehand(let pts), .highlighter(let pts):
+            guard let path = AnnotationGeometry.smoothedPath(points: pts) else { break }
+            if case .highlighter = a.shape {
+                // 螢光筆：加寬×2、40% 不透明、multiply——壓在文字上不糊（spec）
+                ctx.setBlendMode(.multiply)
+                ctx.setAlpha(0.4)
+            }
+            ctx.setLineWidth(a.effectiveStrokeWidth)
+            ctx.addPath(path)
+            ctx.strokePath()
+
+        case .pixelate(let rect):
+            drawPixelate(rect: rect, blockSize: a.pixelateBlockSize, in: ctx, sourceProvider: sourceProvider)
         }
     }
 
@@ -100,6 +113,32 @@ public enum AnnotationRenderer {
         ctx.restoreGState()
     }
 
+    /// 非破壞馬賽克：從 provider 取「原始凍結影像」該區像素 → 縮小 1/block →
+    /// nearest-neighbor 放大畫回（純 CG，免 CIFilter）。取不到底圖＝半透明灰佔位。
+    private static func drawPixelate(rect: CGRect, blockSize: CGFloat, in ctx: CGContext,
+                                     sourceProvider: ((CGRect) -> CGImage?)?) {
+        guard rect.width >= 1, rect.height >= 1 else { return }
+        guard let crop = sourceProvider?(rect) else {
+            ctx.setFillColor(CGColor(gray: 0.5, alpha: 0.6))
+            ctx.fill(rect)
+            return
+        }
+        let tinyW = max(1, Int(rect.width / blockSize))
+        let tinyH = max(1, Int(rect.height / blockSize))
+        guard let tinyCtx = CGContext(
+            data: nil, width: tinyW, height: tinyH, bitsPerComponent: 8, bytesPerRow: 0,
+            space: crop.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return }
+        tinyCtx.interpolationQuality = .low    // 縮小取平均
+        tinyCtx.draw(crop, in: CGRect(x: 0, y: 0, width: CGFloat(tinyW), height: CGFloat(tinyH)))
+        guard let tiny = tinyCtx.makeImage() else { return }
+        ctx.saveGState()
+        ctx.interpolationQuality = .none       // 放大用 nearest-neighbor → 方格
+        ctx.draw(tiny, in: rect)
+        ctx.restoreGState()
+    }
+
     /// 把標註合成到「已裁切的選取框影像」上，回傳新圖（尺寸不變）。
     /// - selection：凍結影像點座標的選取框（左下原點）。
     /// - scale：點→像素倍率（Retina 2x 等）。
@@ -110,7 +149,8 @@ public enum AnnotationRenderer {
                                  overCropped cropped: CGImage,
                                  selection: CGRect,
                                  scale: CGFloat,
-                                 counterNumbers: [UUID: Int] = [:]) -> CGImage? {
+                                 counterNumbers: [UUID: Int] = [:],
+                                 sourceProvider: ((CGRect) -> CGImage?)? = nil) -> CGImage? {
         let w = cropped.width, h = cropped.height
         guard w > 0, h > 0,
               let ctx = CGContext(
@@ -121,7 +161,7 @@ public enum AnnotationRenderer {
         ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)))
         ctx.scaleBy(x: scale, y: scale)
         ctx.translateBy(x: -selection.minX, y: -selection.minY)
-        render(objects, in: ctx, counterNumbers: counterNumbers)
+        render(objects, in: ctx, counterNumbers: counterNumbers, sourceProvider: sourceProvider)
         return ctx.makeImage()
     }
 }
