@@ -78,6 +78,17 @@ public struct Annotation: Identifiable, Equatable {
     /// 馬賽克格子大小（pt）：由線寬導出，滾輪熱狀態可調粒度（spec 修訂）。
     public var pixelateBlockSize: CGFloat { max(4, style.lineWidth * 2) }
 
+    /// 四角 handle 可否縮放：text/counter 大小由 lineWidth 導出（滾輪調），不給 handle（spec 修訂）。
+    /// 完整列舉、不用 default——未來加 case 時編譯器點名。
+    public var isCornerResizable: Bool {
+        switch shape {
+        case .text, .counter:
+            return false
+        case .rect, .ellipse, .pixelate, .line, .arrow, .freehand, .highlighter:
+            return true
+        }
+    }
+
     /// 外接框（線段類為端點正規化矩形，寬或高可為 0）。
     public var bounds: CGRect {
         switch shape {
@@ -93,11 +104,15 @@ public struct Annotation: Identifiable, Equatable {
             return CGRect(origin: origin,
                           size: AnnotationGeometry.measureText(string, fontSize: textFontSize))
         case .freehand(let pts), .highlighter(let pts):
-            guard let first = pts.first else { return .zero }
-            var r = CGRect(origin: first, size: .zero)
-            for p in pts.dropFirst() { r = r.union(CGRect(origin: p, size: .zero)) }
+            // 用平滑後路徑的 boundingBoxOfPath（含貝茲控制點外插）＋半寬外擴——
+            // 點集 bbox 會低估 Catmull-Rom 轉角 overshoot（總審查記錄）。
+            guard let path = AnnotationGeometry.smoothedPath(points: pts) else {
+                guard let only = pts.first else { return .zero }
+                return CGRect(origin: only, size: .zero)
+                    .insetBy(dx: -effectiveStrokeWidth / 2, dy: -effectiveStrokeWidth / 2)
+            }
             let half = effectiveStrokeWidth / 2
-            return r.insetBy(dx: -half, dy: -half)
+            return path.boundingBoxOfPath.insetBy(dx: -half, dy: -half)
         case .pixelate(let r):
             return r
         }
@@ -146,6 +161,30 @@ public struct Annotation: Identifiable, Equatable {
         case .pixelate(var r):
             r.origin.x += delta.dx; r.origin.y += delta.dy
             shape = .pixelate(rect: r)
+        }
+    }
+
+    /// 以四角 handle 縮放：把幾何從 start 映射到 new（比例縮放＋平移）。
+    /// start 寬高 ≤0 或不可縮放物件＝no-op。
+    public mutating func scaled(from start: CGRect, to new: CGRect) {
+        guard isCornerResizable, start.width > 0, start.height > 0 else { return }
+        func mapX(_ x: CGFloat) -> CGFloat { new.minX + (x - start.minX) * new.width / start.width }
+        func mapY(_ y: CGFloat) -> CGFloat { new.minY + (y - start.minY) * new.height / start.height }
+        func mapP(_ p: CGPoint) -> CGPoint { CGPoint(x: mapX(p.x), y: mapY(p.y)) }
+        func mapR(_ r: CGRect) -> CGRect {
+            CGRect(x: mapX(r.minX), y: mapY(r.minY),
+                   width: r.width * new.width / start.width,
+                   height: r.height * new.height / start.height)
+        }
+        switch shape {
+        case .rect(let r):      shape = .rect(mapR(r))
+        case .ellipse(let r):   shape = .ellipse(mapR(r))
+        case .pixelate(let r):  shape = .pixelate(rect: mapR(r))
+        case .line(let a, let b):  shape = .line(from: mapP(a), to: mapP(b))
+        case .arrow(let a, let b): shape = .arrow(from: mapP(a), to: mapP(b))
+        case .freehand(let pts):    shape = .freehand(points: pts.map(mapP))
+        case .highlighter(let pts): shape = .highlighter(points: pts.map(mapP))
+        case .text, .counter: break   // isCornerResizable guard 已擋，這裡保持 switch 完整
         }
     }
 }

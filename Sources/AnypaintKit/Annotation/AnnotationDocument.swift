@@ -90,6 +90,11 @@ public final class AnnotationDocument {
         selectedID = nil
     }
 
+    /// 清空 redo 歷史（框幾何變動時呼叫——redo 恢復的標註是相對舊框的座標，語意已失效）。
+    public func clearRedo() {
+        redoStack.removeAll()
+    }
+
     // MARK: 查詢
 
     /// 點選命中：由上往下（陣列尾端優先）。

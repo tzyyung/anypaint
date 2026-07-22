@@ -553,6 +553,51 @@ func pixelateRenderSmokeTest() {
 }
 pixelateRenderSmokeTest()
 
+// 20) 縮放幾何：從 startBounds 映射到 newBounds
+var scRect = Annotation(shape: .rect(CGRect(x: 10, y: 10, width: 20, height: 20)),
+                        style: AnnotationStyle(color: .red, lineWidth: 4))
+scRect.scaled(from: CGRect(x: 10, y: 10, width: 20, height: 20),
+              to: CGRect(x: 10, y: 10, width: 40, height: 20))
+checkEq("scaled：rect 寬倍增", scRect.bounds, CGRect(x: 10, y: 10, width: 40, height: 20))
+
+var scLine = Annotation(shape: .line(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 10, y: 10)),
+                        style: AnnotationStyle(color: .red, lineWidth: 4))
+scLine.scaled(from: CGRect(x: 0, y: 0, width: 10, height: 10),
+              to: CGRect(x: 0, y: 0, width: 20, height: 10))
+if case .line(let f, let t) = scLine.shape {
+    checkEq("scaled：line 端點比例", t, CGPoint(x: 20, y: 10))
+    checkEq("scaled：line 起點不動", f, CGPoint.zero)
+} else { failures += 1; print("❌ scaled line：型別跑掉") }
+
+var scText = Annotation(shape: .text(origin: CGPoint(x: 5, y: 5), string: "x"),
+                        style: AnnotationStyle(color: .red, lineWidth: 4))
+let beforeText = scText.bounds
+scText.scaled(from: beforeText, to: beforeText.insetBy(dx: -10, dy: -10))
+checkEq("scaled：text 不可縮放＝no-op", scText.bounds, beforeText)
+checkTrue("isCornerResizable：rect true / text false",
+          scRect.isCornerResizable && !scText.isCornerResizable)
+
+var scPen = Annotation(shape: .freehand(points: [CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 0), CGPoint(x: 20, y: 0)]),
+                       style: AnnotationStyle(color: .red, lineWidth: 4))
+scPen.scaled(from: scPen.bounds, to: scPen.bounds.offsetBy(dx: 10, dy: 0))
+if case .freehand(let pts) = scPen.shape {
+    checkEq("scaled：freehand 全點平移（同尺寸映射）", pts[0], CGPoint(x: 10, y: 0))
+} else { failures += 1; print("❌ scaled freehand：型別跑掉") }
+
+// 21) clearRedo
+let rdoc = AnnotationDocument()
+rdoc.add(Annotation(shape: .rect(CGRect(x: 0, y: 0, width: 5, height: 5)),
+                    style: AnnotationStyle(color: .red, lineWidth: 4)))
+rdoc.undo()
+checkTrue("clearRedo 前：canRedo", rdoc.canRedo)
+rdoc.clearRedo()
+checkTrue("clearRedo 後：redo 清空", !rdoc.canRedo)
+
+// 22) freehand bounds 含控制點外插（L 形轉角案例——舊點集 bbox 會低估）
+let lPts = [CGPoint(x: 0, y: 0), CGPoint(x: 0, y: 10), CGPoint(x: 100, y: 10), CGPoint(x: 100, y: 0)]
+let lPen = Annotation(shape: .freehand(points: lPts), style: AnnotationStyle(color: .red, lineWidth: 1))
+checkTrue("freehand bounds：涵蓋 Catmull-Rom 外插（y>10 的 overshoot）", lPen.bounds.maxY > 10.5)
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
