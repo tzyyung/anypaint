@@ -147,7 +147,7 @@ final class SelectionOverlayController {
         guard !views.contains(where: { $0.isEditingText }),
               let hovered = views.first(where: { $0.activeLoupePoint() != nil }) else { return }
         AppSettings.colorPickerShowsRGB.toggle()
-        armWatchdog()
+        hovered.onInteraction?()   // 重置看門狗＋更新搶救歸屬（與 C 鍵路徑一致，審查 Minor）
         hovered.needsDisplay = true   // 全量重繪：切換立即反映在面板上
     }
 
