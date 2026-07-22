@@ -193,9 +193,9 @@ extension SelectionView {
         if let toast = copiedColorText {
             infoText = toast
         } else if let rgb {
-            infoText = "\(ColorSampler.hexString(r: rgb.r, g: rgb.g, b: rgb.b))  \(Int(cx)), \(Int(cyTop))"
+            infoText = "\(ColorSampler.hexString(r: rgb.r, g: rgb.g, b: rgb.b))  \(sp.x), \(sp.y)"
         } else {
-            infoText = "\(Int(cx)), \(Int(cyTop))"
+            infoText = "\(sp.x), \(sp.y)"
         }
         let coord = NSAttributedString(
             string: infoText,
