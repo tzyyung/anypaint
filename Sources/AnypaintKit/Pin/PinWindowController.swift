@@ -38,14 +38,13 @@ final class PinWindow: NSPanel {
     private let pinImage: NSImage
     weak var controller: PinWindowController?
 
-    init(image: NSImage, centeredAt point: CGPoint) {
+    init(image: NSImage, frame: CGRect) {
         self.pinImage = image
         let size = image.size
         self.aspect = size.height > 0 ? size.width / size.height : 1
 
-        let origin = CGPoint(x: point.x - size.width / 2, y: point.y - size.height / 2)
         super.init(
-            contentRect: CGRect(origin: origin, size: size),
+            contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -143,9 +142,20 @@ final class PinWindow: NSPanel {
 final class PinWindowController {
     private var windows: [PinWindow] = []
 
-    /// 在指定螢幕座標（點、左下原點）貼一張圖。
+    /// 在指定螢幕座標（點、左下原點）貼一張圖（置中、超螢幕先縮）。
     func pin(image: NSImage, at point: CGPoint) {
-        let window = PinWindow(image: cappedImage(image), centeredAt: point)
+        let capped = cappedImage(image)
+        show(PinWindow(image: capped,
+                       frame: CoordinateUtils.centeredRect(at: point, size: capped.size)))
+    }
+
+    /// 貼到指定全域框（截圖完直接貼）：蓋在原框選位置。
+    /// 不套 cappedImage——框選必然 ≤ 螢幕大小（spec）。
+    func pin(image: NSImage, frame: CGRect) {
+        show(PinWindow(image: image, frame: frame))
+    }
+
+    private func show(_ window: PinWindow) {
         window.controller = self
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
