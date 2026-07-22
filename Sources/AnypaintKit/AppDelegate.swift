@@ -49,6 +49,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 overlayController.present(
                     snapshots: snapshots,
                     onSelect: { [weak self] image in self?.pinboard.copy(image: image) },
+                    onSave: { [weak self] image in
+                        self?.pinboard.copy(image: image)   // 剪貼簿先有——寫檔失敗也不白截（spec）
+                        let dir = URL(fileURLWithPath: AppSettings.saveDirectoryPath)
+                        let url = CaptureSaver.uniquedURL(
+                            directory: dir,
+                            filename: CaptureSaver.filename(for: Date()),
+                            exists: { FileManager.default.fileExists(atPath: $0.path) })
+                        do {
+                            try CaptureSaver.writePNG(image: image, to: url)
+                        } catch {
+                            NSLog("anypaint: 存檔失敗 \(error)")
+                            NSSound.beep()
+                        }
+                    },
                     onPin: { [weak self] image, frame in
                         self?.pinboard.copy(image: image)                    // 決策：貼＝同時複製
                         self?.pinController.pin(image: image, frame: frame)

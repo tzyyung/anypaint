@@ -36,6 +36,7 @@ final class SelectionOverlayWindow: NSPanel {
 final class SelectionOverlayController {
     private var windows: [SelectionOverlayWindow] = []
     private var onSelect: ((NSImage) -> Void)?
+    private var onSave: ((NSImage) -> Void)?
     private var onPin: ((NSImage, CGRect) -> Void)?
     private var onCancel: (() -> Void)?
     private var keyMonitor: Any?
@@ -54,11 +55,13 @@ final class SelectionOverlayController {
 
     func present(snapshots: [DisplaySnapshot],
                  onSelect: @escaping (NSImage) -> Void,
+                 onSave: @escaping (NSImage) -> Void,
                  onPin: @escaping (NSImage, CGRect) -> Void,
                  onCancel: @escaping () -> Void) {
         guard !isActive else { return }
         isActive = true
         self.onSelect = onSelect
+        self.onSave = onSave
         self.onPin = onPin
         self.onCancel = onCancel
 
@@ -66,6 +69,7 @@ final class SelectionOverlayController {
         for snapshot in snapshots {
             let window = SelectionOverlayWindow(snapshot: snapshot)
             window.selectionView?.onConfirm = { [weak self] image in self?.finish(with: image) }
+            window.selectionView?.onSave = { [weak self] image in self?.finishSave(with: image) }
             window.selectionView?.onPin = { [weak self, weak window] image, sel in
                 guard let window else { return }
                 let globalFrame = CoordinateUtils.globalRect(
@@ -102,6 +106,18 @@ final class SelectionOverlayController {
                !views.contains(where: { $0.isEditingText }),
                let hovered = views.first(where: { $0.activeLoupePoint() != nil }) {
                 hovered.copyLoupeColor()
+                return nil
+            }
+            // ⌘S：存檔（有有效框才作用）。走監聽器不走 view keyDown——nonactivating
+            // panel 被點擊前收不到 responder 事件（取色 Shift 的同一教訓）。
+            // 文字編輯中也攔：saveConfirm 會先落字再存（與擷取同紀律）。
+            if event.modifierFlags.contains(.command),
+               !event.modifierFlags.contains(.control),
+               !event.modifierFlags.contains(.option),
+               event.charactersIgnoringModifiers?.lowercased() == "s",
+               let views = self?.windows.compactMap({ $0.selectionView }),
+               let target = views.first(where: { $0.hasValidSelection }) {
+                target.saveConfirm()
                 return nil
             }
             if event.keyCode == 53 {
@@ -234,6 +250,12 @@ final class SelectionOverlayController {
         handler?(image)
     }
 
+    private func finishSave(with image: NSImage) {
+        let handler = onSave
+        dismiss()
+        handler?(image)
+    }
+
     private func finishPin(with image: NSImage, frame: CGRect) {
         let handler = onPin
         dismiss()
@@ -255,6 +277,7 @@ final class SelectionOverlayController {
         windows.removeAll()
         lastInteractedWindow = nil
         onSelect = nil
+        onSave = nil
         onPin = nil
         onCancel = nil
         isActive = false
