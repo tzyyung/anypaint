@@ -642,13 +642,20 @@ final class SelectionView: NSView {
     override func mouseDown(with event: NSEvent) {
         onInteraction?()
         clearHotAnnotation()   // 任何 mouseDown 分支都解除熱狀態（spec）
-        // 編輯中點任何地方＝先完成編輯（第一下點擊只結束編輯，不做別的）
-        if isEditingText {
-            commitTextEditing()
-            return
-        }
         let p = convert(event.locationInWindow, from: nil)
         dragPoint = p
+        // 編輯中點擊＝先完成目前編輯；若同一下點在「另一個既有文字」上，
+        // 直接落入下方文字路由接手（換編輯/拖移那一個），不用再點第二下。
+        // 點在其他地方則維持「第一下只結束編輯」——避免點外面收尾時誤開新編輯器。
+        if isEditingText {
+            let previousEditingID = editingTextID
+            commitTextEditing()
+            if activeTool == .text, let hit = hitTextObject(at: p), hit.id != previousEditingID {
+                // 不 return：往下走 .text 路由
+            } else {
+                return
+            }
+        }
         // 標註工具作用中 → 依工具型態路由
         if let tool = activeTool, selection != nil {
             switch tool {
