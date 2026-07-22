@@ -171,6 +171,13 @@ final class SelectionToolbar: NSView {
         redoButton.isEnabled = canRedo
     }
 
+    /// 覆寫樣式列顯隱（select 工具下：選了物件才出現，spec）。
+    /// setActiveTool 的預設規則（tool == nil 才隱藏）對繪製工具已經足夠，
+    /// select 工具需要呼叫端依 hasSelection 額外覆寫。
+    func setStyleRowVisible(_ visible: Bool) {
+        styleRow.isHidden = !visible
+    }
+
     // MARK: 按鈕動作
 
     @objc private func toolTapped(_ sender: NSButton) {
@@ -289,6 +296,13 @@ final class SelectionView: NSView {
         annotations.selectedID = nil
         clearHotAnnotation()
         selectDrag = nil
+        selectDragBegan = false
+        if activeTool == .select {
+            // select 工具下無選取＝隱藏樣式列（spec：選了繪製工具或選取了物件才出現）；
+            // 高度變化要重新定位工具列（比照 onToolSelected 既有做法）。
+            toolbar.setStyleRowVisible(false)
+            if let sel = selection { layoutToolbar(for: sel) }
+        }
         needsDisplay = true
     }
 
@@ -335,6 +349,11 @@ final class SelectionView: NSView {
             if let tool {
                 self.currentStyle = AnnotationStyleStore.style(for: tool)
                 self.toolbar.setStyle(self.currentStyle)
+            }
+            if tool == .select {
+                // setActiveTool 剛把樣式列顯示（tool != nil）；select 工具要依有無選取覆寫
+                // （切入 select 當下通常無選取，spec：選了物件才出現）。
+                self.toolbar.setStyleRowVisible(self.hasSelection)
             }
             self.onInteraction?()
             // 樣式列顯隱改變工具列高度 → 重新定位
@@ -987,6 +1006,9 @@ final class SelectionView: NSView {
     // 空白處＝維持既有逃生路徑（onCancel，一個字不能動）。
     override func rightMouseDown(with event: NSEvent) {
         onInteraction?()
+        commitTextEditing()   // 重編輯中的原物件在 draw() 被跳過但 hitTest 不跳過：
+                              // 編輯器邊緣外右鍵可能命中隱形物件，選「刪除」會對已消失的編輯
+                              // 內容做靜默 no-op（總審查 Important）；先落字對齊 mouseDown 慣例。
         let p = convert(event.locationInWindow, from: nil)
         guard let hit = annotations.hitTest(at: p) else {
             onCancel?()
@@ -1031,6 +1053,8 @@ final class SelectionView: NSView {
         deselect()
         syncUndoButtons()
         needsDisplay = true
+        // 比照 undo/redo：刪除可能解鎖框，手動依上次已知的游標位置重算（總審查 Minor）。
+        if let hp = hoverPoint { cursor(at: hp).set() }
     }
 
     // 捲動也算互動（重置看門狗）。標註工具作用中：滾輪調整粗細（每 5 單位一步、一步 ±1pt），
@@ -1074,7 +1098,10 @@ final class SelectionView: NSView {
             currentStyle.lineWidth = newWidth
             // select 模式調的是選取物件本身的樣式，不寫入每工具記憶（spec）。
             if let tool = activeTool, tool != .select { AnnotationStyleStore.save(currentStyle, for: tool) }
-            toolbar.setStyle(currentStyle)
+            // 餵 toolbar 用「更新後物件的 style」而非 currentStyle：select 模式下 currentStyle
+            // 的顏色可能不是物件本身的顏色（總審查 Minor）；updateWithoutSnapshot 只原地改值，
+            // idx 仍指向同一物件。
+            toolbar.setStyle(annotations.objects[idx].style)
             syncUndoButtons()   // beginChange 改變了 canUndo
             needsDisplay = true
         } else {
@@ -1131,6 +1158,9 @@ final class SelectionView: NSView {
                 deselect()
                 syncUndoButtons()
                 needsDisplay = true
+                // 比照 undo/redo：刪除可能解鎖框（annotations 變空），手動依上次已知的
+                // 游標位置重算，讓控制點/游標立即復原（總審查 Minor）。
+                if let hp = hoverPoint { cursor(at: hp).set() }
             }
         default:
             super.keyDown(with: event)
@@ -1186,6 +1216,8 @@ final class SelectionView: NSView {
         annotations.selectedID = hit.id
         hotAnnotationID = hit.id   // 重設熱狀態（同上）
         toolbar.setStyle(hit.style)
+        toolbar.setStyleRowVisible(true)   // 選取了物件＝樣式列出現（spec）
+        if let sel = selection { layoutToolbar(for: sel) }   // 高度變化要重新定位工具列
         selectDrag = .moving(id: hit.id, startMouse: p, startShape: hit.shape)
         needsDisplay = true
     }
@@ -1244,6 +1276,12 @@ final class SelectionView: NSView {
 
     private func undoAnnotation() {
         commitTextEditing()   // 編輯中按 undo/redo：先落字，避免 update(id:) 對已消失物件靜默 no-op 丟字
+        // 拖曳中 undo/redo：先終止 in-flight 拖曳，否則後續 drag 事件會在無快照覆蓋下裸改物件
+        // （總審查 Important：undo 彈掉 beginChange 快照後，mouseDragged 仍會用 updateWithoutSnapshot 續改）。
+        selectDrag = nil
+        selectDragBegan = false
+        textDragCandidate = nil
+        textDragBegan = false
         guard annotations.canUndo else { return }
         annotations.undo()
         clearHotAnnotation()   // spec：undo/redo 清除熱狀態
@@ -1256,6 +1294,11 @@ final class SelectionView: NSView {
 
     private func redoAnnotation() {
         commitTextEditing()   // 編輯中按 undo/redo：先落字，避免 update(id:) 對已消失物件靜默 no-op 丟字
+        // 拖曳中 undo/redo：先終止 in-flight 拖曳，理由同 undoAnnotation()。
+        selectDrag = nil
+        selectDragBegan = false
+        textDragCandidate = nil
+        textDragBegan = false
         guard annotations.canRedo else { return }
         annotations.redo()
         clearHotAnnotation()
