@@ -105,6 +105,8 @@ final class SelectionView: NSView {
 
     // MARK: 取色（spec 2026-07-22 取色器）
     /// 「已複製 #XXXXXX」提示文字（1.5 秒自動清除；顯示中暫代放大鏡色值列內容）。
+    /// flagsChanged 用：前次 shift 是否按著（只在「無→有」轉變時切換顯示格式）。
+    var shiftWasDown = false
     var copiedColorText: String?
     private var copiedToastClear: DispatchWorkItem?
 

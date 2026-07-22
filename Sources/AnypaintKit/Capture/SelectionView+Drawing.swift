@@ -124,7 +124,7 @@ extension SelectionView {
     func invalidateLoupe(around a: CGPoint?, and b: CGPoint?) {
         var dirty = CGRect.null
         for p in [a, b].compactMap({ $0 }) {
-            dirty = dirty.union(loupeRect(at: p).insetBy(dx: -60, dy: -28))
+            dirty = dirty.union(loupeRect(at: p).insetBy(dx: -60, dy: -70))
         }
         if !dirty.isNull { setNeedsDisplay(dirty) }
     }
@@ -186,34 +186,50 @@ extension SelectionView {
         border.lineWidth = 1
         border.stroke()
 
-        // 色值＋座標列：■ 色塊 + #HEX + 像素座標；「已複製」提示顯示中則暫代文字
+        // 取色資訊面板（Snipaste 式，驗收回饋 2026-07-22）：四行置中——
+        // (x , y)／■ 色值（RGB 或 HEX，Shift 切換）／按 C 複製（toast 暫代）／按 Shift 切換。
         let sp = samplePixelCoord(at: p)
         let rgb = ColorSampler.sampleRGB(image: snapshot.cgImage, x: sp.x, y: sp.y)
-        let infoText: String
-        if let toast = copiedColorText {
-            infoText = toast
-        } else if let rgb {
-            infoText = "\(ColorSampler.hexString(r: rgb.r, g: rgb.g, b: rgb.b))  \(sp.x), \(sp.y)"
+        let showsRGB = AppSettings.colorPickerShowsRGB
+        let colorText: String
+        if let rgb {
+            colorText = showsRGB
+                ? "\(rgb.r), \(rgb.g), \(rgb.b)"
+                : ColorSampler.hexString(r: rgb.r, g: rgb.g, b: rgb.b)
         } else {
-            infoText = "\(sp.x), \(sp.y)"
+            colorText = "—"
         }
-        let coord = NSAttributedString(
-            string: infoText,
-            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
-                         .foregroundColor: NSColor.white])
-        let cs = coord.size()
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
+            .foregroundColor: NSColor.white]
+        let lines: [NSAttributedString] = [
+            NSAttributedString(string: "(\(sp.x) , \(sp.y))", attributes: attrs),
+            NSAttributedString(string: colorText, attributes: attrs),
+            NSAttributedString(string: copiedColorText ?? "按 C 複製色彩值", attributes: attrs),
+            NSAttributedString(string: "按 Shift 切換 RGB/HEX", attributes: attrs),
+        ]
+        let lineH: CGFloat = 14
+        let padV: CGFloat = 4
         let swatchSide: CGFloat = 10
-        let swatchGap: CGFloat = 4
-        let cbg = CGRect(x: loupe.minX, y: loupe.minY - cs.height - 2,
-                         width: max(side, cs.width + swatchSide + swatchGap + 12),
-                         height: cs.height + 3)
-        if cbg.minY >= 0 {
-            NSColor(white: 0, alpha: 0.6).setFill()
-            NSBezierPath(rect: cbg).fill()
-            var textX = cbg.minX + 4
-            if let rgb {
-                let swatch = CGRect(x: textX, y: cbg.midY - swatchSide / 2,
-                                    width: swatchSide, height: swatchSide)
+        let swatchGap: CGFloat = 5
+        var maxW = lines.map { $0.size().width }.max() ?? 0
+        maxW = max(maxW, lines[1].size().width + swatchSide + swatchGap)
+        let panelW = max(side, maxW + 12)
+        let panelH = lineH * CGFloat(lines.count) + padV * 2
+        var panel = CGRect(x: loupe.minX, y: loupe.minY - panelH - 2,
+                           width: panelW, height: panelH)
+        // 下方放不下（游標近螢幕底）→ 翻到放大鏡上方；水平 clamp 進畫面。
+        if panel.minY < 0 { panel.origin.y = loupe.maxY + 2 }
+        panel.origin.x = min(max(0, panel.origin.x), bounds.width - panel.width)
+        NSColor(white: 0, alpha: 0.75).setFill()
+        NSBezierPath(rect: panel).fill()
+        for (i, line) in lines.enumerated() {
+            // 由上往下排；文字 baseline 靠行底
+            let rowY = panel.maxY - padV - lineH * CGFloat(i + 1) + 2
+            var startX = panel.midX - line.size().width / 2
+            if i == 1, let rgb {
+                startX = panel.midX - (line.size().width + swatchSide + swatchGap) / 2
+                let swatch = CGRect(x: startX, y: rowY + 1, width: swatchSide, height: swatchSide)
                 NSColor(red: CGFloat(rgb.r) / 255, green: CGFloat(rgb.g) / 255,
                         blue: CGFloat(rgb.b) / 255, alpha: 1).setFill()
                 NSBezierPath(rect: swatch).fill()
@@ -221,9 +237,9 @@ extension SelectionView {
                 let sb = NSBezierPath(rect: swatch.insetBy(dx: 0.5, dy: 0.5))
                 sb.lineWidth = 1
                 sb.stroke()
-                textX += swatchSide + swatchGap
+                startX += swatchSide + swatchGap
             }
-            coord.draw(at: CGPoint(x: textX, y: cbg.minY + 1))
+            line.draw(at: CGPoint(x: startX, y: rowY))
         }
     }
 

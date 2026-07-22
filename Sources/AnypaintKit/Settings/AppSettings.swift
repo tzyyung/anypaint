@@ -25,4 +25,13 @@ public enum AppSettings {
             UserDefaults.standard.set(normalizedWatchdogSeconds(newValue), forKey: watchdogKey)
         }
     }
+
+    private static let colorRGBKey = "colorPickerShowsRGB"
+
+    /// 取色顯示格式：true＝RGB（預設，如「213, 144, 13」）、false＝HEX（如「#D5900D」）。
+    /// 放大鏡下按 Shift 切換並記住（跨 session）。
+    public static var colorPickerShowsRGB: Bool {
+        get { UserDefaults.standard.object(forKey: colorRGBKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: colorRGBKey) }
+    }
 }

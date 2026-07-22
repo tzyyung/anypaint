@@ -383,14 +383,14 @@ extension SelectionView {
             }
             return
         }
-        // C / Shift+C：放大鏡顯示中取色（spec 取色器）。排除 ⌘/⌃/⌥（比照 ⌘Z），
-        // Shift 允許——用來分流 hex / rgb() 格式。
+        // C：放大鏡顯示中把「目前顯示格式」的色值寫進剪貼簿（Shift 只負責切換顯示，
+        // 見 flagsChanged；Shift 按住時按 C 一樣照目前格式複製）。排除 ⌘/⌃/⌥。
         if !event.modifierFlags.contains(.command),
            !event.modifierFlags.contains(.control),
            !event.modifierFlags.contains(.option),
            event.charactersIgnoringModifiers?.lowercased() == "c",
            let p = activeLoupePoint() {
-            copyColor(at: p, asRGB: event.modifierFlags.contains(.shift))
+            copyColor(at: p)
             return
         }
         switch event.keyCode {
@@ -423,18 +423,32 @@ extension SelectionView {
         }
     }
 
-    /// 取放大鏡準星像素的色值寫進剪貼簿（asRGB＝Shift+C 的 rgb() 格式）。
+    /// 取放大鏡準星像素的色值寫進剪貼簿——格式跟著目前顯示（Shift 切換）。
     /// 座標換算與 drawLoupe 共用 samplePixelCoord——準星顯示哪個像素就取哪個。
-    private func copyColor(at p: CGPoint, asRGB: Bool) {
+    private func copyColor(at p: CGPoint) {
         let sp = samplePixelCoord(at: p)
         guard let rgb = ColorSampler.sampleRGB(image: snapshot.cgImage, x: sp.x, y: sp.y) else { return }
-        let text = asRGB
+        let text = AppSettings.colorPickerShowsRGB
             ? ColorSampler.rgbString(r: rgb.r, g: rgb.g, b: rgb.b)
             : ColorSampler.hexString(r: rgb.r, g: rgb.g, b: rgb.b)
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
         showCopiedToast("已複製 \(text)")
+    }
+
+    // Shift 單按＝切換取色顯示格式（RGB/HEX）。flagsChanged 抓「按下」轉變：
+    // shift 從無到有、且當下沒有 ⌘/⌃/⌥（避免 ⌘⇧Z redo 這類組合誤觸切換）。
+    override func flagsChanged(with event: NSEvent) {
+        let shiftDown = event.modifierFlags.contains(.shift)
+        let othersDown = !event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        if shiftDown, !shiftWasDown, !othersDown, let p = activeLoupePoint() {
+            AppSettings.colorPickerShowsRGB.toggle()
+            onInteraction?()
+            invalidateLoupe(around: p, and: nil)
+        }
+        shiftWasDown = shiftDown
+        super.flagsChanged(with: event)
     }
 
 }
