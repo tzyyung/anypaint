@@ -858,6 +858,50 @@ let wdLevelRaw: [[String: Any]] = [
 checkEq("makeWindowList 納入置頂層/濾掉 Dock 層",
         WindowDetector.makeWindowList(raw: wdLevelRaw, primaryHeight: 1080).count, 1)
 
+// 30) 檔名樣板：FilenameTemplate
+let ftTZ = TimeZone(identifier: "Asia/Taipei")!   // +0800；固定時區讓測試跨機器穩定
+var ftCal = Calendar(identifier: .gregorian)
+ftCal.timeZone = ftTZ
+let ftBase = ftCal.date(from: DateComponents(year: 2026, month: 7, day: 5,
+                                             hour: 8, minute: 4, second: 9))!
+// +7ms 用 epoch 加法：DateComponents.nanosecond 有浮點誤差（7ms 會變 6999999…ns）
+let ftDate = Date(timeIntervalSince1970: ftBase.timeIntervalSince1970 + 0.007)
+let ftVars = ["os": "macOS 15.5", "computername": "MyMac", "username": "anson",
+              "title": "報告: 第1章/序"]
+
+func ft(_ t: String) -> String {
+    FilenameTemplate.expand(t, date: ftDate, vars: ftVars, timeZone: ftTZ)
+}
+
+// 2026-07-05 是星期日；單位數值同時驗 padding 與最長優先（"dd" 不被拆成 "d"+"d"）
+checkEq("expand 日/星期 token", ft("$d dd ddd dddd$"), "5 05 Sun Sunday")
+checkEq("expand 月 token", ft("$M MM MMM MMMM$"), "7 07 Jul July")
+checkEq("expand 年時分秒 token", ft("$yy yyyy H HH m mm s ss$"), "26 2026 8 08 4 04 9 09")
+checkEq("expand 毫秒/時區 token", ft("$z zzz t$"), "7 007 +0800")
+checkEq("expand 預設樣板整串", ft(FilenameTemplate.defaultName),
+        "anypaint 2026-07-05 08.04.09.png")
+checkEq("expand 變數＋title 斜線與冒號清洗",
+        ft("%username%-%title%.png"), "anson-報告- 第1章-序.png")
+checkEq("expand title:N 截長", ft("%title:2%"), "報告")
+checkEq("expand 未知變數原樣保留", ft("%foo%x"), "%foo%x")
+checkEq("expand 非法字元清洗（樣板字面）", ft("a|b:c*d?e<f>g"), "a-b-c-d-e-f-g")
+checkEq("expand 字面 / 保留為目錄分隔", ft("~/Pictures/$yyyy$/a.png"), "~/Pictures/2026/a.png")
+checkEq("expand os 變數", ft("%os%"), "macOS 15.5")
+checkEq("expand computername 變數", ft("%computername%"), "MyMac")
+checkEq("expand 未配對 $ 字面保留", ft("50$ off"), "50$ off")
+checkTrue("hasPNGExtension 大小寫不拘",
+          FilenameTemplate.hasPNGExtension("A.PNG")
+          && FilenameTemplate.hasPNGExtension("a.png")
+          && !FilenameTemplate.hasPNGExtension("a.jpg"))
+checkEq("ensuringPNGExtension 補副檔名", FilenameTemplate.ensuringPNGExtension("shot"), "shot.png")
+checkEq("ensuringPNGExtension 已有不重複", FilenameTemplate.ensuringPNGExtension("shot.PNG"), "shot.PNG")
+checkEq("ensuringMeaningfulFilename 空檔名 fallback",
+        FilenameTemplate.ensuringMeaningfulFilename("/d/---.png", fallbackName: "f.png"), "/d/f.png")
+checkEq("ensuringMeaningfulFilename 正常保留",
+        FilenameTemplate.ensuringMeaningfulFilename("/d/a.png", fallbackName: "f.png"), "/d/a.png")
+checkEq("ensuringMeaningfulFilename 純檔名 fallback",
+        FilenameTemplate.ensuringMeaningfulFilename(".png", fallbackName: "f.png"), "f.png")
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
