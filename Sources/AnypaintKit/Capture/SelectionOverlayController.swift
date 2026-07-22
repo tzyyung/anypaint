@@ -87,6 +87,7 @@ final class SelectionOverlayController {
             }
             window.makeKeyAndOrderFront(nil)
             window.makeFirstResponder(window.contentView)   // 逃生路 1：keyDown/Esc 收得到
+            window.selectionView?.primeHoverState()   // 游標所在螢幕立即有 hover 狀態（修第一擊死區）
             windows.append(window)
         }
 

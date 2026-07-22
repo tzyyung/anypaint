@@ -34,6 +34,7 @@ public enum WindowDetector {
     public static func makeWindowList(raw: [[String: Any]], primaryHeight: CGFloat) -> [WindowInfo] {
         raw.compactMap { info in
             guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                   let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDict),
                   bounds.width * bounds.height > 1

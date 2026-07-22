@@ -66,6 +66,7 @@ extension SelectionView {
         let p = convert(event.locationInWindow, from: nil)
         cursor(at: p).set()
         hoverPoint = p
+        updateWindowCandidate(at: p)
         if drag == nil, selection == nil { invalidateLoupe(around: nil, and: p) }
     }
     override func mouseMoved(with event: NSEvent) {
@@ -78,7 +79,27 @@ extension SelectionView {
             hoveredTextID = newHover
             needsDisplay = true
         }
-        // 視窗偵測（spec）：未框選＋無工具＝游標下的視窗為候選框（無則整螢幕）
+        updateWindowCandidate(at: p)
+        let prev = hoverPoint
+        hoverPoint = p
+        if drag == nil, selection == nil { invalidateLoupe(around: prev, and: p) }
+    }
+    override func mouseExited(with event: NSEvent) {
+        if hoveredTextID != nil {
+            hoveredTextID = nil
+            needsDisplay = true
+        }
+        if windowCandidate != nil {
+            windowCandidate = nil
+            needsDisplay = true
+        }
+        let prev = hoverPoint
+        hoverPoint = nil
+        if drag == nil, selection == nil { invalidateLoupe(around: prev, and: nil) }
+    }
+
+    /// 視窗偵測候選計算（mouseMoved／mouseEntered／primeHoverState 共用）。
+    func updateWindowCandidate(at p: CGPoint) {
         if activeTool == nil, selection == nil {
             let origin = snapshot.frameGlobal.origin
             let globalP = CGPoint(x: p.x + origin.x, y: p.y + origin.y)
@@ -98,21 +119,16 @@ extension SelectionView {
             windowCandidate = nil
             needsDisplay = true
         }
-        let prev = hoverPoint
-        hoverPoint = p
-        if drag == nil, selection == nil { invalidateLoupe(around: prev, and: p) }
     }
-    override func mouseExited(with event: NSEvent) {
-        if hoveredTextID != nil {
-            hoveredTextID = nil
-            needsDisplay = true
-        }
-        if windowCandidate != nil {
-            windowCandidate = nil
-            needsDisplay = true
-        }
-        let prev = hoverPoint
-        hoverPoint = nil
-        if drag == nil, selection == nil { invalidateLoupe(around: prev, and: nil) }
+
+    /// overlay 剛顯示、游標已在本螢幕內：先算一次 hover 狀態（放大鏡＋視窗候選）——
+    /// 修「喚出後不動滑鼠直接單擊無效」的第一擊死區（總審查 Important）。
+    func primeHoverState() {
+        guard let window else { return }
+        let p = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard bounds.contains(p) else { return }
+        hoverPoint = p
+        updateWindowCandidate(at: p)
+        needsDisplay = true
     }
 }

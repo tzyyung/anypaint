@@ -836,6 +836,19 @@ check("makeWindowList 保序＋座標轉換[0]", wdList.first?.frameGlobal ?? .z
 check("makeWindowList 保序＋座標轉換[1]", wdList.last?.frameGlobal ?? .zero,
       CGRect(x: 400, y: 680, width: 100, height: 100))
 
+check("hitTest min 邊含點", WindowDetector.hitTest(point: CGPoint(x: 0, y: 0),
+                                                windows: [wdFront]) ?? .zero,
+      wdFront.frameGlobal)
+checkTrue("hitTest max 邊排他", WindowDetector.hitTest(point: CGPoint(x: 100, y: 100),
+                                                    windows: [wdFront]) == nil)
+let wdAlphaRaw: [[String: Any]] = [
+    [kCGWindowLayer as String: 0, kCGWindowAlpha as String: 0.0,
+     kCGWindowBounds as String: CGRect(x: 0, y: 0, width: 100, height: 100).dictionaryRepresentation],
+    [kCGWindowLayer as String: 0, kCGWindowAlpha as String: 0.5,
+     kCGWindowBounds as String: CGRect(x: 200, y: 0, width: 100, height: 100).dictionaryRepresentation],
+]
+checkEq("makeWindowList 濾掉 alpha=0", WindowDetector.makeWindowList(raw: wdAlphaRaw, primaryHeight: 1080).count, 1)
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
