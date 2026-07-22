@@ -453,8 +453,9 @@ checkTrue("smoothedPath：<2 點回 nil", AnnotationGeometry.smoothedPath(points
 let pts = [CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 10), CGPoint(x: 20, y: 0)]
 if let sp = AnnotationGeometry.smoothedPath(points: pts) {
     checkTrue("smoothedPath：含起點", sp.contains(CGPoint(x: 0, y: 0), using: .winding, transform: .identity)
-              || sp.boundingBox.contains(CGPoint(x: 0, y: 0)))
-    checkTrue("smoothedPath：boundingBox 涵蓋所有點", sp.boundingBox.contains(CGPoint(x: 20, y: 0)))
+              || sp.boundingBox.insetBy(dx: -0.1, dy: -0.1).contains(CGPoint(x: 0, y: 0)))
+    checkTrue("smoothedPath：boundingBox 涵蓋所有點（外擴避開 max 邊排他）",
+              sp.boundingBox.insetBy(dx: -0.1, dy: -0.1).contains(CGPoint(x: 20, y: 0)))
 } else { failures += 1; print("❌ smoothedPath：3 點應非 nil") }
 
 let penA = Annotation(shape: .freehand(points: pts), style: AnnotationStyle(color: .red, lineWidth: 4))
