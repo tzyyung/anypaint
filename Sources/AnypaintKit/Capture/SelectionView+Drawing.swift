@@ -10,6 +10,18 @@ extension SelectionView {
         NSColor.black.withAlphaComponent(0.35).setFill()
         bounds.fill()
 
+        // 視窗偵測候選框（未框選＋無工具）：提亮候選區＋accent 邊框（spec）。
+        // 按下滑鼠（selection 已設為零尺寸框）到放開之間不畫——單擊瞬間的短暫消失可接受。
+        if selection == nil, activeTool == nil, let cand = windowCandidate, !cand.isEmpty {
+            backgroundImage.draw(in: cand, from: cand, operation: .copy, fraction: 1.0)
+            NSColor.black.withAlphaComponent(0.12).setFill()
+            cand.fill()
+            NSColor.controlAccentColor.setStroke()
+            let path = NSBezierPath(rect: cand.insetBy(dx: 1, dy: 1))
+            path.lineWidth = 2
+            path.stroke()
+        }
+
         if let rect = selection, rect.width > 0, rect.height > 0 {
             backgroundImage.draw(in: rect, from: rect, operation: .copy, fraction: 1.0)
             NSColor.controlAccentColor.setStroke()

@@ -122,6 +122,11 @@ final class SelectionView: NSView {
         if let p = dragPoint ?? hoverPoint { invalidateLoupe(around: p, and: nil) }
     }
 
+    // MARK: 視窗偵測（spec 2026-07-22）
+    /// hover 候選框（view 座標；游標下的視窗，無則整螢幕）。
+    /// 只在「未框選＋無作用中工具」時有值；單擊（<3pt）＝套用為 selection。
+    var windowCandidate: CGRect?
+
     let toolbar = SelectionToolbar()
 
     /// 按下「擷取」→ 回傳裁切影像。

@@ -8,6 +8,7 @@ struct DisplaySnapshot {
     let screen: NSScreen        // 對應的 NSScreen（用來定位 overlay 視窗）
     let frameGlobal: CGRect     // 該螢幕在 AppKit 全域座標的 frame（點、左下原點）
     let scale: CGFloat          // pixel scale（Retina 通常為 2）
+    let windows: [WindowInfo]   // 截圖當下凍結的視窗清單（AppKit 全域座標、前→後）
 
     /// 邏輯尺寸（點）。
     var pointSize: CGSize { frameGlobal.size }
@@ -37,6 +38,10 @@ final class ScreenCapturer {
 
         guard !content.displays.isEmpty else { throw CaptureError.noDisplays }
 
+        // 視窗清單與畫面同刻凍結（spec 視窗偵測）；失敗＝空陣列 degrade、不擋截圖。
+        let windowList = WindowDetector.currentWindowList(
+            primaryHeight: CGDisplayBounds(CGMainDisplayID()).height)
+
         var snapshots: [DisplaySnapshot] = []
         for display in content.displays {
             let filter = SCContentFilter(display: display, excludingWindows: [])
@@ -60,7 +65,8 @@ final class ScreenCapturer {
                     cgImage: cgImage,
                     screen: screen,
                     frameGlobal: screen.frame,
-                    scale: scale
+                    scale: scale,
+                    windows: windowList
                 )
             )
         }

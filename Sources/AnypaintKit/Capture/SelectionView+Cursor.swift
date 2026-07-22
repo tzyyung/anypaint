@@ -78,6 +78,26 @@ extension SelectionView {
             hoveredTextID = newHover
             needsDisplay = true
         }
+        // 視窗偵測（spec）：未框選＋無工具＝游標下的視窗為候選框（無則整螢幕）
+        if activeTool == nil, selection == nil {
+            let origin = snapshot.frameGlobal.origin
+            let globalP = CGPoint(x: p.x + origin.x, y: p.y + origin.y)
+            let newCandidate: CGRect
+            if let hit = WindowDetector.hitTest(point: globalP, windows: snapshot.windows) {
+                newCandidate = CGRect(x: hit.origin.x - origin.x, y: hit.origin.y - origin.y,
+                                      width: hit.width, height: hit.height)
+                    .intersection(bounds)   // 跨螢幕視窗 clamp 進本螢幕（spec）
+            } else {
+                newCandidate = bounds       // 桌面＝整顆螢幕（使用者決策）
+            }
+            if newCandidate != windowCandidate {
+                windowCandidate = newCandidate
+                needsDisplay = true
+            }
+        } else if windowCandidate != nil {
+            windowCandidate = nil
+            needsDisplay = true
+        }
         let prev = hoverPoint
         hoverPoint = p
         if drag == nil, selection == nil { invalidateLoupe(around: prev, and: p) }
@@ -85,6 +105,10 @@ extension SelectionView {
     override func mouseExited(with event: NSEvent) {
         if hoveredTextID != nil {
             hoveredTextID = nil
+            needsDisplay = true
+        }
+        if windowCandidate != nil {
+            windowCandidate = nil
             needsDisplay = true
         }
         let prev = hoverPoint

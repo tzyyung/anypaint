@@ -232,10 +232,23 @@ extension SelectionView {
             needsDisplay = true
             return
         }
+        let creatingAnchor: CGPoint? = {
+            if case .creating(let a) = drag { return a }
+            return nil
+        }()
         drag = nil
         dragPoint = nil
         if let sel = selection, sel.width > minSize, sel.height > minSize {
             layoutToolbar(for: sel)
+            toolbar.isHidden = false
+        } else if let anchor = creatingAnchor, let candidate = windowCandidate,
+                  abs(p.x - anchor.x) < 3, abs(p.y - anchor.y) < 3,
+                  candidate.width > minSize, candidate.height > minSize {
+            // 單擊（<3pt，沿用專案慣例）＝套用游標下的視窗/整螢幕候選框（spec 視窗偵測）；
+            // 之後與手動框選完全相同（可調整、可標註、三條完成鏈）。
+            selection = candidate
+            windowCandidate = nil
+            layoutToolbar(for: candidate)
             toolbar.isHidden = false
         } else {
             selection = nil
