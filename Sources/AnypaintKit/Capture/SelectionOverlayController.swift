@@ -83,9 +83,27 @@ final class SelectionOverlayController {
         }
 
         // 逃生路 2：本地事件監聽——Esc 分層（組字讓位 → 編輯中先完成編輯 →
-        // 有選取先解除選取 → 否則取消；Task 4 新增「解除選取」這一層）
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        // 有選取先解除選取 → 否則取消；Task 4 新增「解除選取」這一層）。
+        // 取色的 Shift 切換與 C 也走這裡：nonactivating panel 被點擊前收不到
+        // responder 事件（多螢幕時 key window 還可能在別顆螢幕），監聽器不依賴
+        // responder、直接路由到「游標所在（放大鏡顯示中）的那個 overlay」。
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+            if event.type == .flagsChanged {
+                self?.handleFlagsChanged(event)
+                return event   // 修飾鍵事件一律放行，別破壞系統/IME 的修飾鍵狀態
+            }
             self?.armWatchdog()          // 任何鍵都算互動（含文字編輯中打字）
+            // C：取色（放大鏡顯示中）。文字編輯中不攔——讓 c 正常打進編輯器。
+            if !event.modifierFlags.contains(.command),
+               !event.modifierFlags.contains(.control),
+               !event.modifierFlags.contains(.option),
+               event.charactersIgnoringModifiers?.lowercased() == "c",
+               let views = self?.windows.compactMap({ $0.selectionView }),
+               !views.contains(where: { $0.isEditingText }),
+               let hovered = views.first(where: { $0.activeLoupePoint() != nil }) {
+                hovered.copyLoupeColor()
+                return nil
+            }
             if event.keyCode == 53 {
                 let views = (self?.windows ?? []).compactMap { $0.selectionView }
                 // Esc 分層：有 view 在文字編輯中 → 一次完成「全部」視窗的編輯
@@ -113,6 +131,24 @@ final class SelectionOverlayController {
         // 逃生路 5：看門狗（免按鍵），互動即重置，秒數可在設定頁調
         armWatchdog()
         NSCursor.crosshair.set()
+    }
+
+    /// flagsChanged 用：前次 shift 是否按著（只在「無→有」轉變時切換取色顯示格式）。
+    private var shiftWasDown = false
+
+    /// Shift 單按（無 ⌘/⌃/⌥）＝切換取色顯示格式（RGB/HEX），只在有 overlay 的放大鏡
+    /// 顯示中時生效；文字編輯中不切。組合鍵（如 ⌘⇧Z）靠「當下已有其他修飾鍵」排除。
+    private func handleFlagsChanged(_ event: NSEvent) {
+        let shiftDown = event.modifierFlags.contains(.shift)
+        let othersDown = !event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        defer { shiftWasDown = shiftDown }
+        guard shiftDown, !shiftWasDown, !othersDown else { return }
+        let views = windows.compactMap { $0.selectionView }
+        guard !views.contains(where: { $0.isEditingText }),
+              let hovered = views.first(where: { $0.activeLoupePoint() != nil }) else { return }
+        AppSettings.colorPickerShowsRGB.toggle()
+        armWatchdog()
+        hovered.needsDisplay = true   // 全量重繪：切換立即反映在面板上
     }
 
     /// 逃生路 3：外部（再按截圖快鍵）取消目前框選。

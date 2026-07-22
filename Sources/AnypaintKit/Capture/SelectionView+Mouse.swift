@@ -383,16 +383,6 @@ extension SelectionView {
             }
             return
         }
-        // C：放大鏡顯示中把「目前顯示格式」的色值寫進剪貼簿（Shift 只負責切換顯示，
-        // 見 flagsChanged；Shift 按住時按 C 一樣照目前格式複製）。排除 ⌘/⌃/⌥。
-        if !event.modifierFlags.contains(.command),
-           !event.modifierFlags.contains(.control),
-           !event.modifierFlags.contains(.option),
-           event.charactersIgnoringModifiers?.lowercased() == "c",
-           let p = activeLoupePoint() {
-            copyColor(at: p)
-            return
-        }
         switch event.keyCode {
         case 53:            // Esc → 分層：編輯中完成編輯 → 有選取解除選取 → 否則取消（spec）
             if isEditingText {
@@ -423,6 +413,15 @@ extension SelectionView {
         }
     }
 
+    /// 取色（由 controller 的事件監聽器路由，不走 keyDown——nonactivating panel
+    /// 被點擊前收不到 responder 事件；Shift 切換同理，見 SelectionOverlayController）。
+    /// 放大鏡顯示中把「目前顯示格式」的色值寫進剪貼簿。
+    func copyLoupeColor() {
+        guard let p = activeLoupePoint() else { return }
+        onInteraction?()
+        copyColor(at: p)
+    }
+
     /// 取放大鏡準星像素的色值寫進剪貼簿——格式跟著目前顯示（Shift 切換）。
     /// 座標換算與 drawLoupe 共用 samplePixelCoord——準星顯示哪個像素就取哪個。
     private func copyColor(at p: CGPoint) {
@@ -437,18 +436,5 @@ extension SelectionView {
         showCopiedToast("已複製 \(text)")
     }
 
-    // Shift 單按＝切換取色顯示格式（RGB/HEX）。flagsChanged 抓「按下」轉變：
-    // shift 從無到有、且當下沒有 ⌘/⌃/⌥（避免 ⌘⇧Z redo 這類組合誤觸切換）。
-    override func flagsChanged(with event: NSEvent) {
-        let shiftDown = event.modifierFlags.contains(.shift)
-        let othersDown = !event.modifierFlags.intersection([.command, .control, .option]).isEmpty
-        if shiftDown, !shiftWasDown, !othersDown, let p = activeLoupePoint() {
-            AppSettings.colorPickerShowsRGB.toggle()
-            onInteraction?()
-            invalidateLoupe(around: p, and: nil)
-        }
-        shiftWasDown = shiftDown
-        super.flagsChanged(with: event)
-    }
 
 }
