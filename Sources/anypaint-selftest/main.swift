@@ -849,6 +849,15 @@ let wdAlphaRaw: [[String: Any]] = [
 ]
 checkEq("makeWindowList 濾掉 alpha=0", WindowDetector.makeWindowList(raw: wdAlphaRaw, primaryHeight: 1080).count, 1)
 
+let wdLevelRaw: [[String: Any]] = [
+    [kCGWindowLayer as String: 3,   // 置頂（floating，自家貼圖層級）→ 納入
+     kCGWindowBounds as String: CGRect(x: 0, y: 0, width: 100, height: 100).dictionaryRepresentation],
+    [kCGWindowLayer as String: 20,  // Dock 層 → 濾掉
+     kCGWindowBounds as String: CGRect(x: 0, y: 200, width: 100, height: 100).dictionaryRepresentation],
+]
+checkEq("makeWindowList 納入置頂層/濾掉 Dock 層",
+        WindowDetector.makeWindowList(raw: wdLevelRaw, primaryHeight: 1080).count, 1)
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")

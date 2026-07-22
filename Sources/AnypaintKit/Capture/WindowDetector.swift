@@ -29,11 +29,14 @@ public enum WindowDetector {
         windows.first(where: { $0.frameGlobal.contains(point) })?.frameGlobal
     }
 
-    /// 從 CGWindowList 原始 dict 陣列建清單：只收一般視窗（layer == 0）、面積 > 1，
+    /// 從 CGWindowList 原始 dict 陣列建清單：收一般＋置頂視窗（0 ≤ layer < Dock 層）、面積 > 1，
     /// 依原陣列序（CGWindowListCopyWindowInfo 文件明訂＝前→後）。
     public static func makeWindowList(raw: [[String: Any]], primaryHeight: CGFloat) -> [WindowInfo] {
         raw.compactMap { info in
-            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+            // 0 ≤ layer < Dock 層＝一般＋置頂視窗（floating/utility/modal panel——含自家貼圖）；
+            // Dock、選單列、狀態列、popup 等系統層排除（使用者裁定：與人眼一致，最上面可見即候選）。
+            guard let layer = info[kCGWindowLayer as String] as? Int,
+                  layer >= 0, layer < Int(CGWindowLevelForKey(.dockWindow)),
                   (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                   let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDict),
