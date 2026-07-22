@@ -271,6 +271,12 @@ final class SelectionView: NSView {
     private var textEditor: InlineTextView?
     /// 重編輯中的既有文字物件（渲染時跳過避免重影；commit 時 update/remove）。
     private var editingTextID: UUID?
+    /// 文字工具 hover 中的既有文字物件（驗收回饋 Fix 2：畫虛線框＋openHand 游標）。
+    private var hoveredTextID: UUID?
+    /// 文字拖移候選：mouseDown 命中既有文字時記錄；≥3pt 才轉為移動，否則 mouseUp＝重編輯
+    /// （驗收回饋 Fix 3）。
+    private var textDragCandidate: (id: UUID, startMouse: CGPoint, startOrigin: CGPoint)?
+    private var textDragBegan = false   // 首次實際位移才 beginChange（熱圖形滾輪調整同慣例）
 
     var isEditingText: Bool { textEditor != nil }
     /// 輸入法組字中（注音等 marked text）——此時 Esc 要讓給 IME 清組字，不能當 commit。
@@ -298,6 +304,7 @@ final class SelectionView: NSView {
             self.commitTextEditing()   // 編輯中切工具＝先落字，避免編輯器與工具狀態不同步
             self.activeTool = tool
             self.clearHotAnnotation()   // 切工具或取消作用 → 解除熱狀態（spec）
+            self.hoveredTextID = nil    // 切工具 → 清 hover 提示（驗收回饋 Fix 2）
             if let tool {
                 self.currentStyle = AnnotationStyleStore.style(for: tool)
                 self.toolbar.setStyle(self.currentStyle)
@@ -345,6 +352,8 @@ final class SelectionView: NSView {
 
     private func cursor(at point: CGPoint) -> NSCursor {
         if !toolbar.isHidden, toolbar.frame.contains(point) { return .arrow }
+        // 文字工具懸浮在既有文字上＝可拖曳移動，用開手游標提示（驗收回饋 Fix 2）。
+        if activeTool == .text, hitTextObject(at: point) != nil { return .openHand }
         if activeTool != nil { return .crosshair }   // 繪製工具＝十字線（spec）
         if let sel = selection, !frameLocked {       // 鎖框時無控制點、不可移動
             if let h = hitHandle(point, in: sel) {
@@ -378,11 +387,21 @@ final class SelectionView: NSView {
         onInteraction?()
         let p = convert(event.locationInWindow, from: nil)
         cursor(at: p).set()
+        // 文字工具 hover 既有文字 → 記錄以畫虛線框（驗收回饋 Fix 2）；變化才重繪。
+        let newHover = (activeTool == .text) ? hitTextObject(at: p)?.id : nil
+        if newHover != hoveredTextID {
+            hoveredTextID = newHover
+            needsDisplay = true
+        }
         let prev = hoverPoint
         hoverPoint = p
         if drag == nil, selection == nil { invalidateLoupe(around: prev, and: p) }
     }
     override func mouseExited(with event: NSEvent) {
+        if hoveredTextID != nil {
+            hoveredTextID = nil
+            needsDisplay = true
+        }
         let prev = hoverPoint
         hoverPoint = nil
         if drag == nil, selection == nil { invalidateLoupe(around: prev, and: nil) }
@@ -420,6 +439,18 @@ final class SelectionView: NSView {
                     }
                 }
                 NSGraphicsContext.current?.restoreGraphicsState()
+            }
+
+            // 文字工具 hover 既有文字 → 白色虛線框提示（拖曳中不畫，避免視覺干擾；
+            // 驗收回饋 Fix 2）。
+            if let hoveredID = hoveredTextID, textDragCandidate == nil,
+               let obj = annotations.objects.first(where: { $0.id == hoveredID }) {
+                let box = obj.bounds.insetBy(dx: -3, dy: -3)
+                let hoverPath = NSBezierPath(rect: box)
+                hoverPath.setLineDash([4, 3], count: 2, phase: 0)
+                hoverPath.lineWidth = 1
+                NSColor.white.setStroke()
+                hoverPath.stroke()
             }
 
             // 拖曳中不畫控制點（畫面乾淨）；靜止時畫 8 個控制點
@@ -624,7 +655,13 @@ final class SelectionView: NSView {
             case .counter:
                 addCounter(at: p)
             case .text:
-                handleTextClick(at: p)
+                // 命中既有文字＝記錄拖移候選、不開編輯器（驗收回饋 Fix 3）；
+                // 沒命中才維持原本「框內開新編輯器」。
+                if let hit = hitTextObject(at: p), case .text(let origin, _) = hit.shape {
+                    textDragCandidate = (id: hit.id, startMouse: p, startOrigin: origin)
+                } else {
+                    handleTextClick(at: p)
+                }
             case .rect, .ellipse, .line, .arrow:
                 shapeAnchor = p
                 provisionalShape = makeShape(tool: tool, from: p, to: p)
@@ -655,6 +692,27 @@ final class SelectionView: NSView {
         onInteraction?()
         let p = convert(event.locationInWindow, from: nil)
         dragPoint = p
+        // 文字拖移候選：≥3pt 才轉為真正移動（驗收回饋 Fix 3；防誤點沿用形狀成形的慣例）。
+        if let candidate = textDragCandidate {
+            let dx = p.x - candidate.startMouse.x
+            let dy = p.y - candidate.startMouse.y
+            if textDragBegan || abs(dx) >= 3 || abs(dy) >= 3 {
+                if !textDragBegan {
+                    annotations.beginChange()   // 首次實際位移才拍快照，整段拖移合併一步 undo
+                    textDragBegan = true
+                    syncUndoButtons()
+                }
+                let newOrigin = CGPoint(x: candidate.startOrigin.x + dx, y: candidate.startOrigin.y + dy)
+                annotations.updateWithoutSnapshot(id: candidate.id) { a in
+                    if case .text(_, let string) = a.shape {
+                        a.shape = .text(origin: newOrigin, string: string)
+                    }
+                }
+                NSCursor.closedHand.set()
+                needsDisplay = true
+            }
+            return
+        }
         if let tool = activeTool, let anchor = shapeAnchor {
             provisionalShape = makeShape(tool: tool, from: anchor, to: p)
             needsDisplay = true
@@ -678,6 +736,22 @@ final class SelectionView: NSView {
     override func mouseUp(with event: NSEvent) {
         onInteraction?()
         let p = convert(event.locationInWindow, from: nil)
+        // 文字拖移候選收尾（驗收回饋 Fix 3）：有實際位移＝完成移動（進熱狀態，滾輪可調字級）；
+        // 沒動過＝當成一般點擊，走原本的重編輯路徑。
+        if let candidate = textDragCandidate {
+            if textDragBegan {
+                hotAnnotationID = candidate.id
+                syncUndoButtons()
+            } else if let obj = annotations.objects.first(where: { $0.id == candidate.id }),
+                      case .text(let origin, let string) = obj.shape {
+                openTextEditor(origin: origin, initialString: string, existing: obj)
+            }
+            textDragCandidate = nil
+            textDragBegan = false
+            needsDisplay = true
+            window?.invalidateCursorRects(for: self)
+            return
+        }
         if let tool = activeTool, let anchor = shapeAnchor {
             // ≥3pt 才成形（spec：防誤點）；add() 自帶 undo 快照
             if abs(p.x - anchor.x) >= 3 || abs(p.y - anchor.y) >= 3 {
@@ -817,17 +891,19 @@ final class SelectionView: NSView {
         needsDisplay = true
     }
 
-    /// 文字：點擊命中既有文字＝重編輯；否則在點擊處開新編輯器。
-    private func handleTextClick(at p: CGPoint) {
-        if let hit = annotations.objects.reversed().first(where: {
+    /// 命中既有文字物件（由上到下找第一個）；點擊路由與 hover 提示共用（驗收回饋 Fix 2）。
+    private func hitTextObject(at p: CGPoint) -> Annotation? {
+        annotations.objects.reversed().first(where: {
             if case .text = $0.shape { return $0.hitTest(p) } else { return false }
-        }), case .text(let origin, let string) = hit.shape {
-            openTextEditor(origin: origin, initialString: string, existing: hit)
-        } else {
-            // 框外不開新編輯器：文字輸入成本高，不能等 commit 才靜默丟棄。
-            guard let sel = selection, sel.contains(p) else { return }
-            openTextEditor(origin: p, initialString: "", existing: nil)
-        }
+        })
+    }
+
+    /// 文字：在點擊處開新編輯器。命中既有文字的情況已在 mouseDown 分流成拖曳候選
+    /// （驗收回饋 Fix 3：mouseDown 命中既有文字時不會呼叫這裡），這裡只處理「沒命中」。
+    private func handleTextClick(at p: CGPoint) {
+        // 框外不開新編輯器：文字輸入成本高，不能等 commit 才靜默丟棄。
+        guard let sel = selection, sel.contains(p) else { return }
+        openTextEditor(origin: p, initialString: "", existing: nil)
     }
 
     private func openTextEditor(origin: CGPoint, initialString: String, existing: Annotation?) {
@@ -850,7 +926,7 @@ final class SelectionView: NSView {
     func commitTextEditing() {
         guard let editor = textEditor else { return }
         let string = editor.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        let origin = editor.frame.origin
+        let origin = editor.textOrigin   // 驗收回饋 Fix 1：直接讀 make() 記錄的值，不從 frame 反推
         if let id = editingTextID {
             if string.isEmpty {
                 annotations.remove(id: id)
