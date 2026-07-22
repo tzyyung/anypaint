@@ -792,15 +792,18 @@ final class SelectionView: NSView {
         if frameLocked { return }
         if let sel = selection {
             if let h = hitHandle(p, in: sel) {
+                annotations.clearRedo()   // 框幾何變動：舊 redo 的座標語意已失效（spec）
                 drag = .resizing(handle: h, startRect: sel)
                 return
             }
             if sel.contains(p) {
+                annotations.clearRedo()
                 drag = .moving(startMouse: p, startRect: sel)
                 return
             }
         }
         // 空白處按下 → 開新框
+        annotations.clearRedo()
         drag = .creating(anchor: p)
         selection = CGRect(origin: p, size: .zero)
         toolbar.isHidden = true
@@ -910,7 +913,6 @@ final class SelectionView: NSView {
                 openTextEditor(origin: origin, initialString: string, existing: hit)
             }
             needsDisplay = true
-            window?.invalidateCursorRects(for: self)
             return
         }
         // 文字拖移候選收尾（驗收回饋 Fix 3）：有實際位移＝完成移動（進熱狀態，滾輪可調字級）；
@@ -926,13 +928,12 @@ final class SelectionView: NSView {
             textDragCandidate = nil
             textDragBegan = false
             needsDisplay = true
-            window?.invalidateCursorRects(for: self)
             return
         }
         if let tool = activeTool, !strokePoints.isEmpty,
            tool == .freehand || tool == .highlighter {
             defer { strokePoints = []; provisionalShape = nil; dragPoint = nil
-                    needsDisplay = true; window?.invalidateCursorRects(for: self) }
+                    needsDisplay = true }
             let first = strokePoints[0]
             guard strokePoints.count > 1,
                   strokePoints.contains(where: { abs($0.x - first.x) >= 3 || abs($0.y - first.y) >= 3 })
@@ -968,7 +969,6 @@ final class SelectionView: NSView {
             provisionalShape = nil
             dragPoint = nil
             needsDisplay = true
-            window?.invalidateCursorRects(for: self)
             return
         }
         drag = nil
@@ -981,17 +981,57 @@ final class SelectionView: NSView {
             toolbar.isHidden = true
         }
         needsDisplay = true
-        window?.invalidateCursorRects(for: self)
     }
 
+    // 右鍵：命中任一標註物件（不限已選取、不限目前工具）→ 選取它並彈出 z-order/刪除選單；
+    // 空白處＝維持既有逃生路徑（onCancel，一個字不能動）。
     override func rightMouseDown(with event: NSEvent) {
-        onCancel?()
+        onInteraction?()
+        let p = convert(event.locationInWindow, from: nil)
+        guard let hit = annotations.hitTest(at: p) else {
+            onCancel?()
+            return
+        }
+        annotations.selectedID = hit.id
+        needsDisplay = true
+        let menu = NSMenu()
+        menu.addItem(makeContextMenuItem(title: "移到最前", action: #selector(contextBringToFront)))
+        menu.addItem(makeContextMenuItem(title: "移到最後", action: #selector(contextSendToBack)))
+        menu.addItem(makeContextMenuItem(title: "刪除", action: #selector(contextDelete)))
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    private func makeContextMenuItem(title: String, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    @objc private func contextBringToFront() {
+        guard let id = annotations.selectedID else { return }
+        annotations.bringToFront(id: id)
+        syncUndoButtons()
+        needsDisplay = true
+    }
+    @objc private func contextSendToBack() {
+        guard let id = annotations.selectedID else { return }
+        annotations.sendToBack(id: id)
+        syncUndoButtons()
+        needsDisplay = true
+    }
+    @objc private func contextDelete() {
+        guard let id = annotations.selectedID else { return }
+        annotations.remove(id: id)
+        deselect()
+        syncUndoButtons()
+        needsDisplay = true
     }
 
     // 捲動也算互動（重置看門狗）。標註工具作用中：滾輪調整粗細（每 5 單位一步、一步 ±1pt），
     // 事件吞掉不往下傳；未作用時照常傳遞。
     override func scrollWheel(with event: NSEvent) {
         onInteraction?()
+        if isEditingText { return }   // 編輯中的滾輪不調粗細也不傳遞（IME/文字編輯器已在處理）
         guard activeTool != nil else {
             super.scrollWheel(with: event)
             return
@@ -1053,6 +1093,18 @@ final class SelectionView: NSView {
                 redoAnnotation()
             } else {
                 undoAnnotation()
+            }
+            return
+        }
+        // ⌘] / ⌘[：選取物件移到最前/最後（比照 ⌘Z 的修飾鍵排除法）
+        if event.modifierFlags.contains(.command),
+           !event.modifierFlags.contains(.option),
+           !event.modifierFlags.contains(.control),
+           let chars = event.charactersIgnoringModifiers, chars == "]" || chars == "[" {
+            if let id = annotations.selectedID {
+                if chars == "]" { annotations.bringToFront(id: id) } else { annotations.sendToBack(id: id) }
+                syncUndoButtons()
+                needsDisplay = true
             }
             return
         }
@@ -1191,7 +1243,9 @@ final class SelectionView: NSView {
         clearHotAnnotation()   // spec：undo/redo 清除熱狀態
         syncUndoButtons()
         needsDisplay = true
-        window?.invalidateCursorRects(for: self)   // 清空時解鎖 → 控制點/游標復原
+        // invalidateCursorRects 已證實對此 view 是 no-op（無 mouseMoved 觸發游標重算），
+        // 改在此手動依上次已知的游標位置重算，讓解鎖後控制點/游標立即復原。
+        if let hp = hoverPoint { cursor(at: hp).set() }
     }
 
     private func redoAnnotation() {
@@ -1201,7 +1255,7 @@ final class SelectionView: NSView {
         clearHotAnnotation()
         syncUndoButtons()
         needsDisplay = true
-        window?.invalidateCursorRects(for: self)
+        if let hp = hoverPoint { cursor(at: hp).set() }
     }
 
     private func syncUndoButtons() {
@@ -1362,6 +1416,8 @@ final class SelectionOverlayController {
     private let warningLead: TimeInterval = 15
     /// 上次重排看門狗的時間（防抖用）。
     private var lastArmUptimeNs: UInt64 = 0
+    /// 最後一個有互動（滑鼠/鍵盤/滾輪）的視窗——看門狗逾時搶救取像時優先用它（Task 4）。
+    private weak var lastInteractedWindow: SelectionOverlayWindow?
 
     private(set) var isActive = false
 
@@ -1378,20 +1434,24 @@ final class SelectionOverlayController {
             let window = SelectionOverlayWindow(snapshot: snapshot)
             window.selectionView?.onConfirm = { [weak self] image in self?.finish(with: image) }
             window.selectionView?.onCancel = { [weak self] in self?.cancel() }
-            window.selectionView?.onInteraction = { [weak self] in self?.armWatchdog() }
+            window.selectionView?.onInteraction = { [weak self, weak window] in
+                self?.armWatchdog()
+                self?.lastInteractedWindow = window   // 搶救歸屬：記錄最後互動的視窗（Task 4）
+            }
             window.makeKeyAndOrderFront(nil)
             window.makeFirstResponder(window.contentView)   // 逃生路 1：keyDown/Esc 收得到
             windows.append(window)
         }
 
-        // 逃生路 2：本地事件監聽——Esc 分層（編輯中先完成編輯、否則取消）
+        // 逃生路 2：本地事件監聽——Esc 分層（組字讓位 → 編輯中先完成編輯 →
+        // 有選取先解除選取 → 否則取消；Task 4 新增「解除選取」這一層）
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.armWatchdog()          // 任何鍵都算互動（含文字編輯中打字）
             if event.keyCode == 53 {
+                let views = (self?.windows ?? []).compactMap { $0.selectionView }
                 // Esc 分層：有 view 在文字編輯中 → 一次完成「全部」視窗的編輯
                 //（多螢幕各開一個編輯器也保證最多兩下 Esc 離開）；否則取消 overlay。
-                let editing = (self?.windows ?? []).compactMap { $0.selectionView }
-                    .filter { $0.isEditingText }
+                let editing = views.filter { $0.isEditingText }
                 // IME 組字中（注音打到一半）：把 Esc 讓給輸入法清組字，
                 // 下一下 Esc 才輪到「完成編輯」——否則未組完的符號會被烙進字串。
                 if editing.contains(where: { $0.isComposingText }) {
@@ -1399,6 +1459,11 @@ final class SelectionOverlayController {
                 }
                 if !editing.isEmpty {
                     editing.forEach { $0.commitTextEditing() }
+                    return nil
+                }
+                // 有任一視窗選取著物件（select 工具）→ 先解除選取，Esc 不直接取消整個 overlay。
+                if views.contains(where: { $0.hasSelection }) {
+                    views.forEach { $0.deselect() }
                     return nil
                 }
                 self?.cancel()
@@ -1469,11 +1534,17 @@ final class SelectionOverlayController {
         guard isActive else { return }
         // 搶救：有有效框就把目前內容存進剪貼簿再解除（走 finish 同一條路，
         // 效果等同擷取＝複製到剪貼簿），沒有就純取消。免輸入保證不變。
-        // 多螢幕都有有效框時取快照順序的第一個（與 Enter/擷取按鈕的視窗歸屬同層級的
-        // 既有模糊，總審查裁定可接受）；階段 5 若做「最後互動視圖」再一併精準化。
         // 搶救前先把編輯中的文字落定（影像才會與所見一致；使用者已缺席，盡力保留）。
         windows.compactMap { $0.selectionView }.forEach { $0.commitTextEditing() }
-        if let image = windows.compactMap({ $0.selectionView?.currentCroppedImage() }).first {
+        // 取像順序：使用者最後互動的視窗優先（Task 4 搶救歸屬），nil 或已不在 windows 裡
+        // 才 fallback 回原本的快照順序第一個。
+        var candidates = windows.compactMap { $0.selectionView }
+        if let lastView = lastInteractedWindow?.selectionView,
+           let idx = candidates.firstIndex(where: { $0 === lastView }) {
+            candidates.remove(at: idx)
+            candidates.insert(lastView, at: 0)
+        }
+        if let image = candidates.compactMap({ $0.currentCroppedImage() }).first {
             NSLog("anypaint: 框選看門狗逾時，已把目前框選內容存入剪貼簿（搶救）")
             finish(with: image)
         } else {
@@ -1501,10 +1572,12 @@ final class SelectionOverlayController {
         NSCursor.arrow.set()
         for window in windows { window.orderOut(nil) }
         windows.removeAll()
+        lastInteractedWindow = nil
         onSelect = nil
         onCancel = nil
         isActive = false
     }
 }
 
-// 逃生路 4（保留）：SelectionView 右鍵 = 取消。
+// 逃生路 4（保留）：SelectionView 右鍵在空白處＝取消；命中物件則改彈出 z-order/刪除選單
+// （Task 4），空白處的取消路徑本身未動。
