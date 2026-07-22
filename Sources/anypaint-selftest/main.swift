@@ -902,6 +902,28 @@ checkEq("ensuringMeaningfulFilename 正常保留",
 checkEq("ensuringMeaningfulFilename 純檔名 fallback",
         FilenameTemplate.ensuringMeaningfulFilename(".png", fallbackName: "f.png"), "f.png")
 
+// 31) 輸出設定：quickSave 遷移純函式＋CaptureVars.frontWindowTitle
+checkEq("quickSave 遷移：新鍵已設用新值",
+        AppSettings.resolvedQuickSaveTemplate(stored: "/x/a $d$.png", legacyDirectory: "/old"),
+        "/x/a $d$.png")
+checkEq("quickSave 遷移：未設→舊資料夾+預設檔名",
+        AppSettings.resolvedQuickSaveTemplate(stored: nil, legacyDirectory: "/Users/a/Desktop"),
+        "/Users/a/Desktop/" + FilenameTemplate.defaultName)
+checkEq("quickSave 遷移：空字串視同未設",
+        AppSettings.resolvedQuickSaveTemplate(stored: "", legacyDirectory: "/d"),
+        "/d/" + FilenameTemplate.defaultName)
+
+let cvRaw: [[String: Any]] = [
+    [kCGWindowLayer as String: 5, kCGWindowName as String: "置頂輔助"],   // 非 layer-0 → 跳過
+    [kCGWindowLayer as String: 0, kCGWindowName as String: "文件A"],
+    [kCGWindowLayer as String: 0, kCGWindowName as String: "文件B"],
+]
+checkEq("frontWindowTitle 取最前 layer-0 標題",
+        CaptureVars.frontWindowTitle(raw: cvRaw), "文件A")
+checkTrue("frontWindowTitle 最前視窗無名→nil（degrade 交呼叫端）",
+          CaptureVars.frontWindowTitle(raw: [[kCGWindowLayer as String: 0]]) == nil)
+checkTrue("frontWindowTitle 空清單→nil", CaptureVars.frontWindowTitle(raw: []) == nil)
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
