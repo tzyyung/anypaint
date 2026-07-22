@@ -8,6 +8,8 @@ import AppKit
 final class SelectionToolbar: NSView {
     var onConfirm: (() -> Void)?
     var onCancel: (() -> Void)?
+    /// 按「貼」＝把目前框選（含標註）直接變成貼圖視窗（spec 截圖完直接貼）。
+    var onPin: (() -> Void)?
     /// 點工具按鈕；再點一次作用中的工具＝取消作用（回傳 nil）。
     var onToolSelected: ((AnnotationTool?) -> Void)?
     var onUndo: (() -> Void)?
@@ -68,11 +70,15 @@ final class SelectionToolbar: NSView {
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
         cancel.bezelStyle = .rounded
         cancel.controlSize = .small
+        let pinButton = NSButton()
+        configureSymbolButton(pinButton, "pin", #selector(pinAction))
+        pinButton.toolTip = "貼上為浮動圖（⇧↩）"
         let confirm = NSButton(title: "擷取", target: self, action: #selector(confirmAction))
         confirm.bezelStyle = .rounded
         confirm.controlSize = .small
         confirm.keyEquivalent = "\r"   // Enter = 擷取
         toolsRow.addArrangedSubview(cancel)
+        toolsRow.addArrangedSubview(pinButton)
         toolsRow.addArrangedSubview(confirm)
 
         // 下排：色盤＋粗細（選了工具才顯示）
@@ -199,5 +205,6 @@ final class SelectionToolbar: NSView {
 
     @objc private func confirmAction() { onConfirm?() }
     @objc private func cancelAction() { onCancel?() }
+    @objc private func pinAction() { onPin?() }
 }
 

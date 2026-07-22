@@ -392,8 +392,12 @@ extension SelectionView {
             } else {
                 onCancel?()
             }
-        case 36, 76:        // Return / Enter → 擷取
-            confirm()
+        case 36, 76:        // Return / Enter → 擷取；Shift+Enter → 貼（spec 截圖完直接貼）
+            if event.modifierFlags.contains(.shift) {
+                pinConfirm()
+            } else {
+                confirm()
+            }
         case 51, 117:       // Delete / fn+Delete → 移除選取物件
             if let id = annotations.selectedID {
                 annotations.remove(id: id)
