@@ -48,6 +48,9 @@ public struct Annotation: Identifiable, Equatable {
         case arrow(from: CGPoint, to: CGPoint)
         case counter(center: CGPoint)
         case text(origin: CGPoint, string: String)
+        case freehand(points: [CGPoint])
+        case highlighter(points: [CGPoint])
+        case pixelate(rect: CGRect)
     }
 
     public let id: UUID
@@ -66,6 +69,15 @@ public struct Annotation: Identifiable, Equatable {
     /// 文字字級（spec 修訂：12＋線寬×2，滾輪熱狀態調整＝調字級）。
     public var textFontSize: CGFloat { 12 + style.lineWidth * 2 }
 
+    /// 實際描邊寬：螢光筆＝線寬×2（spec），其餘＝線寬。
+    public var effectiveStrokeWidth: CGFloat {
+        if case .highlighter = shape { return style.lineWidth * 2 }
+        return style.lineWidth
+    }
+
+    /// 馬賽克格子大小（pt）：由線寬導出，滾輪熱狀態可調粒度（spec 修訂）。
+    public var pixelateBlockSize: CGFloat { max(4, style.lineWidth * 2) }
+
     /// 外接框（線段類為端點正規化矩形，寬或高可為 0）。
     public var bounds: CGRect {
         switch shape {
@@ -80,17 +92,30 @@ public struct Annotation: Identifiable, Equatable {
         case .text(let origin, let string):
             return CGRect(origin: origin,
                           size: AnnotationGeometry.measureText(string, fontSize: textFontSize))
+        case .freehand(let pts), .highlighter(let pts):
+            guard let first = pts.first else { return .zero }
+            var r = CGRect(origin: first, size: .zero)
+            for p in pts.dropFirst() { r = r.union(CGRect(origin: p, size: .zero)) }
+            let half = effectiveStrokeWidth / 2
+            return r.insetBy(dx: -half, dy: -half)
+        case .pixelate(let r):
+            return r
         }
     }
 
     /// 點選命中：面積類用外框外擴 threshold；線段類算點到線段距離（spec）。
     public func hitTest(_ point: CGPoint, threshold: CGFloat = 8) -> Bool {
         switch shape {
-        case .rect, .ellipse, .counter, .text:
+        case .rect, .ellipse, .counter, .text, .pixelate:
             return bounds.insetBy(dx: -threshold, dy: -threshold).contains(point)
         case .line(let a, let b), .arrow(let a, let b):
             let d = AnnotationGeometry.distance(from: point, toSegmentFrom: a, to: b)
             return d <= threshold + style.lineWidth / 2
+        case .freehand(let pts), .highlighter(let pts):
+            guard let path = AnnotationGeometry.smoothedPath(points: pts) else { return false }
+            let fat = path.copy(strokingWithWidth: effectiveStrokeWidth + threshold * 2,
+                                lineCap: .round, lineJoin: .round, miterLimit: 10)
+            return fat.contains(point)
         }
     }
 
@@ -114,6 +139,13 @@ public struct Annotation: Identifiable, Equatable {
         case .text(let origin, let string):
             shape = .text(origin: CGPoint(x: origin.x + delta.dx, y: origin.y + delta.dy),
                           string: string)
+        case .freehand(let pts):
+            shape = .freehand(points: pts.map { CGPoint(x: $0.x + delta.dx, y: $0.y + delta.dy) })
+        case .highlighter(let pts):
+            shape = .highlighter(points: pts.map { CGPoint(x: $0.x + delta.dx, y: $0.y + delta.dy) })
+        case .pixelate(var r):
+            r.origin.x += delta.dx; r.origin.y += delta.dy
+            shape = .pixelate(rect: r)
         }
     }
 }

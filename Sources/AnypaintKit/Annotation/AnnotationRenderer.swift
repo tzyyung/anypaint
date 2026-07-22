@@ -71,6 +71,9 @@ public enum AnnotationRenderer {
             drawLine(string, fontSize: a.textFontSize, color: color, in: ctx,
                      baselineAt: { ascent, descent in
                          CGPoint(x: origin.x, y: origin.y + descent) })
+
+        case .freehand, .highlighter, .pixelate:
+            break   // 渲染於階段 4 Task 2，此佔位保持編譯綠
         }
     }
 

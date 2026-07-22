@@ -19,6 +19,28 @@ public enum AnnotationGeometry {
         return hypot(p.x - cx, p.y - cy)
     }
 
+    /// Catmull-Rom 式平滑：相鄰點差÷6 當貝茲控制點（參考 Capso BezierSmoothing）。
+    /// <2 點回 nil；2 點退化為直線。不做快取（值型別下失效管理不划算，實測卡頓再加）。
+    public static func smoothedPath(points: [CGPoint]) -> CGPath? {
+        guard points.count >= 2 else { return nil }
+        let path = CGMutablePath()
+        path.move(to: points[0])
+        if points.count == 2 {
+            path.addLine(to: points[1])
+            return path
+        }
+        for i in 1..<points.count {
+            let p0 = points[max(0, i - 2)]
+            let p1 = points[i - 1]
+            let p2 = points[i]
+            let p3 = points[min(points.count - 1, i + 1)]
+            let c1 = CGPoint(x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6)
+            let c2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
+            path.addCurve(to: p2, control1: c1, control2: c2)
+        }
+        return path
+    }
+
     /// 單行文字量測（CoreText；與 renderer 同字面同字級 → 量測即顯示大小）。
     public static func measureText(_ string: String, fontSize: CGFloat) -> CGSize {
         guard !string.isEmpty else { return .zero }

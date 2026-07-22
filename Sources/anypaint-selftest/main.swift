@@ -448,6 +448,35 @@ func compositeCounterSmokeTest() {
 }
 compositeCounterSmokeTest()
 
+// 16) 畫筆/螢光筆/馬賽克：平滑路徑、bounds、hitTest、move
+checkTrue("smoothedPath：<2 點回 nil", AnnotationGeometry.smoothedPath(points: [CGPoint(x: 1, y: 1)]) == nil)
+let pts = [CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 10), CGPoint(x: 20, y: 0)]
+if let sp = AnnotationGeometry.smoothedPath(points: pts) {
+    checkTrue("smoothedPath：含起點", sp.contains(CGPoint(x: 0, y: 0), using: .winding, transform: .identity)
+              || sp.boundingBox.contains(CGPoint(x: 0, y: 0)))
+    checkTrue("smoothedPath：boundingBox 涵蓋所有點", sp.boundingBox.contains(CGPoint(x: 20, y: 0)))
+} else { failures += 1; print("❌ smoothedPath：3 點應非 nil") }
+
+let penA = Annotation(shape: .freehand(points: pts), style: AnnotationStyle(color: .red, lineWidth: 4))
+checkTrue("freehand bounds：涵蓋點集", penA.bounds.contains(CGPoint(x: 10, y: 10)))
+checkTrue("freehand hitTest：線上命中", penA.hitTest(CGPoint(x: 10, y: 10), threshold: 8))
+checkTrue("freehand hitTest：遠處不中", !penA.hitTest(CGPoint(x: 10, y: 60), threshold: 8))
+var movedPen = penA
+movedPen.move(by: CGVector(dx: 5, dy: 5))
+checkTrue("freehand move：全點平移", movedPen.bounds.contains(CGPoint(x: 15, y: 15)) && !movedPen.bounds.contains(CGPoint(x: -1, y: -1)))
+
+let hlA = Annotation(shape: .highlighter(points: pts), style: AnnotationStyle(color: .yellow, lineWidth: 4))
+checkEq("highlighter 有效寬＝×2", hlA.effectiveStrokeWidth, 8)
+checkEq("freehand 有效寬＝原值", penA.effectiveStrokeWidth, 4)
+
+let pxA = Annotation(shape: .pixelate(rect: CGRect(x: 5, y: 5, width: 20, height: 10)), style: AnnotationStyle(color: .red, lineWidth: 4))
+checkEq("pixelate bounds＝rect", pxA.bounds, CGRect(x: 5, y: 5, width: 20, height: 10))
+checkEq("pixelate 格子＝max(4,lw×2)", pxA.pixelateBlockSize, 8)
+checkTrue("pixelate hitTest：框內中", pxA.hitTest(CGPoint(x: 10, y: 10), threshold: 0))
+var movedPx = pxA
+movedPx.move(by: CGVector(dx: -5, dy: -5))
+checkEq("pixelate move", movedPx.bounds.origin, CGPoint.zero)
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
