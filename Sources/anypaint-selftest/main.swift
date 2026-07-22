@@ -676,6 +676,31 @@ checkTrue("contrast：黃圈黑字", AnnotationColor.yellow.isLight)
 checkTrue("contrast：紅圈白字", !AnnotationColor.red.isLight)
 checkTrue("contrast：黑圈白字", !AnnotationColor.black.isLight)
 
+// 26) 截圖完直接貼：view 座標 → 全域框（overlay 視窗蓋滿螢幕，view 座標 == 視窗座標）
+check(
+    "globalRect 主螢幕原點(0,0)＝原樣",
+    CoordinateUtils.globalRect(selection: CGRect(x: 100, y: 50, width: 300, height: 200),
+                               windowOrigin: .zero),
+    CGRect(x: 100, y: 50, width: 300, height: 200)
+)
+check(
+    "globalRect 次螢幕負原點平移",
+    CoordinateUtils.globalRect(selection: CGRect(x: 10, y: 20, width: 40, height: 30),
+                               windowOrigin: CGPoint(x: -1920, y: -180)),
+    CGRect(x: -1910, y: -160, width: 40, height: 30)
+)
+check(
+    "globalRect 右側次螢幕正原點平移",
+    CoordinateUtils.globalRect(selection: CGRect(x: 5, y: 8, width: 60, height: 40),
+                               windowOrigin: CGPoint(x: 1440, y: 90)),
+    CGRect(x: 1445, y: 98, width: 60, height: 40)
+)
+check(
+    "centeredRect 以中心點放置",
+    CoordinateUtils.centeredRect(at: CGPoint(x: 100, y: 100), size: CGSize(width: 40, height: 20)),
+    CGRect(x: 80, y: 90, width: 40, height: 20)
+)
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")

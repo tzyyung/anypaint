@@ -37,4 +37,22 @@ public enum CoordinateUtils {
             height: abs(a.y - b.y)
         )
     }
+
+    /// 把「overlay 視圖內的選取框（點、左下原點）」平移成 AppKit 全域座標的框。
+    /// overlay 視窗蓋滿整個螢幕（view 座標 == 視窗座標），所以只需加上視窗全域原點；
+    /// 次螢幕的原點可能為負值，直接相加即正確。
+    public static func globalRect(selection: CGRect, windowOrigin: CGPoint) -> CGRect {
+        CGRect(x: selection.origin.x + windowOrigin.x,
+               y: selection.origin.y + windowOrigin.y,
+               width: selection.width,
+               height: selection.height)
+    }
+
+    /// 以指定中心點放置指定尺寸的框（貼圖「貼在游標處」用）。
+    public static func centeredRect(at center: CGPoint, size: CGSize) -> CGRect {
+        CGRect(x: center.x - size.width / 2,
+               y: center.y - size.height / 2,
+               width: size.width,
+               height: size.height)
+    }
 }
