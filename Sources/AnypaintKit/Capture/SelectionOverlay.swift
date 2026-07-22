@@ -61,6 +61,7 @@ final class SelectionToolbar: NSView {
         toolsRow.orientation = .horizontal
         toolsRow.spacing = 4
         let symbols: [(AnnotationTool, String)] = [
+            (.select, "cursorarrow"),
             (.rect, "rectangle"), (.ellipse, "circle"),
             (.line, "line.diagonal"), (.arrow, "arrow.up.right"),
             (.freehand, "pencil"), (.highlighter, "highlighter"), (.pixelate, "squareshape.split.3x3"),
@@ -270,6 +271,27 @@ final class SelectionView: NSView {
         hotScrollBegan = false
     }
 
+    // MARK: select 工具（階段 5）
+    /// select 工具下正在移動/縮放的物件（mouseDown 命中時記錄起始幾何，mouseUp 清除）。
+    private enum SelectDrag {
+        case moving(id: UUID, startMouse: CGPoint, startShape: Annotation.Shape)
+        case resizing(id: UUID, handle: AnnotationHandle, startBounds: CGRect, startShape: Annotation.Shape)
+    }
+    private var selectDrag: SelectDrag?
+    /// 首次實際位移才 beginChange()（比照 textDragBegan：整段移動/縮放合併一步 undo）。
+    private var selectDragBegan = false
+
+    /// 有選取物件（Task 4 keyMonitor 的 Esc 分層依賴）。
+    var hasSelection: Bool { annotations.selectedID != nil }
+
+    /// 解除選取＋清熱狀態＋清 select 拖曳狀態（Esc／點空白處／Delete 後共用）。
+    func deselect() {
+        annotations.selectedID = nil
+        clearHotAnnotation()
+        selectDrag = nil
+        needsDisplay = true
+    }
+
     // MARK: 文字編輯（階段 3；唯一的子 view 特例）
     private var textEditor: InlineTextView?
     /// 重編輯中的既有文字物件（渲染時跳過避免重影；commit 時 update/remove）。
@@ -320,7 +342,16 @@ final class SelectionView: NSView {
         toolbar.onStyleChanged = { [weak self] style in
             guard let self else { return }
             self.currentStyle = style
-            if let tool = self.activeTool { AnnotationStyleStore.save(style, for: tool) }
+            if self.activeTool == .select {
+                // select＋有選取＝改選取物件本身的樣式（單發快照），不寫入每工具記憶（spec）。
+                if let id = self.annotations.selectedID {
+                    self.annotations.update(id: id) { $0.style = style }
+                    self.syncUndoButtons()
+                    self.needsDisplay = true
+                }
+            } else if let tool = self.activeTool {
+                AnnotationStyleStore.save(style, for: tool)
+            }
             self.onInteraction?()
         }
         toolbar.onUndo = { [weak self] in self?.undoAnnotation() }
@@ -357,6 +388,7 @@ final class SelectionView: NSView {
         if !toolbar.isHidden, toolbar.frame.contains(point) { return .arrow }
         // 文字工具懸浮在既有文字上＝可拖曳移動，用開手游標提示（驗收回饋 Fix 2）。
         if activeTool == .text, hitTextObject(at: point) != nil { return .openHand }
+        if activeTool == .select { return selectCursor(at: point) }
         if activeTool != nil { return .crosshair }   // 繪製工具＝十字線（spec）
         if let sel = selection, !frameLocked {       // 鎖框時無控制點、不可移動
             if let h = hitHandle(point, in: sel) {
@@ -370,6 +402,20 @@ final class SelectionView: NSView {
             if sel.contains(point) { return .openHand }
         }
         return .crosshair
+    }
+
+    /// select 工具游標：選取物件的四角 handle＝對角 resize；物件本體＝開手；其餘＝箭頭（spec）。
+    private func selectCursor(at point: CGPoint) -> NSCursor {
+        if let selID = annotations.selectedID,
+           let selected = annotations.objects.first(where: { $0.id == selID }),
+           let handle = hitAnnotationHandle(point, for: selected) {
+            switch handle {
+            case .topLeft, .bottomRight: return Self.cursorNWSE
+            case .topRight, .bottomLeft: return Self.cursorNESW
+            }
+        }
+        if annotations.hitTest(at: point) != nil { return .openHand }
+        return .arrow
     }
 
     override func updateTrackingAreas() {
@@ -448,12 +494,35 @@ final class SelectionView: NSView {
             // 驗收回饋 Fix 2）。
             if let hoveredID = hoveredTextID, textDragCandidate == nil,
                let obj = annotations.objects.first(where: { $0.id == hoveredID }) {
-                let box = obj.bounds.insetBy(dx: -3, dy: -3)
+                let box = obj.bounds.insetBy(dx: -4, dy: -4)
                 let hoverPath = NSBezierPath(rect: box)
                 hoverPath.setLineDash([4, 3], count: 2, phase: 0)
                 hoverPath.lineWidth = 1
                 NSColor.white.setStroke()
                 hoverPath.stroke()
+            }
+
+            // select 工具：選取物件的 chrome——白色虛線框＋（可縮放時）四角 handle，
+            // 拖曳中隱藏 handle（畫面乾淨，比照框選 handle 的既有慣例）。
+            if activeTool == .select, let selID = annotations.selectedID,
+               let selected = annotations.objects.first(where: { $0.id == selID }) {
+                let chrome = selected.bounds.insetBy(dx: -4, dy: -4)
+                let chromePath = NSBezierPath(rect: chrome)
+                chromePath.setLineDash([4, 3], count: 2, phase: 0)
+                chromePath.lineWidth = 1
+                NSColor.white.setStroke()
+                chromePath.stroke()
+                if selected.isCornerResizable, selectDrag == nil {
+                    NSColor.controlAccentColor.setFill()
+                    NSColor.white.setStroke()
+                    for (_, hp) in annotationHandlePoints(chrome) {
+                        let h = handleRect(at: hp)
+                        let path = NSBezierPath(rect: h)
+                        path.fill()
+                        path.lineWidth = 1
+                        path.stroke()
+                    }
+                }
             }
 
             // 拖曳中不畫控制點（畫面乾淨）；靜止時畫 8 個控制點
@@ -640,6 +709,37 @@ final class SelectionView: NSView {
         return nil
     }
 
+    // MARK: select 工具：選取物件的四角 handle（僅 isCornerResizable 物件；比照框選 handle 樣式）
+
+    private enum AnnotationHandle: CaseIterable {
+        case topLeft, topRight, bottomLeft, bottomRight
+    }
+    private func annotationHandlePoints(_ r: CGRect) -> [(AnnotationHandle, CGPoint)] {
+        [(.topLeft, CGPoint(x: r.minX, y: r.maxY)), (.topRight, CGPoint(x: r.maxX, y: r.maxY)),
+         (.bottomLeft, CGPoint(x: r.minX, y: r.minY)), (.bottomRight, CGPoint(x: r.maxX, y: r.minY))]
+    }
+    /// 命中選取物件的縮放 handle（chrome＝bounds 外擴 4pt，與 draw() 畫的虛線框同一矩形）。
+    private func hitAnnotationHandle(_ point: CGPoint, for annotation: Annotation) -> AnnotationHandle? {
+        guard annotation.isCornerResizable else { return nil }
+        let chrome = annotation.bounds.insetBy(dx: -4, dy: -4)
+        for (handle, p) in annotationHandlePoints(chrome) {
+            if handleRect(at: p).insetBy(dx: -4, dy: -4).contains(point) { return handle }
+        }
+        return nil
+    }
+    /// 由拖出的四角 handle 算新 bounds；允許拖過頭翻轉，用 min/max 正規化（比照既有 resize 慣例）。
+    private func resizeAnnotationBounds(_ start: CGRect, handle: AnnotationHandle, to p: CGPoint) -> CGRect {
+        var minX = start.minX, maxX = start.maxX, minY = start.minY, maxY = start.maxY
+        switch handle {
+        case .topLeft:     minX = p.x; maxY = p.y
+        case .topRight:    maxX = p.x; maxY = p.y
+        case .bottomLeft:  minX = p.x; minY = p.y
+        case .bottomRight: maxX = p.x; minY = p.y
+        }
+        return CGRect(x: min(minX, maxX), y: min(minY, maxY),
+                      width: abs(maxX - minX), height: abs(maxY - minY))
+    }
+
     // MARK: 滑鼠
 
     override func mouseDown(with event: NSEvent) {
@@ -662,6 +762,8 @@ final class SelectionView: NSView {
         // 標註工具作用中 → 依工具型態路由
         if let tool = activeTool, selection != nil {
             switch tool {
+            case .select:
+                handleSelectDown(at: p)
             case .counter:
                 addCounter(at: p)
             case .text:
@@ -728,6 +830,42 @@ final class SelectionView: NSView {
             }
             return
         }
+        // select 工具：移動/縮放——首次實際位移才 beginChange()，之後 updateWithoutSnapshot；
+        // 兩者都每次從 mouseDown 時保存的 startShape 出發，避免累積誤差（spec）。
+        if let sd = selectDrag {
+            switch sd {
+            case .moving(let id, let startMouse, let startShape):
+                let delta = CGVector(dx: p.x - startMouse.x, dy: p.y - startMouse.y)
+                if selectDragBegan || delta.dx != 0 || delta.dy != 0 {
+                    if !selectDragBegan {
+                        annotations.beginChange()
+                        selectDragBegan = true
+                        syncUndoButtons()
+                    }
+                    annotations.updateWithoutSnapshot(id: id) { a in
+                        a.shape = startShape
+                        a.move(by: delta)
+                    }
+                    NSCursor.closedHand.set()
+                    needsDisplay = true
+                }
+            case .resizing(let id, let handle, let startBounds, let startShape):
+                let newBounds = resizeAnnotationBounds(startBounds, handle: handle, to: p)
+                if selectDragBegan || newBounds != startBounds {
+                    if !selectDragBegan {
+                        annotations.beginChange()
+                        selectDragBegan = true
+                        syncUndoButtons()
+                    }
+                    annotations.updateWithoutSnapshot(id: id) { a in
+                        a.shape = startShape
+                        a.scaled(from: startBounds, to: newBounds)
+                    }
+                    needsDisplay = true
+                }
+            }
+            return
+        }
         if let tool = activeTool, !strokePoints.isEmpty,
            tool == .freehand || tool == .highlighter {
             strokePoints.append(p)
@@ -759,6 +897,20 @@ final class SelectionView: NSView {
     override func mouseUp(with event: NSEvent) {
         onInteraction?()
         let p = convert(event.locationInWindow, from: nil)
+        // select 工具收尾：清拖曳狀態＋同步 undo 按鈕；雙擊命中既有文字物件＝重編輯
+        // （select 工具的入口，spec 原文）。
+        if activeTool == .select {
+            if selectDragBegan { syncUndoButtons() }
+            selectDrag = nil
+            selectDragBegan = false
+            if event.clickCount == 2, let hit = hitTextObject(at: p),
+               case .text(let origin, let string) = hit.shape {
+                openTextEditor(origin: origin, initialString: string, existing: hit)
+            }
+            needsDisplay = true
+            window?.invalidateCursorRects(for: self)
+            return
+        }
         // 文字拖移候選收尾（驗收回饋 Fix 3）：有實際位移＝完成移動（進熱狀態，滾輪可調字級）；
         // 沒動過＝當成一般點擊，走原本的重編輯路徑。
         if let candidate = textDragCandidate {
@@ -872,7 +1024,8 @@ final class SelectionView: NSView {
             }
             annotations.updateWithoutSnapshot(id: hotID) { $0.style.lineWidth = newWidth }
             currentStyle.lineWidth = newWidth
-            if let tool = activeTool { AnnotationStyleStore.save(currentStyle, for: tool) }
+            // select 模式調的是選取物件本身的樣式，不寫入每工具記憶（spec）。
+            if let tool = activeTool, tool != .select { AnnotationStyleStore.save(currentStyle, for: tool) }
             toolbar.setStyle(currentStyle)
             syncUndoButtons()   // beginChange 改變了 canUndo
             needsDisplay = true
@@ -881,7 +1034,7 @@ final class SelectionView: NSView {
             let newWidth = AnnotationStyle.clampLineWidth(current + CGFloat(delta))
             guard newWidth != current else { return }
             currentStyle.lineWidth = newWidth
-            if let tool = activeTool { AnnotationStyleStore.save(currentStyle, for: tool) }
+            if let tool = activeTool, tool != .select { AnnotationStyleStore.save(currentStyle, for: tool) }
             toolbar.setStyle(currentStyle)
             needsDisplay = true   // 拖曳中的暫定形狀即時反映新粗細
         }
@@ -902,10 +1055,23 @@ final class SelectionView: NSView {
             return
         }
         switch event.keyCode {
-        case 53:            // Esc → 編輯中＝完成編輯；否則取消（分層，spec）
-            if isEditingText { commitTextEditing() } else { onCancel?() }
+        case 53:            // Esc → 分層：編輯中完成編輯 → 有選取解除選取 → 否則取消（spec）
+            if isEditingText {
+                commitTextEditing()
+            } else if hasSelection {
+                deselect()
+            } else {
+                onCancel?()
+            }
         case 36, 76:        // Return / Enter → 擷取
             confirm()
+        case 51, 117:       // Delete / fn+Delete → 移除選取物件
+            if let id = annotations.selectedID {
+                annotations.remove(id: id)
+                deselect()
+                syncUndoButtons()
+                needsDisplay = true
+            }
         default:
             super.keyDown(with: event)
         }
@@ -920,7 +1086,7 @@ final class SelectionView: NSView {
         case .line:    return .line(from: a, to: b)
         case .arrow:   return .arrow(from: a, to: b)
         case .pixelate: return .pixelate(rect: CoordinateUtils.rect(from: a, to: b))
-        case .text, .counter, .freehand, .highlighter:
+        case .text, .counter, .freehand, .highlighter, .select:
             preconditionFailure("此工具不走兩點成形")
         }
     }
@@ -935,11 +1101,33 @@ final class SelectionView: NSView {
         needsDisplay = true
     }
 
-    /// 命中既有文字物件（由上到下找第一個）；點擊路由與 hover 提示共用（驗收回饋 Fix 2）。
+    /// 命中既有文字物件（由上到下找第一個）；點擊路由與 hover 提示共用（驗收回饋 Fix 2；
+    /// threshold 統一 4，與 hover 虛線框 inset 一致——清理項）。
     private func hitTextObject(at p: CGPoint) -> Annotation? {
         annotations.objects.reversed().first(where: {
-            if case .text = $0.shape { return $0.hitTest(p) } else { return false }
+            if case .text = $0.shape { return $0.hitTest(p, threshold: 4) } else { return false }
         })
+    }
+
+    /// select 工具 mouseDown 路由：命中已選取物件的四角 handle → 進入縮放；
+    /// 命中物件本體（含新命中）→ 選取＋進入移動候選；未命中 → 解除選取。
+    private func handleSelectDown(at p: CGPoint) {
+        if let selID = annotations.selectedID,
+           let selected = annotations.objects.first(where: { $0.id == selID }),
+           let handle = hitAnnotationHandle(p, for: selected) {
+            selectDrag = .resizing(id: selID, handle: handle, startBounds: selected.bounds, startShape: selected.shape)
+            hotAnnotationID = selID   // 重設熱狀態（mouseDown 開頭 clearHotAnnotation 已清，spec）
+            return
+        }
+        guard let hit = annotations.hitTest(at: p) else {
+            deselect()
+            return
+        }
+        annotations.selectedID = hit.id
+        hotAnnotationID = hit.id   // 重設熱狀態（同上）
+        toolbar.setStyle(hit.style)
+        selectDrag = .moving(id: hit.id, startMouse: p, startShape: hit.shape)
+        needsDisplay = true
     }
 
     /// 文字：在點擊處開新編輯器。命中既有文字的情況已在 mouseDown 分流成拖曳候選
