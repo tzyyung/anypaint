@@ -701,6 +701,47 @@ check(
     CGRect(x: 80, y: 90, width: 40, height: 20)
 )
 
+// 27) 取色器：ColorSampler（RGBA 與 BGRA 兩種 byte order 的來源都要取對）
+func makeSamplerImage(bitmapInfo: UInt32, bytes: [UInt8]) -> CGImage? {
+    var data = bytes
+    return data.withUnsafeMutableBytes { buf -> CGImage? in
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: buf.baseAddress, width: 2, height: 2,
+                                  bitsPerComponent: 8, bytesPerRow: 8, space: space,
+                                  bitmapInfo: bitmapInfo) else { return nil }
+        return ctx.makeImage()
+    }
+}
+// 2×2 測試圖（記憶體 row 0＝影像最上排）：上排 紅、綠；下排 藍、白
+let rgbaBytes: [UInt8] = [
+    255, 0, 0, 255,   0, 255, 0, 255,
+    0, 0, 255, 255,   255, 255, 255, 255,
+]
+let bgraBytes: [UInt8] = [
+    0, 0, 255, 255,   0, 255, 0, 255,
+    255, 0, 0, 255,   255, 255, 255, 255,
+]
+let rgbaImg = makeSamplerImage(bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue,
+                               bytes: rgbaBytes)
+let bgraImg = makeSamplerImage(
+    bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue,
+    bytes: bgraBytes)
+func hexAt(_ img: CGImage?, _ x: Int, _ y: Int) -> String? {
+    guard let img, let rgb = ColorSampler.sampleRGB(image: img, x: x, y: y) else { return nil }
+    return ColorSampler.hexString(r: rgb.r, g: rgb.g, b: rgb.b)
+}
+checkEq("sampleRGB RGBA 紅(0,0)", hexAt(rgbaImg, 0, 0), "#FF0000")
+checkEq("sampleRGB RGBA 綠(1,0)", hexAt(rgbaImg, 1, 0), "#00FF00")
+checkEq("sampleRGB RGBA 藍(0,1)", hexAt(rgbaImg, 0, 1), "#0000FF")
+checkEq("sampleRGB BGRA 紅(0,0)", hexAt(bgraImg, 0, 0), "#FF0000")
+checkEq("sampleRGB BGRA 白(1,1)", hexAt(bgraImg, 1, 1), "#FFFFFF")
+checkTrue("sampleRGB 越界 x=-1 nil", rgbaImg.flatMap { ColorSampler.sampleRGB(image: $0, x: -1, y: 0) } == nil)
+checkTrue("sampleRGB 越界 x=2 nil", rgbaImg.flatMap { ColorSampler.sampleRGB(image: $0, x: 2, y: 0) } == nil)
+checkTrue("sampleRGB 越界 y=2 nil", rgbaImg.flatMap { ColorSampler.sampleRGB(image: $0, x: 0, y: 2) } == nil)
+checkEq("hexString 一般值大寫", ColorSampler.hexString(r: 58, g: 111, b: 242), "#3A6FF2")
+checkEq("rgbString 一般值", ColorSampler.rgbString(r: 58, g: 111, b: 242), "rgb(58, 111, 242)")
+checkEq("rgbString 端點值", ColorSampler.rgbString(r: 0, g: 255, b: 0), "rgb(0, 255, 0)")
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
