@@ -5,10 +5,11 @@ import KeyboardShortcuts
 public final class SettingsWindowController: NSWindowController {
 
     private let watchdogPopup = NSPopUpButton()
+    private let savePathField = NSTextField()
 
     public init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 300), // 高度要容得下兩行 watchdogHint
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 380), // 高度要容得下兩行 watchdogHint
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -48,14 +49,26 @@ public final class SettingsWindowController: NSWindowController {
         watchdogHint.font = .systemFont(ofSize: 11)
         watchdogHint.textColor = .secondaryLabelColor
 
+        let saveHeading = NSTextField(labelWithString: "存檔")
+        saveHeading.font = .boldSystemFont(ofSize: 13)
+
+        let saveRow = buildSaveRow()
+
+        let saveHint = NSTextField(labelWithString:
+            "框選後按工具列「存」鈕或 ⌘S，自動以「anypaint 日期 時間.png」存到此資料夾。")
+        saveHint.font = .systemFont(ofSize: 11)
+        saveHint.textColor = .secondaryLabelColor
+
         let stack = NSStackView(views: [
             shortcutsHeading, captureRow, pinRow, shortcutHint,
-            captureHeading, watchdogRow, watchdogHint
+            captureHeading, watchdogRow, watchdogHint,
+            saveHeading, saveRow, saveHint
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
         stack.setCustomSpacing(20, after: shortcutHint)
+        stack.setCustomSpacing(20, after: watchdogHint)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
 
@@ -108,5 +121,49 @@ public final class SettingsWindowController: NSWindowController {
 
     @objc private func watchdogChanged() {
         AppSettings.overlayWatchdogSeconds = Double(watchdogPopup.selectedTag())
+    }
+
+    private func buildSaveRow() -> NSView {
+        let label = NSTextField(labelWithString: "存檔位置：")
+        savePathField.stringValue = AppSettings.saveDirectoryPath
+        savePathField.lineBreakMode = .byTruncatingMiddle
+        savePathField.delegate = self
+        savePathField.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
+        let change = NSButton(title: "變更…", target: self, action: #selector(chooseSaveFolder))
+        change.bezelStyle = .rounded
+        change.controlSize = .small
+        let reveal = NSButton(title: "開啟資料夾", target: self, action: #selector(revealSaveFolder))
+        reveal.bezelStyle = .rounded
+        reveal.controlSize = .small
+        let row = NSStackView(views: [label, savePathField, change, reveal])
+        row.orientation = .horizontal
+        row.spacing = 8
+        return row
+    }
+
+    @objc private func chooseSaveFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.directoryURL = URL(fileURLWithPath: AppSettings.saveDirectoryPath)
+        if panel.runModal() == .OK, let url = panel.url {
+            AppSettings.saveDirectoryPath = url.path
+            savePathField.stringValue = url.path
+        }
+    }
+
+    @objc private func revealSaveFolder() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: AppSettings.saveDirectoryPath))
+    }
+}
+
+extension SettingsWindowController: NSTextFieldDelegate {
+    /// 路徑欄失焦/按 Enter＝存（支援手打路徑，~ 自動展開）。
+    public func controlTextDidEndEditing(_ obj: Notification) {
+        guard (obj.object as? NSTextField) === savePathField else { return }
+        let path = (savePathField.stringValue as NSString).expandingTildeInPath
+        AppSettings.saveDirectoryPath = path
+        savePathField.stringValue = path
     }
 }

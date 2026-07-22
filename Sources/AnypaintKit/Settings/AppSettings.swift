@@ -34,4 +34,15 @@ public enum AppSettings {
         get { UserDefaults.standard.object(forKey: colorRGBKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: colorRGBKey) }
     }
+
+    private static let saveDirKey = "saveDirectoryPath"
+
+    /// 截圖存檔資料夾（絕對路徑）。從未設定＝桌面。
+    public static var saveDirectoryPath: String {
+        get {
+            if let v = UserDefaults.standard.string(forKey: saveDirKey), !v.isEmpty { return v }
+            return NSHomeDirectory() + "/Desktop"
+        }
+        set { UserDefaults.standard.set(newValue, forKey: saveDirKey) }
+    }
 }
