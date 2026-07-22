@@ -116,7 +116,10 @@ final class SelectionOverlayController {
                !event.modifierFlags.contains(.option),
                event.charactersIgnoringModifiers?.lowercased() == "s",
                let views = self?.windows.compactMap({ $0.selectionView }),
-               let target = views.first(where: { $0.hasValidSelection }) {
+               !views.contains(where: { $0.isComposingText }),   // 組字中讓位 IME（比照 Esc）
+               // 多螢幕兩邊都有框：優先「使用者最後互動的視窗」（比照看門狗搶救歸屬）
+               let target = (self?.lastInteractedWindow?.selectionView.flatMap { $0.hasValidSelection ? $0 : nil })
+                            ?? views.first(where: { $0.hasValidSelection }) {
                 target.saveConfirm()
                 return nil
             }

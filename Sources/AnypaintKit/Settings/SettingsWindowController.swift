@@ -162,7 +162,10 @@ public final class SettingsWindowController: NSWindowController {
     }
 
     @objc private func revealSaveFolder() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: AppSettings.saveDirectoryPath))
+        let url = URL(fileURLWithPath: AppSettings.saveDirectoryPath)
+        // 還沒存過檔時資料夾可能不存在，NSWorkspace.open 會無聲失敗——先建立
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(url)
     }
 }
 
@@ -170,8 +173,13 @@ extension SettingsWindowController: NSTextFieldDelegate {
     /// 路徑欄失焦/按 Enter＝存（支援手打路徑，~ 自動展開）。
     public func controlTextDidEndEditing(_ obj: Notification) {
         guard (obj.object as? NSTextField) === savePathField else { return }
-        let path = (savePathField.stringValue as NSString).expandingTildeInPath
-        AppSettings.saveDirectoryPath = path
-        savePathField.stringValue = path
+        let raw = savePathField.stringValue.trimmingCharacters(in: .whitespaces)
+        var path = (raw as NSString).expandingTildeInPath
+        if !path.isEmpty, !path.hasPrefix("/") {
+            // 相對路徑以家目錄為基底——cwd 不可靠（Finder/launchd 啟動時為 /）
+            path = NSHomeDirectory() + "/" + path
+        }
+        AppSettings.saveDirectoryPath = path   // 空字串＝回復預設（getter 回桌面）
+        savePathField.stringValue = AppSettings.saveDirectoryPath   // 回填生效值，所見即所得
     }
 }
