@@ -535,7 +535,10 @@ func pixelateRenderSmokeTest() {
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
         AnnotationRenderer.render([a], in: ctx,
-                                  sourceProvider: { rect in solidRed(w: Int(rect.width), h: Int(rect.height)) })
+                                  sourceProvider: { rect in
+                                      solidRed(w: Int(rect.width), h: Int(rect.height))
+                                          .map { (image: $0, drawRect: rect) }
+                                  })
     }
     let idx = ((h - 1 - 20) * w + 20) * 4
     checkTrue("pixelate：取樣紅底 → 馬賽克區為紅", buf[idx] > 180 && buf[idx + 1] < 90)
@@ -597,6 +600,44 @@ checkTrue("clearRedo 後：redo 清空", !rdoc.canRedo)
 let lPts = [CGPoint(x: 0, y: 0), CGPoint(x: 0, y: 10), CGPoint(x: 100, y: 10), CGPoint(x: 100, y: 0)]
 let lPen = Annotation(shape: .freehand(points: lPts), style: AnnotationStyle(color: .red, lineWidth: 1))
 checkTrue("freehand bounds：涵蓋 Catmull-Rom 外插（y>10 的 overshoot）", lPen.bounds.maxY > 10.5)
+
+// 23) 馬賽克 clamp：矩形超出底圖 → 只畫交集、不拉伸（上紅下藍底圖驗證取樣方位）
+func pixelateClampAndOrientationTest() {
+    // 上半紅、下半藍的底圖 provider（view 座標 y-up：上半＝y 大的那半）
+    func twoTone(rect: CGRect) -> CGImage? {
+        let w = max(1, Int(rect.width)), h = max(1, Int(rect.height))
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h / 2))              // CG 下半＝藍
+        ctx.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: h / 2, width: w, height: h - h / 2))      // CG 上半＝紅
+        return ctx.makeImage()
+    }
+    let w = 40, h = 40
+    var buf = [UInt8](repeating: 0, count: w * h * 4)
+    let a = Annotation(shape: .pixelate(rect: CGRect(x: 4, y: 4, width: 32, height: 32)),
+                       style: AnnotationStyle(color: .red, lineWidth: 2))   // 格 4pt
+    buf.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        AnnotationRenderer.render([a], in: ctx, sourceProvider: { rect in
+            twoTone(rect: rect).map { (image: $0, drawRect: rect) }
+        })
+    }
+    // 馬賽克區內：上半（CG y 高＝記憶體列小）應偏紅、下半偏藍——取樣方位正確
+    let topIdx = ((h - 1 - 30) * w + 20) * 4    // view y=30（上半）
+    let botIdx = ((h - 1 - 10) * w + 20) * 4    // view y=10（下半）
+    checkTrue("pixelate 方位：上半取樣紅", buf[topIdx] > 150 && buf[topIdx + 2] < 100)
+    checkTrue("pixelate 方位：下半取樣藍", buf[botIdx + 2] > 150 && buf[botIdx] < 100)
+}
+pixelateClampAndOrientationTest()
+
+// 24) 字級公式共用
+checkEq("AnnotationStyle.textFontSize", AnnotationStyle(color: .red, lineWidth: 4).textFontSize, 20)
 
 print("---")
 if failures == 0 {

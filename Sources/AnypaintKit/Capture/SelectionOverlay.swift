@@ -953,7 +953,7 @@ final class SelectionView: NSView {
     private func openTextEditor(origin: CGPoint, initialString: String, existing: Annotation?) {
         commitTextEditing()   // 保險：一次只開一個
         let style = existing?.style ?? currentStyle
-        let fontSize = 12 + style.lineWidth * 2
+        let fontSize = style.textFontSize
         let color = NSColor(cgColor: style.color.cgColor) ?? .white
         let editor = InlineTextView.make(origin: origin, fontSize: fontSize,
                                          color: color, initialString: initialString)
@@ -1030,11 +1030,17 @@ final class SelectionView: NSView {
     }
 
     /// 馬賽克取樣：view 點座標矩形 → 原始凍結影像該區像素圖（非破壞鐵則：永遠取原始底圖）。
-    private func frozenImageProvider() -> (CGRect) -> CGImage? {
+    /// 先與可視範圍（view bounds）取交集：矩形超出底圖（多螢幕拖過邊界）時只取交集，
+    /// 並把交集矩形一併回傳給 renderer，避免縮小的 crop 被拉伸鋪滿整個原始 rect（總審查 Minor）。
+    /// 交集為空＝完全在畫面外＝回 nil，renderer 走灰佔位路徑。
+    private func frozenImageProvider() -> (CGRect) -> (image: CGImage, drawRect: CGRect)? {
         { [snapshot, boundsSize = bounds.size] rect in
+            let clamped = rect.intersection(CGRect(origin: .zero, size: boundsSize))
+            guard !clamped.isEmpty else { return nil }
             let pixelRect = CoordinateUtils.pixelCropRect(
-                selection: rect, displayPointSize: boundsSize, scale: snapshot.scale)
-            return snapshot.cgImage.cropping(to: pixelRect)
+                selection: clamped, displayPointSize: boundsSize, scale: snapshot.scale)
+            guard let cropped = snapshot.cgImage.cropping(to: pixelRect) else { return nil }
+            return (image: cropped, drawRect: clamped)
         }
     }
 

@@ -34,6 +34,9 @@ public struct AnnotationStyle: Equatable {
     public static func clampLineWidth(_ v: CGFloat) -> CGFloat {
         min(24, max(1, v))
     }
+
+    /// 文字字級（12＋線寬×2）——editor 與渲染共用同一公式（清理項：原本兩處重複）。
+    public var textFontSize: CGFloat { 12 + lineWidth * 2 }
 }
 
 /// 一個標註物件。值型別：undo 快照＝直接複製陣列（Memento），
@@ -66,8 +69,8 @@ public struct Annotation: Identifiable, Equatable {
     /// 序號圓標半徑：直徑隨粗細（spec）。
     public var counterRadius: CGFloat { 8 + style.lineWidth * 2 }
 
-    /// 文字字級（spec 修訂：12＋線寬×2，滾輪熱狀態調整＝調字級）。
-    public var textFontSize: CGFloat { 12 + style.lineWidth * 2 }
+    /// 文字字級（spec 修訂：12＋線寬×2，滾輪熱狀態調整＝調字級）。公式定義在 AnnotationStyle.textFontSize。
+    public var textFontSize: CGFloat { style.textFontSize }
 
     /// 實際描邊寬：螢光筆＝線寬×2（spec），其餘＝線寬。
     public var effectiveStrokeWidth: CGFloat {

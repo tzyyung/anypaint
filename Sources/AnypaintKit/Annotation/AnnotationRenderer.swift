@@ -11,12 +11,12 @@ public enum AnnotationRenderer {
     /// （由 AnnotationDocument.counterNumber(for:) 產生；預設空＝序號只畫圓不畫字）。
     public static func render(_ objects: [Annotation], in ctx: CGContext,
                               counterNumbers: [UUID: Int] = [:],
-                              sourceProvider: ((CGRect) -> CGImage?)? = nil) {
+                              sourceProvider: ((CGRect) -> (image: CGImage, drawRect: CGRect)?)? = nil) {
         for a in objects { render(a, in: ctx, counterNumbers: counterNumbers, sourceProvider: sourceProvider) }
     }
 
     static func render(_ a: Annotation, in ctx: CGContext, counterNumbers: [UUID: Int],
-                       sourceProvider: ((CGRect) -> CGImage?)?) {
+                       sourceProvider: ((CGRect) -> (image: CGImage, drawRect: CGRect)?)?) {
         ctx.saveGState()
         defer { ctx.restoreGState() }
 
@@ -116,15 +116,17 @@ public enum AnnotationRenderer {
     /// 非破壞馬賽克：從 provider 取「原始凍結影像」該區像素 → 縮小 1/block →
     /// nearest-neighbor 放大畫回（純 CG，免 CIFilter）。取不到底圖＝半透明灰佔位。
     private static func drawPixelate(rect: CGRect, blockSize: CGFloat, in ctx: CGContext,
-                                     sourceProvider: ((CGRect) -> CGImage?)?) {
+                                     sourceProvider: ((CGRect) -> (image: CGImage, drawRect: CGRect)?)?) {
         guard rect.width >= 1, rect.height >= 1 else { return }
-        guard let crop = sourceProvider?(rect) else {
+        // 與可取樣範圍取交集：矩形超出底圖時只畫交集，避免 crop 縮小卻鋪滿整個 rect 造成拉伸
+        //（多螢幕拖過邊界的情境；總審查 Minor）。provider 回 nil 仍走灰佔位。
+        guard let (crop, drawRect) = sourceProvider?(rect), drawRect.width >= 1, drawRect.height >= 1 else {
             ctx.setFillColor(CGColor(gray: 0.5, alpha: 0.6))
             ctx.fill(rect)
             return
         }
-        let tinyW = max(1, Int(rect.width / blockSize))
-        let tinyH = max(1, Int(rect.height / blockSize))
+        let tinyW = max(1, Int(drawRect.width / blockSize))
+        let tinyH = max(1, Int(drawRect.height / blockSize))
         guard let tinyCtx = CGContext(
             data: nil, width: tinyW, height: tinyH, bitsPerComponent: 8, bytesPerRow: 0,
             space: crop.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -135,7 +137,7 @@ public enum AnnotationRenderer {
         guard let tiny = tinyCtx.makeImage() else { return }
         ctx.saveGState()
         ctx.interpolationQuality = .none       // 放大用 nearest-neighbor → 方格
-        ctx.draw(tiny, in: rect)
+        ctx.draw(tiny, in: drawRect)
         ctx.restoreGState()
     }
 
@@ -150,7 +152,7 @@ public enum AnnotationRenderer {
                                  selection: CGRect,
                                  scale: CGFloat,
                                  counterNumbers: [UUID: Int] = [:],
-                                 sourceProvider: ((CGRect) -> CGImage?)? = nil) -> CGImage? {
+                                 sourceProvider: ((CGRect) -> (image: CGImage, drawRect: CGRect)?)? = nil) -> CGImage? {
         let w = cropped.width, h = cropped.height
         guard w > 0, h > 0,
               let ctx = CGContext(
