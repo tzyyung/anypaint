@@ -106,16 +106,25 @@ extension SelectionView {
     }
 
     /// 放大鏡顯示點：任何拖曳中（調框或畫標註）→拖曳點；尚未框選→hover 點；其餘不顯示。
-    private func activeLoupePoint() -> CGPoint? {
+    func activeLoupePoint() -> CGPoint? {
         if drag != nil || shapeAnchor != nil { return dragPoint }
         if selection == nil { return hoverPoint }
         return nil
     }
 
+    /// 游標點 → 快照像素座標（左上原點，clamp 進影像範圍）；drawLoupe 與取色共用，
+    /// 保證「準星指哪就取哪」。
+    func samplePixelCoord(at p: CGPoint) -> (x: Int, y: Int) {
+        let scale = snapshot.scale
+        let x = min(max(0, Int(p.x * scale)), snapshot.cgImage.width - 1)
+        let y = min(max(0, Int((bounds.height - p.y) * scale)), snapshot.cgImage.height - 1)
+        return (x, y)
+    }
+
     func invalidateLoupe(around a: CGPoint?, and b: CGPoint?) {
         var dirty = CGRect.null
         for p in [a, b].compactMap({ $0 }) {
-            dirty = dirty.union(loupeRect(at: p).insetBy(dx: -12, dy: -28))
+            dirty = dirty.union(loupeRect(at: p).insetBy(dx: -60, dy: -28))
         }
         if !dirty.isNull { setNeedsDisplay(dirty) }
     }
@@ -177,17 +186,44 @@ extension SelectionView {
         border.lineWidth = 1
         border.stroke()
 
-        // 座標文字
+        // 色值＋座標列：■ 色塊 + #HEX + 像素座標；「已複製」提示顯示中則暫代文字
+        let sp = samplePixelCoord(at: p)
+        let rgb = ColorSampler.sampleRGB(image: snapshot.cgImage, x: sp.x, y: sp.y)
+        let infoText: String
+        if let toast = copiedColorText {
+            infoText = toast
+        } else if let rgb {
+            infoText = "\(ColorSampler.hexString(r: rgb.r, g: rgb.g, b: rgb.b))  \(Int(cx)), \(Int(cyTop))"
+        } else {
+            infoText = "\(Int(cx)), \(Int(cyTop))"
+        }
         let coord = NSAttributedString(
-            string: "\(Int(cx)), \(Int(cyTop))",
+            string: infoText,
             attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
                          .foregroundColor: NSColor.white])
         let cs = coord.size()
-        let cbg = CGRect(x: loupe.minX, y: loupe.minY - cs.height - 2, width: max(side, cs.width + 8), height: cs.height + 3)
+        let swatchSide: CGFloat = 10
+        let swatchGap: CGFloat = 4
+        let cbg = CGRect(x: loupe.minX, y: loupe.minY - cs.height - 2,
+                         width: max(side, cs.width + swatchSide + swatchGap + 12),
+                         height: cs.height + 3)
         if cbg.minY >= 0 {
             NSColor(white: 0, alpha: 0.6).setFill()
             NSBezierPath(rect: cbg).fill()
-            coord.draw(at: CGPoint(x: cbg.minX + 4, y: cbg.minY + 1))
+            var textX = cbg.minX + 4
+            if let rgb {
+                let swatch = CGRect(x: textX, y: cbg.midY - swatchSide / 2,
+                                    width: swatchSide, height: swatchSide)
+                NSColor(red: CGFloat(rgb.r) / 255, green: CGFloat(rgb.g) / 255,
+                        blue: CGFloat(rgb.b) / 255, alpha: 1).setFill()
+                NSBezierPath(rect: swatch).fill()
+                NSColor.white.setStroke()
+                let sb = NSBezierPath(rect: swatch.insetBy(dx: 0.5, dy: 0.5))
+                sb.lineWidth = 1
+                sb.stroke()
+                textX += swatchSide + swatchGap
+            }
+            coord.draw(at: CGPoint(x: textX, y: cbg.minY + 1))
         }
     }
 

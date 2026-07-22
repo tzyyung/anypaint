@@ -103,6 +103,25 @@ final class SelectionView: NSView {
     /// 輸入法組字中（注音等 marked text）——此時 Esc 要讓給 IME 清組字，不能當 commit。
     var isComposingText: Bool { textEditor?.hasMarkedText() ?? false }
 
+    // MARK: 取色（spec 2026-07-22 取色器）
+    /// 「已複製 #XXXXXX」提示文字（1.5 秒自動清除；顯示中暫代放大鏡色值列內容）。
+    var copiedColorText: String?
+    private var copiedToastClear: DispatchWorkItem?
+
+    /// 複製色值後顯示短暫提示；新複製會取代舊倒數。
+    func showCopiedToast(_ text: String) {
+        copiedColorText = text
+        copiedToastClear?.cancel()
+        let clear = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.copiedColorText = nil
+            if let p = self.dragPoint ?? self.hoverPoint { self.invalidateLoupe(around: p, and: nil) }
+        }
+        copiedToastClear = clear
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: clear)
+        if let p = dragPoint ?? hoverPoint { invalidateLoupe(around: p, and: nil) }
+    }
+
     let toolbar = SelectionToolbar()
 
     /// 按下「擷取」→ 回傳裁切影像。

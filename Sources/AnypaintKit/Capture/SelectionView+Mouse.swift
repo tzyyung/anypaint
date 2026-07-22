@@ -383,6 +383,16 @@ extension SelectionView {
             }
             return
         }
+        // C / Shift+C：放大鏡顯示中取色（spec 取色器）。排除 ⌘/⌃/⌥（比照 ⌘Z），
+        // Shift 允許——用來分流 hex / rgb() 格式。
+        if !event.modifierFlags.contains(.command),
+           !event.modifierFlags.contains(.control),
+           !event.modifierFlags.contains(.option),
+           event.charactersIgnoringModifiers?.lowercased() == "c",
+           let p = activeLoupePoint() {
+            copyColor(at: p, asRGB: event.modifierFlags.contains(.shift))
+            return
+        }
         switch event.keyCode {
         case 53:            // Esc → 分層：編輯中完成編輯 → 有選取解除選取 → 否則取消（spec）
             if isEditingText {
@@ -411,6 +421,20 @@ extension SelectionView {
         default:
             super.keyDown(with: event)
         }
+    }
+
+    /// 取放大鏡準星像素的色值寫進剪貼簿（asRGB＝Shift+C 的 rgb() 格式）。
+    /// 座標換算與 drawLoupe 共用 samplePixelCoord——準星顯示哪個像素就取哪個。
+    private func copyColor(at p: CGPoint, asRGB: Bool) {
+        let sp = samplePixelCoord(at: p)
+        guard let rgb = ColorSampler.sampleRGB(image: snapshot.cgImage, x: sp.x, y: sp.y) else { return }
+        let text = asRGB
+            ? ColorSampler.rgbString(r: rgb.r, g: rgb.g, b: rgb.b)
+            : ColorSampler.hexString(r: rgb.r, g: rgb.g, b: rgb.b)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        showCopiedToast("已複製 \(text)")
     }
 
 }
