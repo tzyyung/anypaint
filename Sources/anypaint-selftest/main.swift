@@ -788,6 +788,54 @@ do {
 }
 try? FileManager.default.removeItem(at: saveTmpRoot)
 
+// 29) 視窗偵測：WindowDetector
+// convert：CG 全域（左上原點、主螢幕基準）→ AppKit 全域（左下原點）。
+// 主螢幕 1080 高：CG y=100、高 200 的視窗 → AppKit y = 1080 - (100+200) = 780
+check("convert 主螢幕內視窗",
+      WindowDetector.convert(cgBounds: CGRect(x: 50, y: 100, width: 300, height: 200),
+                             primaryHeight: 1080),
+      CGRect(x: 50, y: 780, width: 300, height: 200))
+// 次螢幕在主螢幕上方：CG y 為負 → AppKit y > primaryHeight
+check("convert 上方次螢幕（CG 負 y）",
+      WindowDetector.convert(cgBounds: CGRect(x: 0, y: -500, width: 400, height: 300),
+                             primaryHeight: 1080),
+      CGRect(x: 0, y: 1280, width: 400, height: 300))
+// 次螢幕在主螢幕下方：CG y 超過 primaryHeight → AppKit y 為負
+check("convert 下方次螢幕（AppKit 負 y）",
+      WindowDetector.convert(cgBounds: CGRect(x: 100, y: 1200, width: 200, height: 100),
+                             primaryHeight: 1080),
+      CGRect(x: 100, y: -220, width: 200, height: 100))
+
+// hitTest：陣列序＝前→後，重疊取前者
+let wdFront = WindowInfo(frameGlobal: CGRect(x: 0, y: 0, width: 100, height: 100))
+let wdBack = WindowInfo(frameGlobal: CGRect(x: 50, y: 50, width: 200, height: 200))
+check("hitTest 重疊取最前",
+      WindowDetector.hitTest(point: CGPoint(x: 60, y: 60), windows: [wdFront, wdBack]) ?? .zero,
+      wdFront.frameGlobal)
+check("hitTest 只命中後者",
+      WindowDetector.hitTest(point: CGPoint(x: 150, y: 150), windows: [wdFront, wdBack]) ?? .zero,
+      wdBack.frameGlobal)
+checkTrue("hitTest 無命中 nil", WindowDetector.hitTest(point: CGPoint(x: 500, y: 500),
+                                                    windows: [wdFront, wdBack]) == nil)
+
+// makeWindowList：過濾 layer != 0 與面積 ≤ 1、保序、座標已轉 AppKit
+let wdRaw: [[String: Any]] = [
+    [kCGWindowLayer as String: 0,
+     kCGWindowBounds as String: CGRect(x: 0, y: 100, width: 300, height: 200).dictionaryRepresentation],
+    [kCGWindowLayer as String: 25,   // 選單列類 → 濾掉
+     kCGWindowBounds as String: CGRect(x: 0, y: 0, width: 500, height: 24).dictionaryRepresentation],
+    [kCGWindowLayer as String: 0,    // 面積 ≤ 1 → 濾掉
+     kCGWindowBounds as String: CGRect(x: 10, y: 10, width: 1, height: 1).dictionaryRepresentation],
+    [kCGWindowLayer as String: 0,
+     kCGWindowBounds as String: CGRect(x: 400, y: 300, width: 100, height: 100).dictionaryRepresentation],
+]
+let wdList = WindowDetector.makeWindowList(raw: wdRaw, primaryHeight: 1080)
+checkEq("makeWindowList 過濾後數量", wdList.count, 2)
+check("makeWindowList 保序＋座標轉換[0]", wdList.first?.frameGlobal ?? .zero,
+      CGRect(x: 0, y: 780, width: 300, height: 200))
+check("makeWindowList 保序＋座標轉換[1]", wdList.last?.frameGlobal ?? .zero,
+      CGRect(x: 400, y: 680, width: 100, height: 100))
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
