@@ -999,6 +999,12 @@ final class SelectionView: NSView {
         menu.addItem(makeContextMenuItem(title: "移到最後", action: #selector(contextSendToBack)))
         menu.addItem(makeContextMenuItem(title: "刪除", action: #selector(contextDelete)))
         NSMenu.popUpContextMenu(menu, with: event, for: self)
+        // 選單收合後：非 select 工具就清選取——chrome 只在 select 工具畫，
+        // 留著會變成「看不見的選取」（Esc 隱形層、⌘]/⌘[ 誤動看不見的物件）。
+        if activeTool != .select {
+            deselect()
+            needsDisplay = true
+        }
     }
 
     private func makeContextMenuItem(title: String, action: Selector) -> NSMenuItem {
