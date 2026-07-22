@@ -10,6 +10,8 @@ final class SelectionToolbar: NSView {
     var onCancel: (() -> Void)?
     /// 按「貼」＝把目前框選（含標註）直接變成貼圖視窗（spec 截圖完直接貼）。
     var onPin: (() -> Void)?
+    /// 按「存」＝把目前框選（含標註）存成 PNG 檔（spec 存檔）。
+    var onSave: (() -> Void)?
     /// 點工具按鈕；再點一次作用中的工具＝取消作用（回傳 nil）。
     var onToolSelected: ((AnnotationTool?) -> Void)?
     var onUndo: (() -> Void)?
@@ -70,6 +72,9 @@ final class SelectionToolbar: NSView {
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
         cancel.bezelStyle = .rounded
         cancel.controlSize = .small
+        let saveButton = NSButton()
+        configureSymbolButton(saveButton, "square.and.arrow.down", #selector(saveAction))
+        saveButton.toolTip = "存檔（⌘S）"
         let pinButton = NSButton()
         configureSymbolButton(pinButton, "pin", #selector(pinAction))
         pinButton.toolTip = "貼上為浮動圖（⇧↩）"
@@ -78,6 +83,7 @@ final class SelectionToolbar: NSView {
         confirm.controlSize = .small
         confirm.keyEquivalent = "\r"   // Enter = 擷取
         toolsRow.addArrangedSubview(cancel)
+        toolsRow.addArrangedSubview(saveButton)
         toolsRow.addArrangedSubview(pinButton)
         toolsRow.addArrangedSubview(confirm)
 
@@ -206,5 +212,6 @@ final class SelectionToolbar: NSView {
     @objc private func confirmAction() { onConfirm?() }
     @objc private func cancelAction() { onCancel?() }
     @objc private func pinAction() { onPin?() }
+    @objc private func saveAction() { onSave?() }
 }
 
