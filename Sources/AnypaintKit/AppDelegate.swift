@@ -49,6 +49,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 overlayController.present(
                     snapshots: snapshots,
                     onSelect: { [weak self] image in self?.pinboard.copy(image: image) },
+                    onPin: { [weak self] image, frame in
+                        self?.pinboard.copy(image: image)                    // 決策：貼＝同時複製
+                        self?.pinController.pin(image: image, frame: frame)
+                    },
                     onCancel: { }
                 )
             } catch CaptureError.noPermission {

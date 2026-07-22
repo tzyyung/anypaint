@@ -36,6 +36,7 @@ final class SelectionOverlayWindow: NSPanel {
 final class SelectionOverlayController {
     private var windows: [SelectionOverlayWindow] = []
     private var onSelect: ((NSImage) -> Void)?
+    private var onPin: ((NSImage, CGRect) -> Void)?
     private var onCancel: (() -> Void)?
     private var keyMonitor: Any?
     private var watchdogWarn: DispatchWorkItem?
@@ -53,16 +54,24 @@ final class SelectionOverlayController {
 
     func present(snapshots: [DisplaySnapshot],
                  onSelect: @escaping (NSImage) -> Void,
+                 onPin: @escaping (NSImage, CGRect) -> Void,
                  onCancel: @escaping () -> Void) {
         guard !isActive else { return }
         isActive = true
         self.onSelect = onSelect
+        self.onPin = onPin
         self.onCancel = onCancel
 
         NSApp.activate(ignoringOtherApps: true)
         for snapshot in snapshots {
             let window = SelectionOverlayWindow(snapshot: snapshot)
             window.selectionView?.onConfirm = { [weak self] image in self?.finish(with: image) }
+            window.selectionView?.onPin = { [weak self, weak window] image, sel in
+                guard let window else { return }
+                let globalFrame = CoordinateUtils.globalRect(
+                    selection: sel, windowOrigin: window.frame.origin)
+                self?.finishPin(with: image, frame: globalFrame)
+            }
             window.selectionView?.onCancel = { [weak self] in self?.cancel() }
             window.selectionView?.onInteraction = { [weak self, weak window] in
                 self?.armWatchdog()
@@ -189,6 +198,12 @@ final class SelectionOverlayController {
         handler?(image)
     }
 
+    private func finishPin(with image: NSImage, frame: CGRect) {
+        let handler = onPin
+        dismiss()
+        handler?(image, frame)
+    }
+
     private func cancel() {
         let handler = onCancel
         dismiss()
@@ -204,6 +219,7 @@ final class SelectionOverlayController {
         windows.removeAll()
         lastInteractedWindow = nil
         onSelect = nil
+        onPin = nil
         onCancel = nil
         isActive = false
     }
