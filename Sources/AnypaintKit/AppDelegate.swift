@@ -1,5 +1,6 @@
 import AppKit
 import KeyboardShortcuts
+import UniformTypeIdentifiers
 
 /// 應用協調者：組裝各模組、註冊快鍵、串起截圖與貼圖流程。
 /// 自己不做底層細節，只負責「誰在什麼時候呼叫誰」。
@@ -63,6 +64,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                             NSSound.beep()
                         }
                     },
+                    onSaveAs: { [weak self] image in
+                        self?.pinboard.copy(image: image)   // 對話框取消也不白截（spec）
+                        self?.saveWithPanel(image: image)
+                    },
                     onPin: { [weak self] image, frame in
                         self?.pinboard.copy(image: image)                    // 決策：貼＝同時複製
                         self?.pinController.pin(image: image, frame: frame)
@@ -75,6 +80,24 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("anypaint: 擷取失敗 \(error)")
                 NSSound.beep()
             }
+        }
+    }
+
+    /// 另存為：彈 NSSavePanel 自選位置與檔名（覆寫確認交給面板，不套 uniquedURL）。
+    private func saveWithPanel(image: NSImage) {
+        let panel = NSSavePanel()
+        panel.title = "圖像另存為"
+        panel.nameFieldStringValue = CaptureSaver.filename(for: Date())
+        panel.directoryURL = URL(fileURLWithPath: AppSettings.saveDirectoryPath)
+        panel.allowedContentTypes = [.png]
+        panel.canCreateDirectories = true
+        NSApp.activate(ignoringOtherApps: true)   // agent app：不 activate 面板不會成 key
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try CaptureSaver.writePNG(image: image, to: url)
+        } catch {
+            NSLog("anypaint: 另存失敗 \(error)")
+            NSSound.beep()
         }
     }
 

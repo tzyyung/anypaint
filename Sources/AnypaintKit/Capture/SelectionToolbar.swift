@@ -12,6 +12,8 @@ final class SelectionToolbar: NSView {
     var onPin: (() -> Void)?
     /// 按「存」＝把目前框選（含標註）存成 PNG 檔（spec 存檔）。
     var onSave: (() -> Void)?
+    /// 按「另存為」＝彈 NSSavePanel 自選位置與檔名（spec 修訂：Save As 慣例）。
+    var onSaveAs: (() -> Void)?
     /// 點工具按鈕；再點一次作用中的工具＝取消作用（回傳 nil）。
     var onToolSelected: ((AnnotationTool?) -> Void)?
     var onUndo: (() -> Void)?
@@ -74,7 +76,10 @@ final class SelectionToolbar: NSView {
         cancel.controlSize = .small
         let saveButton = NSButton()
         configureSymbolButton(saveButton, "square.and.arrow.down", #selector(saveAction))
-        saveButton.toolTip = "存檔（⌘S）"
+        saveButton.toolTip = "儲存到預設資料夾（⌘S）"
+        let saveAsButton = NSButton()
+        configureSymbolButton(saveAsButton, "square.and.arrow.down.on.square", #selector(saveAsAction))
+        saveAsButton.toolTip = "另存為…（⇧⌘S）"
         let pinButton = NSButton()
         configureSymbolButton(pinButton, "pin", #selector(pinAction))
         pinButton.toolTip = "貼上為浮動圖（⇧↩）"
@@ -84,6 +89,7 @@ final class SelectionToolbar: NSView {
         confirm.keyEquivalent = "\r"   // Enter = 擷取
         toolsRow.addArrangedSubview(cancel)
         toolsRow.addArrangedSubview(saveButton)
+        toolsRow.addArrangedSubview(saveAsButton)
         toolsRow.addArrangedSubview(pinButton)
         toolsRow.addArrangedSubview(confirm)
 
@@ -213,5 +219,6 @@ final class SelectionToolbar: NSView {
     @objc private func cancelAction() { onCancel?() }
     @objc private func pinAction() { onPin?() }
     @objc private func saveAction() { onSave?() }
+    @objc private func saveAsAction() { onSaveAs?() }
 }
 

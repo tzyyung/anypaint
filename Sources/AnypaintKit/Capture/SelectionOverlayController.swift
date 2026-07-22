@@ -37,6 +37,7 @@ final class SelectionOverlayController {
     private var windows: [SelectionOverlayWindow] = []
     private var onSelect: ((NSImage) -> Void)?
     private var onSave: ((NSImage) -> Void)?
+    private var onSaveAs: ((NSImage) -> Void)?
     private var onPin: ((NSImage, CGRect) -> Void)?
     private var onCancel: (() -> Void)?
     private var keyMonitor: Any?
@@ -56,12 +57,14 @@ final class SelectionOverlayController {
     func present(snapshots: [DisplaySnapshot],
                  onSelect: @escaping (NSImage) -> Void,
                  onSave: @escaping (NSImage) -> Void,
+                 onSaveAs: @escaping (NSImage) -> Void,
                  onPin: @escaping (NSImage, CGRect) -> Void,
                  onCancel: @escaping () -> Void) {
         guard !isActive else { return }
         isActive = true
         self.onSelect = onSelect
         self.onSave = onSave
+        self.onSaveAs = onSaveAs
         self.onPin = onPin
         self.onCancel = onCancel
 
@@ -70,6 +73,7 @@ final class SelectionOverlayController {
             let window = SelectionOverlayWindow(snapshot: snapshot)
             window.selectionView?.onConfirm = { [weak self] image in self?.finish(with: image) }
             window.selectionView?.onSave = { [weak self] image in self?.finishSave(with: image) }
+            window.selectionView?.onSaveAs = { [weak self] image in self?.finishSaveAs(with: image) }
             window.selectionView?.onPin = { [weak self, weak window] image, sel in
                 guard let window else { return }
                 let globalFrame = CoordinateUtils.globalRect(
@@ -108,9 +112,10 @@ final class SelectionOverlayController {
                 hovered.copyLoupeColor()
                 return nil
             }
-            // ⌘S：存檔（有有效框才作用）。走監聽器不走 view keyDown——nonactivating
-            // panel 被點擊前收不到 responder 事件（取色 Shift 的同一教訓）。
-            // 文字編輯中也攔：saveConfirm 會先落字再存（與擷取同紀律）。
+            // ⌘S：存到預設資料夾；⌘⇧S：另存為（Save As 慣例）。有有效框才作用。
+            // 走監聽器不走 view keyDown——nonactivating panel 被點擊前收不到 responder
+            // 事件（取色 Shift 的同一教訓）。文字編輯中也攔：saveConfirm 會先落字再存
+            // （與擷取同紀律）。
             if event.modifierFlags.contains(.command),
                !event.modifierFlags.contains(.control),
                !event.modifierFlags.contains(.option),
@@ -120,7 +125,11 @@ final class SelectionOverlayController {
                // 多螢幕兩邊都有框：優先「使用者最後互動的視窗」（比照看門狗搶救歸屬）
                let target = (self?.lastInteractedWindow?.selectionView.flatMap { $0.hasValidSelection ? $0 : nil })
                             ?? views.first(where: { $0.hasValidSelection }) {
-                target.saveConfirm()
+                if event.modifierFlags.contains(.shift) {
+                    target.saveAsConfirm()
+                } else {
+                    target.saveConfirm()
+                }
                 return nil
             }
             if event.keyCode == 53 {
@@ -259,6 +268,12 @@ final class SelectionOverlayController {
         handler?(image)
     }
 
+    private func finishSaveAs(with image: NSImage) {
+        let handler = onSaveAs
+        dismiss()
+        handler?(image)
+    }
+
     private func finishPin(with image: NSImage, frame: CGRect) {
         let handler = onPin
         dismiss()
@@ -281,6 +296,7 @@ final class SelectionOverlayController {
         lastInteractedWindow = nil
         onSelect = nil
         onSave = nil
+        onSaveAs = nil
         onPin = nil
         onCancel = nil
         isActive = false
