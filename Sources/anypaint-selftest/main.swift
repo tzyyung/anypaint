@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import AnypaintKit
+import AppKit
 
 // 純邏輯的自我測試。純 Command Line Tools 環境沒有 XCTest 執行器，
 // 所以用可直接執行的執行檔跑斷言：swift run anypaint-selftest
@@ -742,6 +743,50 @@ checkTrue("sampleRGB 越界 y=-1 nil", rgbaImg.flatMap { ColorSampler.sampleRGB(
 checkEq("hexString 一般值大寫", ColorSampler.hexString(r: 58, g: 111, b: 242), "#3A6FF2")
 checkEq("rgbString 一般值", ColorSampler.rgbString(r: 58, g: 111, b: 242), "rgb(58, 111, 242)")
 checkEq("rgbString 端點值", ColorSampler.rgbString(r: 0, g: 255, b: 0), "rgb(0, 255, 0)")
+
+// 28) 存檔：CaptureSaver
+let saveDate = Calendar.current.date(from: DateComponents(
+    year: 2026, month: 7, day: 22, hour: 21, minute: 30, second: 45))!
+checkEq("filename 固定規則", CaptureSaver.filename(for: saveDate),
+        "anypaint 2026-07-22 21.30.45.png")
+
+let saveDir = URL(fileURLWithPath: "/tmp/x")
+checkEq("uniquedURL 無碰撞原樣",
+        CaptureSaver.uniquedURL(directory: saveDir, filename: "a.png", exists: { _ in false }).path,
+        "/tmp/x/a.png")
+checkEq("uniquedURL 碰撞加 -2",
+        CaptureSaver.uniquedURL(directory: saveDir, filename: "a.png",
+                                exists: { $0.path == "/tmp/x/a.png" }).path,
+        "/tmp/x/a-2.png")
+checkEq("uniquedURL 連續碰撞加 -3",
+        CaptureSaver.uniquedURL(directory: saveDir, filename: "a.png",
+                                exists: { $0.path == "/tmp/x/a.png" || $0.path == "/tmp/x/a-2.png" }).path,
+        "/tmp/x/a-3.png")
+
+// writePNG roundtrip：寫進「不存在的子層」驗證自動建目錄，讀回驗尺寸，結束清理
+let saveTmpRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("anypaint-selftest-\(ProcessInfo.processInfo.processIdentifier)")
+let saveTarget = saveTmpRoot.appendingPathComponent("nested/dir/out.png")
+var savePixel: [UInt8] = [255, 0, 0, 255]
+let saveImg: NSImage? = savePixel.withUnsafeMutableBytes { buf in
+    guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+          let ctx = CGContext(data: buf.baseAddress, width: 1, height: 1,
+                              bitsPerComponent: 8, bytesPerRow: 4, space: space,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+          let cg = ctx.makeImage() else { return nil }
+    return NSImage(cgImage: cg, size: NSSize(width: 1, height: 1))
+}
+do {
+    guard let saveImg else { throw CocoaError(.fileWriteUnknown) }
+    try CaptureSaver.writePNG(image: saveImg, to: saveTarget)
+    checkTrue("writePNG 自動建目錄並寫檔", FileManager.default.fileExists(atPath: saveTarget.path))
+    let readBack = NSImage(contentsOf: saveTarget)
+    checkEq("writePNG 讀回尺寸", readBack?.representations.first.map { "\($0.pixelsWide)x\($0.pixelsHigh)" }, "1x1")
+} catch {
+    failures += 1
+    print("❌ writePNG roundtrip throw: \(error)")
+}
+try? FileManager.default.removeItem(at: saveTmpRoot)
 
 print("---")
 if failures == 0 {
