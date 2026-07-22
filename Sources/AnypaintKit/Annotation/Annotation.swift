@@ -18,6 +18,27 @@ public enum AnnotationColor: String, CaseIterable {
         }
         return CGColor(srgbRed: r, green: g, blue: b, alpha: 1)
     }
+
+    /// 相對亮度（Rec.709 權重）——序號數字要跟圈色對比時用。
+    public var isLight: Bool {
+        let (r, g, b): (CGFloat, CGFloat, CGFloat)
+        switch self {
+        case .red:    (r, g, b) = (0.93, 0.13, 0.16)
+        case .orange: (r, g, b) = (1.00, 0.58, 0.00)
+        case .yellow: (r, g, b) = (1.00, 0.84, 0.00)
+        case .green:  (r, g, b) = (0.16, 0.73, 0.27)
+        case .blue:   (r, g, b) = (0.00, 0.48, 1.00)
+        case .black:  (r, g, b) = (0.00, 0.00, 0.00)
+        case .white:  (r, g, b) = (1.00, 1.00, 1.00)
+        }
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.7
+    }
+
+    /// 與此色對比的文字色：淺色（白/黃）配黑字、其餘配白字。
+    public var contrastingTextCGColor: CGColor {
+        isLight ? CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
+                : CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+    }
 }
 
 /// 一筆標註的樣式。粗細是連續值（spec 2026-07-22 修訂：三檔改連續，1–24pt，預設 4）。

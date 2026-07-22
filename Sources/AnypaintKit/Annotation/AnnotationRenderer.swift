@@ -62,8 +62,8 @@ public enum AnnotationRenderer {
             ctx.fillEllipse(in: CGRect(x: center.x - r, y: center.y - r,
                                        width: r * 2, height: r * 2))
             if let n = counterNumbers[a.id] {
-                let white = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
-                drawLine("\(n)", fontSize: r, color: white, in: ctx, centered: true,
+                let numberColor = a.style.color.contrastingTextCGColor
+                drawLine("\(n)", fontSize: r, color: numberColor, in: ctx, centered: true,
                          baselineAt: { ascent, descent in
                              // 垂直置中：基線 = 圓心 − (ascent−descent)/2；水平置中＝centered（helper 扣半寬）
                              CGPoint(x: center.x, y: center.y - (ascent - descent) / 2) })

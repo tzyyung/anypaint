@@ -670,6 +670,12 @@ pixelateClampRegressionTest()
 // 24) 字級公式共用
 checkEq("AnnotationStyle.textFontSize", AnnotationStyle(color: .red, lineWidth: 4).textFontSize, 20)
 
+// 25) 序號數字對比色：白/黃圈配黑字、紅/黑圈配白字（白圈白字＝白球 bug 回歸）
+checkTrue("contrast：白圈黑字", AnnotationColor.white.isLight)
+checkTrue("contrast：黃圈黑字", AnnotationColor.yellow.isLight)
+checkTrue("contrast：紅圈白字", !AnnotationColor.red.isLight)
+checkTrue("contrast：黑圈白字", !AnnotationColor.black.isLight)
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
