@@ -9,7 +9,7 @@ public final class SettingsWindowController: NSWindowController {
 
     public init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 380), // 高度要容得下兩行 watchdogHint
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 380), // 初始值；實際高度由 buildUI 依內容實算
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -56,6 +56,9 @@ public final class SettingsWindowController: NSWindowController {
 
         let saveHint = NSTextField(labelWithString:
             "框選後按工具列「存」鈕或 ⌘S，自動以「anypaint 日期 時間.png」存到此資料夾。")
+        saveHint.usesSingleLineMode = false
+        saveHint.cell?.wraps = true
+        saveHint.preferredMaxLayoutWidth = 360
         saveHint.font = .systemFont(ofSize: 11)
         saveHint.textColor = .secondaryLabelColor
 
@@ -77,6 +80,10 @@ public final class SettingsWindowController: NSWindowController {
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 20)
         ])
+
+        // 視窗高度依內容實算（別再手猜 magic number——存檔區加入後 380 不夠，審查抓到）。
+        stack.layoutSubtreeIfNeeded()
+        window?.setContentSize(NSSize(width: 420, height: stack.fittingSize.height + 40))
     }
 
     private func shortcutRow(title: String, name: KeyboardShortcuts.Name) -> NSView {
