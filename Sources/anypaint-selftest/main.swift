@@ -636,6 +636,37 @@ func pixelateClampAndOrientationTest() {
 }
 pixelateClampAndOrientationTest()
 
+// 23b) clamp 回歸：provider 回傳「比 rect 小的交集」→ 內容只畫在交集內、不拉伸鋪滿
+func pixelateClampRegressionTest() {
+    func solidRed(w: Int, h: Int) -> CGImage? {
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(srgbRed: 0.93, green: 0.13, blue: 0.16, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+    let w = 40, h = 40
+    var buf = [UInt8](repeating: 0, count: w * h * 4)
+    let a = Annotation(shape: .pixelate(rect: CGRect(x: 4, y: 4, width: 32, height: 32)),
+                       style: AnnotationStyle(color: .red, lineWidth: 2))
+    buf.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        // 模擬 clamp：交集只有左半（x 4..20），如同矩形右半超出底圖
+        AnnotationRenderer.render([a], in: ctx, sourceProvider: { _ in
+            solidRed(w: 16, h: 32).map { (image: $0, drawRect: CGRect(x: 4, y: 4, width: 16, height: 32)) }
+        })
+    }
+    let insideIdx = ((h - 1 - 20) * w + 10) * 4    // 交集內（欄 10）
+    let outsideIdx = ((h - 1 - 20) * w + 30) * 4   // rect 內、交集外（欄 30）——不得被拉伸畫到
+    checkTrue("pixelate clamp：交集內有內容", buf[insideIdx] > 150)
+    checkTrue("pixelate clamp：交集外無內容（不拉伸）", buf[outsideIdx + 3] == 0)
+}
+pixelateClampRegressionTest()
+
 // 24) 字級公式共用
 checkEq("AnnotationStyle.textFontSize", AnnotationStyle(color: .red, lineWidth: 4).textFontSize, 20)
 
