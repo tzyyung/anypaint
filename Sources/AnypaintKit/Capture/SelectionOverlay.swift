@@ -328,6 +328,8 @@ final class SelectionView: NSView {
             guard let self else { return }
             self.commitTextEditing()   // 編輯中切工具＝先落字，避免編輯器與工具狀態不同步
             self.activeTool = tool
+            if tool != .select { self.deselect() }   // 切離 select（含取消作用）＝清選取，
+                                                     // 否則殘留的隱形選取會劣化 Esc 並讓 Delete 靜默刪物件
             self.clearHotAnnotation()   // 切工具或取消作用 → 解除熱狀態（spec）
             self.hoveredTextID = nil    // 切工具 → 清 hover 提示（驗收回饋 Fix 2）
             if let tool {
