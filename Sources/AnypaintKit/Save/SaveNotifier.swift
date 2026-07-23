@@ -15,7 +15,7 @@ public final class SaveNotifier: NSObject, UNUserNotificationCenterDelegate {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         let content = UNMutableNotificationContent()
-        content.title = "任截圖"
+        content.title = "anypaint"
         content.body = "已儲存 \(filename)"
         let request = UNNotificationRequest(identifier: UUID().uuidString,
                                             content: content, trigger: nil)

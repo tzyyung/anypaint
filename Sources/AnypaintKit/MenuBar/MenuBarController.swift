@@ -25,7 +25,7 @@ final class MenuBarController: NSObject {
 
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "scissors",
-                                   accessibilityDescription: "任截圖")
+                                   accessibilityDescription: "anypaint")
             button.image?.isTemplate = true
         }
 
@@ -36,7 +36,7 @@ final class MenuBarController: NSObject {
         addItem(to: menu, title: "關閉所有貼圖", action: #selector(closeAllPinsAction))
         menu.addItem(.separator())
         addItem(to: menu, title: "設定…", action: #selector(openSettingsAction))
-        addItem(to: menu, title: "離開 任截圖", action: #selector(quitAction))
+        addItem(to: menu, title: "離開 anypaint", action: #selector(quitAction))
         menu.delegate = self   // 選單開闔時停/啟全域快鍵（見下方 NSMenuDelegate）
         statusItem.menu = menu
     }

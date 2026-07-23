@@ -23,7 +23,7 @@ public final class SettingsWindowController: NSWindowController {
                                             pages.count - 1)
 
         let window = NSWindow(contentViewController: tabs)
-        window.title = "任截圖 設定"
+        window.title = "anypaint 設定"
         window.styleMask = [.titled, .closable]   // contentViewController 預設含 resizable——明確拿掉
         window.toolbarStyle = .preference
         window.isReleasedWhenClosed = false

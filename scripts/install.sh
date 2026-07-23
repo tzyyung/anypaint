@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 任截圖 一鍵安裝：檢查環境 → build → 裝到 /Applications → 引導螢幕錄製權限。
+# anypaint 一鍵安裝：檢查環境 → build → 裝到 /Applications → 引導螢幕錄製權限。
 # 端使用者路徑用 ad-hoc 簽章，不依賴 homebrew／OpenSSL。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-DISPLAY_NAME="任截圖"
+DISPLAY_NAME="anypaint"
 
 echo "==> 檢查開發工具環境"
 # 第一道閘用 xcode-select -p：乾淨機上 command -v swift/git 是 CLT shim（假陽性），

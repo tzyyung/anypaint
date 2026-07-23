@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>任截圖</string>
+	<string>anypaint</string>
 	<key>CFBundleDisplayName</key>
-	<string>任截圖</string>
+	<string>anypaint</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.aidaris.anypaint</string>
 	<key>CFBundleExecutable</key>
@@ -25,6 +25,6 @@
 	<true/>
 	<!-- 螢幕錄製權限的系統彈窗會自動出現；此描述供系統設定顯示用途 -->
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>任截圖 需要螢幕錄製權限才能擷取畫面內容以供截圖與貼圖。</string>
+	<string>anypaint 需要螢幕錄製權限才能擷取畫面內容以供截圖與貼圖。</string>
 </dict>
 </plist>

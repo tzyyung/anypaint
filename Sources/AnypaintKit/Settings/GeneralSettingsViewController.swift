@@ -5,10 +5,10 @@ import ServiceManagement
 /// 開機啟動狀態以 SMAppService 系統實況為準，不自存 UserDefaults——
 /// 使用者可能在「系統設定 → 登入項目」外部更改。
 final class GeneralSettingsViewController: NSViewController {
-    private let launchCheckbox = NSButton(checkboxWithTitle: "登入時自動啟動 任截圖",
+    private let launchCheckbox = NSButton(checkboxWithTitle: "登入時自動啟動 anypaint",
                                           target: nil, action: nil)
     private let approvalHint = NSTextField(labelWithString:
-        "系統要求核准：請到「系統設定 → 一般 → 登入項目」允許 任截圖。")
+        "系統要求核准：請到「系統設定 → 一般 → 登入項目」允許 anypaint。")
 
     override func loadView() {
         launchCheckbox.target = self

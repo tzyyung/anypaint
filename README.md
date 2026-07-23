@@ -1,4 +1,4 @@
-# 任截圖
+# anypaint
 
 一個 macOS 原生的螢幕截圖 + 貼圖工具，仿 Snipaste 的核心功能。用 Swift + AppKit + ScreenCaptureKit，以 Swift Package Manager 建置（不需 Xcode）。內部代號與識別碼仍為 `anypaint`。
 
@@ -32,10 +32,10 @@ git clone <本 repo URL>
 cd anypaint
 bash scripts/install.sh
 ```
-安裝腳本會自建並把「任截圖.app」放進 `/Applications`（不可寫時放 `~/Applications`）。裝好後：
+安裝腳本會自建並把「anypaint.app」放進 `/Applications`（不可寫時放 `~/Applications`）。裝好後：
 
 1. 開啟後**沒有 Dock 圖示與視窗**——看「選單列右上角」的剪刀圖示。
-2. 首次按截圖快鍵（`⌘⇧A`）時，macOS 會要求螢幕錄製權限：**系統設定 → 隱私權與安全性 → 螢幕錄製 → 允許「任截圖」**。
+2. 首次按截圖快鍵（`⌘⇧A`）時，macOS 會要求螢幕錄製權限：**系統設定 → 隱私權與安全性 → 螢幕錄製 → 允許「anypaint」**。
 3. **授權後必須 `⌘Q` 完全結束再重新開啟**才會生效（僅切開關或再按快鍵不會生效）。
 
 ### 常見問題
