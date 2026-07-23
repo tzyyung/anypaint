@@ -7,3 +7,4 @@ build/
 *.app/
 *.pem
 *.p12
+docs/superpowers/
