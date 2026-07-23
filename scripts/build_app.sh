@@ -29,6 +29,16 @@ mkdir -p "$MACOS_DIR" "$RES_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 
+# 打包 SwiftPM 生成的資源 bundle（KeyboardShortcuts 的本地化）到 Contents/Resources。
+# 放根目錄會被 codesign 拒（unsealed contents）；放 Contents/Resources 才 strict 過，
+# 且 vendored patch 過的 .localized 正是從這裡找（見 vendored/KeyboardShortcuts）。
+RES_BUNDLE="$(dirname "$BIN_PATH")/KeyboardShortcuts_KeyboardShortcuts.bundle"
+if [[ -d "$RES_BUNDLE" ]]; then
+  cp -R "$RES_BUNDLE" "$RES_DIR/"
+else
+  echo "警告：找不到資源 bundle $RES_BUNDLE —— recorder 本地化會退回英文（不影響運作）" >&2
+fi
+
 # 簽章：優先使用持久的 self-signed 身分（避免 TCC 螢幕錄製權限每次 build 重置）；
 # 找不到就退回 ad-hoc（每次 build 需重新授權）。
 SIGN_IDENTITY="anypaint-dev"
