@@ -49,9 +49,13 @@ final class PinContentView: NSView {
         }
     }
 
-    // 右鍵選單。
+    // 右鍵選單；⇧+右鍵＝直接 OCR（Snipaste 同款），不顯示選單。
     override func menu(for event: NSEvent) -> NSMenu? {
-        owner?.contextMenu()
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .shift {
+            owner?.recognizeText()
+            return nil
+        }
+        return owner?.contextMenu()
     }
 }
 
@@ -71,6 +75,9 @@ final class PinWindow: NSPanel {
     private var thumbnailRestoreSize: CGSize?
     /// 快速縮圖的長邊上限（spec）。
     static let thumbnailMaxEdge: CGFloat = 120
+    /// OCR 結果窗（lazy、一窗一個、close 連動）與辨識中旗標（不疊請求）。
+    private var ocrController: OCRResultWindowController?
+    private var ocrInFlight = false
 
     init(image: NSImage, frame: CGRect) {
         self.pinImage = image
@@ -139,6 +146,32 @@ final class PinWindow: NSPanel {
         setFrame(CoordinateUtils.rectResized(frame, to: initialSize), display: true, animate: false)
     }
 
+    /// ⇧+右鍵/選單：辨識 pinImage 全解析度文字（縮圖態也辨全圖，spec）。
+    func recognizeText() {
+        guard !ocrInFlight else { return }
+        let controller = ocrController ?? OCRResultWindowController()
+        ocrController = controller
+        controller.present(besideGlobalRect: frame)
+
+        var proposedRect = CGRect(origin: .zero, size: pinImage.size)
+        guard let cg = pinImage.cgImage(forProposedRect: &proposedRect,
+                                        context: nil, hints: nil) else {
+            controller.showText("無法讀取影像")
+            return
+        }
+        ocrInFlight = true
+        TextRecognizer.recognize(cgImage: cg) { [weak self] result in
+            self?.ocrInFlight = false
+            switch result {
+            case .success(let lines):
+                controller.showText(lines.isEmpty ? "未偵測到文字"
+                                                  : TextRecognizer.joinedText(lines))
+            case .failure(let error):
+                controller.showText("辨識失敗：\(error.localizedDescription)")
+            }
+        }
+    }
+
     func copyToPasteboard() {
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -174,6 +207,7 @@ final class PinWindow: NSPanel {
         add(menu, thumbnailRestoreSize == nil ? "縮圖  ⇧雙按" : "還原縮圖  ⇧雙按",
             #selector(miToggleThumbnail))
         add(menu, "重設大小與透明度  中鍵", #selector(miReset))
+        add(menu, "複製文字（OCR）  ⇧右鍵", #selector(miOCR))
         menu.addItem(.separator())
         add(menu, "關閉此貼圖  esc", #selector(miClose))
         return menu
@@ -187,9 +221,11 @@ final class PinWindow: NSPanel {
     @objc private func miResetAlpha() { alphaValue = 1.0 }
     @objc private func miToggleThumbnail() { toggleThumbnail() }
     @objc private func miReset() { resetSizeAndAlpha() }
+    @objc private func miOCR() { recognizeText() }
     @objc private func miClose() { close() }
 
     override func close() {
+        ocrController?.closeWindow()
         controller?.forget(self)
         super.close()
     }
