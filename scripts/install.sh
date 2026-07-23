@@ -22,9 +22,8 @@ if [[ -z "$SWIFT_VER" ]]; then
   exit 1
 fi
 SWIFT_MAJOR="${SWIFT_VER%%.*}"
-SWIFT_MINOR="${SWIFT_VER#*.}"
 if (( SWIFT_MAJOR < 6 )); then
-  echo "需要 Swift 6.0 以上（目前 $SWIFT_VER）。請更新 Command Line Tools 或安裝 Xcode 16+。" >&2
+  echo "需要 Swift 6.0 以上（目前 ${SWIFT_VER}）。請更新 Command Line Tools 或安裝 Xcode 16+。" >&2
   exit 1
 fi
 
@@ -49,7 +48,7 @@ if [[ -w /Applications ]]; then
 else
   DST="$HOME/Applications"
   mkdir -p "$DST"
-  echo "   （/Applications 不可寫，改裝到 $DST）"
+  echo "   （/Applications 不可寫，改裝到 ${DST}）"
 fi
 pkill -x anypaint 2>/dev/null || true
 sleep 1
