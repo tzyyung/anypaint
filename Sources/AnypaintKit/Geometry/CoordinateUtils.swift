@@ -71,4 +71,19 @@ public enum CoordinateUtils {
                width: newSize.width,
                height: newSize.height)
     }
+
+    /// 在 anchor 旁擺放 size 的視窗框（OCR 結果窗）：右側優先、放不下換左側、
+    /// 兩側都不夠疊在 anchor 內緣（clamp 進 screen）；頂邊與 anchor 頂對齊、垂直 clamp。
+    public static func sideRect(beside anchor: CGRect, size: CGSize,
+                                in screen: CGRect, gap: CGFloat = 8) -> CGRect {
+        var origin = CGPoint(x: anchor.maxX + gap, y: anchor.maxY - size.height)
+        if origin.x + size.width > screen.maxX {
+            origin.x = anchor.minX - gap - size.width
+        }
+        if origin.x < screen.minX {
+            origin.x = min(max(screen.minX, anchor.minX), screen.maxX - size.width)
+        }
+        origin.y = min(max(screen.minY, origin.y), screen.maxY - size.height)
+        return CGRect(origin: origin, size: size)
+    }
 }

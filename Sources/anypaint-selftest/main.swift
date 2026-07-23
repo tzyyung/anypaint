@@ -987,6 +987,25 @@ if let ocrImg = makeOCRTestImage("HELLO 123") {
     print("❌ OCR e2e 無法建測試圖")
 }
 
+// 34) OCR 結果窗定位：右側優先→左側→fallback，clamp 進螢幕
+let srScreen = CGRect(x: 0, y: 0, width: 1000, height: 800)
+check("sideRect 右側夠位＝貼右、頂對齊",
+      CoordinateUtils.sideRect(beside: CGRect(x: 100, y: 300, width: 200, height: 150),
+                               size: CGSize(width: 320, height: 240), in: srScreen),
+      CGRect(x: 308, y: 210, width: 320, height: 240))
+check("sideRect 右側不夠換左側",
+      CoordinateUtils.sideRect(beside: CGRect(x: 700, y: 300, width: 250, height: 150),
+                               size: CGSize(width: 320, height: 240), in: srScreen),
+      CGRect(x: 372, y: 210, width: 320, height: 240))
+check("sideRect 兩側都不夠＝疊 anchor 內緣",
+      CoordinateUtils.sideRect(beside: CGRect(x: 100, y: 300, width: 850, height: 150),
+                               size: CGSize(width: 320, height: 240), in: srScreen),
+      CGRect(x: 100, y: 210, width: 320, height: 240))
+check("sideRect 底部超界 clamp",
+      CoordinateUtils.sideRect(beside: CGRect(x: 100, y: -100, width: 200, height: 150),
+                               size: CGSize(width: 320, height: 240), in: srScreen),
+      CGRect(x: 308, y: 0, width: 320, height: 240))
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
