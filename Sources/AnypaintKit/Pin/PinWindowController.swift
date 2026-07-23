@@ -16,9 +16,37 @@ final class PinContentView: NSView {
         image.draw(in: bounds)
     }
 
-    // 捲動縮放（等比）。
+    // 捲動：⌘＝透明度、無修飾＝縮放（等比）。
     override func scrollWheel(with event: NSEvent) {
-        owner?.zoom(by: event.scrollingDeltaY)
+        if event.modifierFlags.contains(.command) {
+            owner?.adjustAlpha(event.scrollingDeltaY * 0.005)
+        } else {
+            owner?.zoom(by: event.scrollingDeltaY)
+        }
+    }
+
+    // 雙按偵測放 mouseUp、不碰 mouseDown——isMovableByWindowBackground 的背景拖曳
+    // 吃 mouseDown 階段（override 會破壞移窗）；拖曳超過系統閾值時 clickCount 不會到 2。
+    override func mouseUp(with event: NSEvent) {
+        if event.clickCount == 2 {
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if mods == .shift {
+                owner?.toggleThumbnail()
+            } else if mods.isEmpty {
+                owner?.close()
+                return   // 視窗已關，不再往下傳
+            }
+        }
+        super.mouseUp(with: event)
+    }
+
+    // 中鍵（buttonNumber == 2）＝重設；多鍵滑鼠側鍵（3/4…）忽略，degrade 走右鍵選單。
+    override func otherMouseUp(with event: NSEvent) {
+        if event.buttonNumber == 2 {
+            owner?.resetSizeAndAlpha()
+        } else {
+            super.otherMouseUp(with: event)
+        }
     }
 
     // 右鍵選單。
@@ -37,11 +65,18 @@ final class PinWindow: NSPanel {
     private let aspect: CGFloat
     private let pinImage: NSImage
     weak var controller: PinWindowController?
+    /// init 當下的顯示尺寸＝中鍵重設的「100%」（不是 image 像素尺寸——Retina 下那會放大兩倍）。
+    private let initialSize: CGSize
+    /// 縮圖前尺寸；nil＝非縮圖態。
+    private var thumbnailRestoreSize: CGSize?
+    /// 快速縮圖的長邊上限（spec）。
+    static let thumbnailMaxEdge: CGFloat = 120
 
     init(image: NSImage, frame: CGRect) {
         self.pinImage = image
         let size = image.size
         self.aspect = size.height > 0 ? size.width / size.height : 1
+        self.initialSize = frame.size
 
         super.init(
             contentRect: frame,
@@ -74,17 +109,34 @@ final class PinWindow: NSPanel {
     /// 捲動縮放（維持等比、以中心為錨點）。
     func zoom(by deltaY: CGFloat) {
         let factor = 1 + (deltaY * 0.005)
-        var f = frame
-        let newWidth = max(40, f.width * factor)
-        let newHeight = newWidth / aspect
-        f.origin.x -= (newWidth - f.width) / 2
-        f.origin.y -= (newHeight - f.height) / 2
-        f.size = CGSize(width: newWidth, height: newHeight)
-        setFrame(f, display: true, animate: false)
+        let newWidth = max(40, frame.width * factor)
+        let newSize = CGSize(width: newWidth, height: newWidth / aspect)
+        setFrame(CoordinateUtils.rectResized(frame, to: newSize), display: true, animate: false)
     }
 
-    private func adjustAlpha(_ delta: CGFloat) {
+    func adjustAlpha(_ delta: CGFloat) {
         alphaValue = min(1.0, max(0.1, alphaValue + delta))
+    }
+
+    /// ⇧+雙按：縮圖 ⇄ 還原（各窗獨立狀態）。已 ≤ 上限且非縮圖態＝不動作、不記 restore。
+    func toggleThumbnail() {
+        if let restore = thumbnailRestoreSize {
+            thumbnailRestoreSize = nil
+            setFrame(CoordinateUtils.rectResized(frame, to: restore), display: true, animate: false)
+        } else {
+            let target = CoordinateUtils.thumbnailSize(for: frame.size,
+                                                       maxEdge: PinWindow.thumbnailMaxEdge)
+            guard target != frame.size else { return }
+            thumbnailRestoreSize = frame.size
+            setFrame(CoordinateUtils.rectResized(frame, to: target), display: true, animate: false)
+        }
+    }
+
+    /// 中鍵/選單：尺寸回初始＋不透明＋脫離縮圖態（使用者決策：一鍵全部歸位）。
+    func resetSizeAndAlpha() {
+        thumbnailRestoreSize = nil
+        alphaValue = 1.0
+        setFrame(CoordinateUtils.rectResized(frame, to: initialSize), display: true, animate: false)
     }
 
     func copyToPasteboard() {
@@ -119,6 +171,9 @@ final class PinWindow: NSPanel {
         let menu = NSMenu()
         add(menu, "複製圖片  c", #selector(miCopy))
         add(menu, "還原透明度  0", #selector(miResetAlpha))
+        add(menu, thumbnailRestoreSize == nil ? "縮圖  ⇧雙按" : "還原縮圖  ⇧雙按",
+            #selector(miToggleThumbnail))
+        add(menu, "重設大小與透明度  中鍵", #selector(miReset))
         menu.addItem(.separator())
         add(menu, "關閉此貼圖  esc", #selector(miClose))
         return menu
@@ -130,6 +185,8 @@ final class PinWindow: NSPanel {
     }
     @objc private func miCopy() { copyToPasteboard() }
     @objc private func miResetAlpha() { alphaValue = 1.0 }
+    @objc private func miToggleThumbnail() { toggleThumbnail() }
+    @objc private func miReset() { resetSizeAndAlpha() }
     @objc private func miClose() { close() }
 
     override func close() {
