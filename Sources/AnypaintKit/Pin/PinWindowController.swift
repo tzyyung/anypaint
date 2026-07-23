@@ -14,6 +14,11 @@ final class PinContentView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         image.draw(in: bounds)
+        // 恆常 2pt 系統強調色邊框：貼圖蓋在原位置時與背景有區別（純顯示——複製/存檔的影像不含框）。
+        NSColor.controlAccentColor.setStroke()
+        let border = NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 1))
+        border.lineWidth = 2
+        border.stroke()
     }
 
     // 捲動：⌘＝透明度、無修飾＝縮放（等比）。
