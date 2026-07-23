@@ -924,6 +924,30 @@ checkTrue("frontWindowTitle 最前視窗無名→nil（degrade 交呼叫端）",
           CaptureVars.frontWindowTitle(raw: [[kCGWindowLayer as String: 0]]) == nil)
 checkTrue("frontWindowTitle 空清單→nil", CaptureVars.frontWindowTitle(raw: []) == nil)
 
+// 32) 貼圖幾何：縮圖尺寸與中心錨定 resize
+checkEq("thumbnailSize 橫圖長邊縮到 120",
+        CoordinateUtils.thumbnailSize(for: CGSize(width: 600, height: 300), maxEdge: 120),
+        CGSize(width: 120, height: 60))
+checkEq("thumbnailSize 直圖長邊縮到 120",
+        CoordinateUtils.thumbnailSize(for: CGSize(width: 200, height: 800), maxEdge: 120),
+        CGSize(width: 30, height: 120))
+checkEq("thumbnailSize 正方形",
+        CoordinateUtils.thumbnailSize(for: CGSize(width: 500, height: 500), maxEdge: 120),
+        CGSize(width: 120, height: 120))
+checkEq("thumbnailSize 已小於上限回原尺寸",
+        CoordinateUtils.thumbnailSize(for: CGSize(width: 100, height: 80), maxEdge: 120),
+        CGSize(width: 100, height: 80))
+checkEq("thumbnailSize 零尺寸不 NaN",
+        CoordinateUtils.thumbnailSize(for: .zero, maxEdge: 120), .zero)
+check("rectResized 中心不動（放大）",
+      CoordinateUtils.rectResized(CGRect(x: 100, y: 100, width: 200, height: 100),
+                                  to: CGSize(width: 400, height: 200)),
+      CGRect(x: 0, y: 50, width: 400, height: 200))
+check("rectResized 中心不動（縮小）",
+      CoordinateUtils.rectResized(CGRect(x: 0, y: 0, width: 100, height: 100),
+                                  to: CGSize(width: 50, height: 50)),
+      CGRect(x: 25, y: 25, width: 50, height: 50))
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")

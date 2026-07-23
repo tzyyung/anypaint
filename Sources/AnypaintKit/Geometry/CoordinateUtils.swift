@@ -55,4 +55,20 @@ public enum CoordinateUtils {
                width: size.width,
                height: size.height)
     }
+
+    /// 長邊縮到 maxEdge 的等比尺寸；已不大於 maxEdge（或零尺寸）回原尺寸（貼圖快速縮圖）。
+    public static func thumbnailSize(for size: CGSize, maxEdge: CGFloat) -> CGSize {
+        let longest = max(size.width, size.height)
+        guard longest > maxEdge, longest > 0 else { return size }
+        let scale = maxEdge / longest
+        return CGSize(width: size.width * scale, height: size.height * scale)
+    }
+
+    /// 以 rect 中心為錨、換成 newSize 的新 rect（貼圖縮放/縮圖/重設共用）。
+    public static func rectResized(_ rect: CGRect, to newSize: CGSize) -> CGRect {
+        CGRect(x: rect.midX - newSize.width / 2,
+               y: rect.midY - newSize.height / 2,
+               width: newSize.width,
+               height: newSize.height)
+    }
 }
