@@ -1,6 +1,6 @@
 import AppKit
 
-/// 擷圖：框選相關（看門狗）。邏輯自 SettingsWindowController 純搬移。
+/// 截圖：框選相關（看門狗）。邏輯自 SettingsWindowController 純搬移。
 final class CaptureSettingsViewController: NSViewController {
     private let watchdogPopup = NSPopUpButton()
 
@@ -21,10 +21,10 @@ final class CaptureSettingsViewController: NSViewController {
     }
 
     private func buildWatchdogRow() -> NSView {
-        let label = NSTextField(labelWithString: "自動取消")
+        let label = NSTextField(labelWithString: "自動取消：")
         label.alignment = .right
         label.setContentHuggingPriority(.required, for: .horizontal)
-        label.widthAnchor.constraint(equalToConstant: 64).isActive = true
+        label.widthAnchor.constraint(equalToConstant: 76).isActive = true
 
         for seconds in AppSettings.watchdogOptions {
             let title = seconds == 0 ? "關閉" : "\(Int(seconds) / 60) 分鐘"

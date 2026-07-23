@@ -2,7 +2,7 @@ import AppKit
 
 // MARK: - 工具列
 
-/// 選取框旁的浮動工具列（兩排）：上排＝標註工具｜undo/redo｜取消/擷取，
+/// 選取框旁的浮動工具列（兩排）：上排＝標註工具｜undo/redo｜取消/複製，
 /// 下排＝樣式（7 色塊＋粗細 pt 數值標籤，選了工具才顯示）。
 /// 用一個會「吞掉滑鼠事件」的容器，避免點工具列時誤觸底下的 SelectionView。
 final class SelectionToolbar: NSView {
@@ -83,10 +83,10 @@ final class SelectionToolbar: NSView {
         let pinButton = NSButton()
         configureSymbolButton(pinButton, "pin", #selector(pinAction))
         pinButton.toolTip = "貼上為浮動圖（⇧↩）"
-        let confirm = NSButton(title: "擷取", target: self, action: #selector(confirmAction))
+        let confirm = NSButton(title: "複製", target: self, action: #selector(confirmAction))
         confirm.bezelStyle = .rounded
         confirm.controlSize = .small
-        confirm.keyEquivalent = "\r"   // Enter = 擷取
+        confirm.keyEquivalent = "\r"   // Enter = 複製
         toolsRow.addArrangedSubview(cancel)
         toolsRow.addArrangedSubview(saveButton)
         toolsRow.addArrangedSubview(saveAsButton)

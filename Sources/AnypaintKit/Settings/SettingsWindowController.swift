@@ -1,6 +1,6 @@
 import AppKit
 
-/// 設定視窗：macOS 偏好設定式工具列分頁（一般／擷圖／輸出／控制）。
+/// 設定視窗：macOS 偏好設定式工具列分頁（一般／截圖／輸出／控制）。
 /// 各頁邏輯在對應的 *SettingsViewController；這裡只組裝。
 public final class SettingsWindowController: NSWindowController {
 
@@ -9,7 +9,7 @@ public final class SettingsWindowController: NSWindowController {
         tabs.tabStyle = .toolbar
         let pages: [(String, String, NSViewController)] = [
             ("一般", "gearshape", GeneralSettingsViewController()),
-            ("擷圖", "viewfinder", CaptureSettingsViewController()),
+            ("截圖", "viewfinder", CaptureSettingsViewController()),
             ("輸出", "square.and.arrow.down", OutputSettingsViewController()),
             ("控制", "keyboard", ControlSettingsViewController()),
         ]

@@ -49,8 +49,8 @@ final class ControlSettingsViewController: NSViewController {
         let shortcutHint = NSTextField(labelWithString: "點一下欄位再按下想要的組合即可更改；按清除鈕可移除。")
         shortcutHint.font = .systemFont(ofSize: 11)
         shortcutHint.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [shortcutRow(title: "截圖", name: .capture),
-                                        shortcutRow(title: "貼圖", name: .pin),
+        let stack = NSStackView(views: [shortcutRow(title: "截圖：", name: .capture),
+                                        shortcutRow(title: "貼圖：", name: .pin),
                                         shortcutHint])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -62,7 +62,7 @@ final class ControlSettingsViewController: NSViewController {
         let label = NSTextField(labelWithString: title)
         label.alignment = .right
         label.setContentHuggingPriority(.required, for: .horizontal)
-        label.widthAnchor.constraint(equalToConstant: 64).isActive = true
+        label.widthAnchor.constraint(equalToConstant: 76).isActive = true
 
         let recorder = KeyboardShortcuts.RecorderCocoa(for: name)
 
