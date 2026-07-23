@@ -34,11 +34,11 @@ if (( MACOS_MAJOR < 14 )); then
   exit 1
 fi
 
-echo "==> 建置（首次需連網下載相依）"
+echo "==> 建置（release）"
 if ! ./scripts/build_app.sh release; then
   echo "" >&2
-  echo "建置失敗。若為首次建置：需連網下載相依（KeyboardShortcuts）；" >&2
-  echo "離線或公司 proxy 環境請先設定 git proxy 或改用可連外網路後重試。" >&2
+  echo "建置失敗。請確認 Command Line Tools 完整（xcode-select -p）、" >&2
+  echo "Swift 版本足夠（swift --version 需 6.0+），並查看上方 swift build 的錯誤訊息。" >&2
   exit 1
 fi
 

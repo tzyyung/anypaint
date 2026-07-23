@@ -24,7 +24,7 @@ if [[ ! -f "$BIN_PATH" ]]; then
   exit 1
 fi
 
-echo "==> 組裝 $APP_NAME.app"
+echo "==> 組裝 $DISPLAY_NAME.app"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RES_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
