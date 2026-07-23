@@ -7,10 +7,9 @@ let package = Package(
         .macOS(.v14)  // ScreenCaptureKit 的 SCScreenshotManager.captureImage 需要 macOS 14+
     ],
     dependencies: [
-        // 全域快鍵 + 錄製 UI；底層同樣是 Carbon RegisterEventHotKey（免輔助使用權限）。
-        // 釘在 1.15.x：1.16.0 起在 SwiftUI Recorder.swift 用了 #Preview 巨集，
-        // 需要 Xcode 的 PreviewsMacros plugin，純 Command Line Tools 編不過。1.15.0 API 一致。
-        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", "1.15.0"..<"1.16.0")
+        // 本機 vendored（見 vendored/KeyboardShortcuts）：patch 過 .localized 修 C1 資源崩潰；
+        // 版本已因 1.16 的 #Preview 巨集問題釘死 1.15，vendoring 無額外網路依賴。
+        .package(path: "vendored/KeyboardShortcuts")
     ],
     targets: [
         // 核心邏輯與 UI 模組（可被 app 與 self-test 共用）
