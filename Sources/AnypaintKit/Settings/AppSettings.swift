@@ -37,11 +37,12 @@ public enum AppSettings {
 
     private static let saveDirKey = "saveDirectoryPath"
 
-    /// 截圖存檔資料夾（絕對路徑）。從未設定＝桌面。
+    /// 截圖存檔資料夾（quickSavePathTemplate 的遷移來源）。從未設定＝桌面。
+    /// 預設用 ~ 形式——不把家目錄寫死進樣板（可攜；展開交給存檔/預覽層）。
     public static var saveDirectoryPath: String {
         get {
             if let v = UserDefaults.standard.string(forKey: saveDirKey), !v.isEmpty { return v }
-            return NSHomeDirectory() + "/Desktop"
+            return "~/Desktop"
         }
         set { UserDefaults.standard.set(newValue, forKey: saveDirKey) }
     }
@@ -91,7 +92,7 @@ public enum AppSettings {
     public static var autoSavePathTemplate: String {
         get {
             if let v = UserDefaults.standard.string(forKey: autoSavePathKey), !v.isEmpty { return v }
-            return NSHomeDirectory() + "/Pictures/anypaint/" + FilenameTemplate.defaultName
+            return "~/Pictures/anypaint/" + FilenameTemplate.defaultName   // ~ 形式：不寫死家目錄
         }
         set { UserDefaults.standard.set(newValue, forKey: autoSavePathKey) }
     }

@@ -147,8 +147,10 @@ final class OutputSettingsViewController: NSViewController {
     // MARK: - 預覽
 
     /// 樣板 → 預覽值（即時展開；結尾非 .png 加補正提示）。「預覽：」由 label 顯示，不再前綴。
+    /// ~ 展開成絕對路徑——預覽顯示實際會存到哪（非 ~ 開頭原樣回傳，檔名樣板不受影響）。
     private func previewText(for template: String) -> String {
         var text = FilenameTemplate.expand(template, date: Date(), vars: previewVars)
+        text = (text as NSString).expandingTildeInPath
         if !FilenameTemplate.hasPNGExtension(template) { text += "（將自動補 .png）" }
         return text
     }
@@ -278,13 +280,13 @@ extension OutputSettingsViewController: NSTextFieldDelegate {
         refreshPreviews()
     }
 
-    /// 手打路徑樣板正規化：trim；~ 展開；相對路徑以家目錄為基底（cwd 不可靠，launchd 啟動＝/）。
+    /// 手打路徑樣板正規化：trim；~ 與絕對路徑保留樣板原文（不展開——展開交給預覽與存檔，
+    /// 樣板保持可攜）；相對路徑補 ~/ 前綴（cwd 不可靠，launchd 啟動＝/，且不寫死家目錄）。
     /// 空字串原樣回傳（setter 存空＝getter 回預設）。
     private func normalizedPathTemplate(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return "" }
-        var path = (trimmed as NSString).expandingTildeInPath
-        if !path.hasPrefix("/") { path = NSHomeDirectory() + "/" + path }
-        return path
+        if trimmed.hasPrefix("/") || trimmed.hasPrefix("~") { return trimmed }
+        return "~/" + trimmed
     }
 }
