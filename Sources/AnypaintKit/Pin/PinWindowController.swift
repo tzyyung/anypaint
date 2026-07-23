@@ -274,10 +274,11 @@ final class PinWindowController {
         windows.removeAll { $0 === window }
     }
 
-    /// 關閉所有貼圖。
+    /// 關閉所有貼圖（走 close() 讓 OCR 結果窗等附屬資源一併關閉，不留孤兒）。
     func closeAll() {
-        windows.forEach { $0.orderOut(nil) }
+        let all = windows
         windows.removeAll()
+        all.forEach { $0.close() }
     }
 
     var count: Int { windows.count }
