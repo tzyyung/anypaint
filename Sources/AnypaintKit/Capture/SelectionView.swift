@@ -2,7 +2,7 @@ import AppKit
 
 // MARK: - 框選視圖
 
-/// 框選視圖：顯示凍結影像、可拖出/調整選取框，按工具列「擷取」才裁切完成。
+/// 框選視圖：顯示凍結影像、可拖出/調整選取框，按工具列「複製」才裁切完成。
 /// 座標一律用「點、左下原點」，裁切時交給 CoordinateUtils 翻轉成像素。
 final class SelectionView: NSView {
     let snapshot: DisplaySnapshot
@@ -129,7 +129,7 @@ final class SelectionView: NSView {
 
     let toolbar = SelectionToolbar()
 
-    /// 按下「擷取」→ 回傳裁切影像。
+    /// 按下「複製」→ 回傳裁切影像。
     var onConfirm: ((NSImage) -> Void)?
     /// 按下「貼」→ 回傳裁切影像＋view 座標的選取框（controller 負責轉全域）。
     var onPin: ((NSImage, CGRect) -> Void)?
@@ -252,7 +252,7 @@ final class SelectionView: NSView {
     // MARK: 完成擷取
 
     /// 目前有效框的輸出影像（有標註就合成進去）；沒有有效框回 nil。
-    /// 供「擷取」與看門狗逾時搶救共用——搶救因此自動含標註。
+    /// 供「複製」與看門狗逾時搶救共用——搶救因此自動含標註。
     func currentCroppedImage() -> NSImage? {
         guard let sel = selection, sel.width > minSize, sel.height > minSize else { return nil }
         let pixelRect = CoordinateUtils.pixelCropRect(

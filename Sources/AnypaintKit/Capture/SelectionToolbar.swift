@@ -86,6 +86,7 @@ final class SelectionToolbar: NSView {
         let confirm = NSButton(title: "複製", target: self, action: #selector(confirmAction))
         confirm.bezelStyle = .rounded
         confirm.controlSize = .small
+        confirm.toolTip = "複製到剪貼簿並結束（↩）"
         confirm.keyEquivalent = "\r"   // Enter = 複製
         toolsRow.addArrangedSubview(cancel)
         toolsRow.addArrangedSubview(saveButton)

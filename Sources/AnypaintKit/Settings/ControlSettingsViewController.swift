@@ -68,7 +68,7 @@ final class ControlSettingsViewController: NSViewController {
 
         let row = NSStackView(views: [label, recorder])
         row.orientation = .horizontal
-        row.spacing = 10
+        row.spacing = 8
         return row
     }
 

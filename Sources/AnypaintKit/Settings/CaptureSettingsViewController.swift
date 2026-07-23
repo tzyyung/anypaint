@@ -42,7 +42,7 @@ final class CaptureSettingsViewController: NSViewController {
 
         let row = NSStackView(views: [label, watchdogPopup])
         row.orientation = .horizontal
-        row.spacing = 10
+        row.spacing = 8
         return row
     }
 

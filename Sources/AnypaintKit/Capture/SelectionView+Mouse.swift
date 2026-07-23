@@ -405,7 +405,7 @@ extension SelectionView {
             } else {
                 onCancel?()
             }
-        case 36, 76:        // Return / Enter → 擷取；Shift+Enter → 貼（spec 截圖完直接貼）
+        case 36, 76:        // Return / Enter → 複製；Shift+Enter → 貼（spec 截圖完直接貼）
             if event.modifierFlags.contains(.shift) {
                 pinConfirm()
             } else {

@@ -81,7 +81,7 @@ public enum AppSettings {
         set { UserDefaults.standard.set(newValue, forKey: quickSaveKey) }
     }
 
-    /// 自動儲存：每次完成擷取（擷取/貼/存/另存、含看門狗搶救）額外存一份。預設關。
+    /// 自動儲存：每次完成截圖（複製/貼/存/另存、含看門狗搶救）額外存一份。預設關。
     public static var autoSaveEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: autoSaveEnabledKey) }
         set { UserDefaults.standard.set(newValue, forKey: autoSaveEnabledKey) }

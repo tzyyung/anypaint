@@ -116,7 +116,7 @@ final class SelectionOverlayController {
             // ⌘S：存到預設資料夾；⌘⇧S：另存為（Save As 慣例）。有有效框才作用。
             // 走監聽器不走 view keyDown——nonactivating panel 被點擊前收不到 responder
             // 事件（取色 Shift 的同一教訓）。文字編輯中也攔：saveConfirm 會先落字再存
-            // （與擷取同紀律）。
+            // （與複製同紀律）。
             if event.modifierFlags.contains(.command),
                !event.modifierFlags.contains(.control),
                !event.modifierFlags.contains(.option),
@@ -237,7 +237,7 @@ final class SelectionOverlayController {
     private func watchdogDidFire() {
         guard isActive else { return }
         // 搶救：有有效框就把目前內容存進剪貼簿再解除（走 finish 同一條路，
-        // 效果等同擷取＝複製到剪貼簿），沒有就純取消。免輸入保證不變。
+        // 效果等同「複製」鈕＝複製到剪貼簿），沒有就純取消。免輸入保證不變。
         // 搶救前先把編輯中的文字落定（影像才會與所見一致；使用者已缺席，盡力保留）。
         windows.compactMap { $0.selectionView }.forEach { $0.commitTextEditing() }
         // 取像順序：使用者最後互動的視窗優先（Task 4 搶救歸屬），nil 或已不在 windows 裡

@@ -12,7 +12,7 @@ final class OutputSettingsViewController: NSViewController {
     private let quickPathField = NSTextField()
     private let quickPreview = NSTextField()
     private let autoSaveCheckbox = NSButton(checkboxWithTitle:
-        "自動儲存（每次完成擷取都額外存一份）", target: nil, action: nil)
+        "自動儲存（每次完成截圖都額外存一份）", target: nil, action: nil)
     private let autoPathField = NSTextField()
     private let autoPreview = NSTextField()
     private var autoSaveControls: [NSControl] = []
