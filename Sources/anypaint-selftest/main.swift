@@ -948,6 +948,45 @@ check("rectResized 中心不動（縮小）",
                                   to: CGSize(width: 50, height: 50)),
       CGRect(x: 25, y: 25, width: 50, height: 50))
 
+// 33) OCR：TextRecognizer（Vision headless 可跑真辨識——無 bundle 依賴，已查證）
+checkEq("joinedText 多行", TextRecognizer.joinedText(["a", "b"]), "a\nb")
+checkEq("joinedText 空陣列", TextRecognizer.joinedText([]), "")
+
+// 真 OCR e2e：CoreText 畫「HELLO 123」進白底 bitmap 實際辨識。
+// 英數的系統字型渲染跨機器穩定；中文渲染變數多，交手動驗收。
+// 一定要用 recognizeSync——async 版回呼派 main queue，selftest 主緒等待會死鎖。
+func makeOCRTestImage(_ text: String) -> CGImage? {
+    let W = 400, H = 100
+    guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+          let ctx = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8,
+                              bytesPerRow: 0, space: space,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: W, height: H))
+    let attr = NSAttributedString(string: text, attributes: [
+        .font: NSFont.systemFont(ofSize: 48, weight: .bold),
+        .foregroundColor: NSColor.black,
+    ])
+    ctx.textPosition = CGPoint(x: 20, y: 30)
+    CTLineDraw(CTLineCreateWithAttributedString(attr), ctx)
+    return ctx.makeImage()
+}
+if let ocrImg = makeOCRTestImage("HELLO 123") {
+    do {
+        let ocrLines = try TextRecognizer.recognizeSync(cgImage: ocrImg)
+        let ocrJoined = TextRecognizer.joinedText(ocrLines)
+        checkTrue("OCR e2e 辨識出 HELLO", ocrJoined.contains("HELLO"))
+        checkTrue("OCR e2e 辨識出 123", ocrJoined.contains("123"))
+    } catch {
+        failures += 1
+        print("❌ OCR e2e throw: \(error)")
+    }
+} else {
+    failures += 1
+    print("❌ OCR e2e 無法建測試圖")
+}
+
 print("---")
 if failures == 0 {
     print("全部通過 🎉")
