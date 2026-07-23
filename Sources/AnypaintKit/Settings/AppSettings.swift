@@ -110,4 +110,12 @@ public enum AppSettings {
             UserDefaults.standard.removeObject(forKey: key)
         }
     }
+
+    private static let settingsTabKey = "settingsSelectedTab"
+
+    /// 設定視窗記住上次分頁（0-3；越界由呼叫端 clamp）。
+    public static var settingsSelectedTab: Int {
+        get { UserDefaults.standard.integer(forKey: settingsTabKey) }
+        set { UserDefaults.standard.set(newValue, forKey: settingsTabKey) }
+    }
 }
