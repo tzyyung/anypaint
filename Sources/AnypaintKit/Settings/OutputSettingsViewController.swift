@@ -1,50 +1,54 @@
 import AppKit
 
 /// 輸出：手動儲存／快速儲存／自動儲存三小節＋命名規則＋還原預設。
-/// 自 SettingsWindowController 純搬移（分頁重構）；邏輯不變。
+/// 排版照 Snipaste 參考：右對齊 label、唯讀預覽欄、按鈕右對齊（驗收回饋修訂）。
+/// 設定值讀寫邏輯與改版前完全等價。
 final class OutputSettingsViewController: NSViewController {
 
     private let manualNameField = NSTextField()
-    private let manualPreview = NSTextField(labelWithString: "")
+    private let manualPreview = NSTextField()
     private let notifyCheckbox = NSButton(checkboxWithTitle:
         "儲存後顯示系統通知（快速儲存與自動儲存共用）", target: nil, action: nil)
     private let quickPathField = NSTextField()
-    private let quickPreview = NSTextField(labelWithString: "")
+    private let quickPreview = NSTextField()
     private let autoSaveCheckbox = NSButton(checkboxWithTitle:
         "自動儲存（每次完成擷取都額外存一份）", target: nil, action: nil)
     private let autoPathField = NSTextField()
-    private let autoPreview = NSTextField(labelWithString: "")
+    private let autoPreview = NSTextField()
     private var autoSaveControls: [NSControl] = []
+
+    /// 命名規則視窗（lazy、重用）。
+    private var namingRules: NamingRulesWindowController?
 
     /// 預覽用變數：os/電腦名/使用者名為真值，%title% 用範例字（設定頁沒有截圖 session）。
     private let previewVars = CaptureVars.makeVars(title: "視窗標題")
 
     override func loadView() {
-        let manualLabel = subheading("手動儲存——另存為（⌘⇧S）的預設檔名")
-        let manualRow = fieldRow(title: "檔名樣板", field: manualNameField,
-                                 value: AppSettings.manualNameTemplate)
+        let manualLabel = subheading("手動儲存（另存為 ⌘⇧S）")
+        setupField(manualNameField, value: AppSettings.manualNameTemplate)
         setupPreview(manualPreview)
 
-        let quickLabel = subheading("快速儲存——「存」鈕 / ⌘S")
+        let quickLabel = subheading("快速儲存（⌘S）")
         notifyCheckbox.state = AppSettings.saveNotificationEnabled ? .on : .off
         notifyCheckbox.target = self
         notifyCheckbox.action = #selector(notifyToggled)
-        let quickRow = fieldRow(title: "路徑樣板", field: quickPathField,
-                                value: AppSettings.quickSavePathTemplate)
+        setupField(quickPathField, value: AppSettings.quickSavePathTemplate)
         setupPreview(quickPreview)
-        let quickButtons = folderButtons(open: #selector(openQuickFolder),
-                                         change: #selector(changeQuickFolder))
 
         let autoLabel = subheading("自動儲存")
         autoSaveCheckbox.state = AppSettings.autoSaveEnabled ? .on : .off
         autoSaveCheckbox.target = self
         autoSaveCheckbox.action = #selector(autoSaveToggled)
-        let autoRow = fieldRow(title: "路徑樣板", field: autoPathField,
-                               value: AppSettings.autoSavePathTemplate)
+        setupField(autoPathField, value: AppSettings.autoSavePathTemplate)
         setupPreview(autoPreview)
-        let autoButtons = folderButtons(open: #selector(openAutoFolder),
-                                        change: #selector(changeAutoFolder))
-        autoSaveControls = [autoPathField] + controls(in: autoButtons)
+
+        let quickButtons = trailingRow(folderButtons(open: #selector(openQuickFolder),
+                                                     change: #selector(changeQuickFolder)))
+        let autoButtonViews = folderButtons(open: #selector(openAutoFolder),
+                                            change: #selector(changeAutoFolder))
+        let autoButtons = trailingRow(autoButtonViews)
+        autoSaveControls = [autoPathField, autoPreview]
+            + autoButtonViews.compactMap { $0 as? NSControl }
 
         let rulesButton = NSButton(title: "命名規則…", target: self, action: #selector(showNamingRules))
         rulesButton.bezelStyle = .rounded
@@ -52,20 +56,31 @@ final class OutputSettingsViewController: NSViewController {
         let resetButton = NSButton(title: "還原預設", target: self, action: #selector(resetOutput))
         resetButton.bezelStyle = .rounded
         resetButton.controlSize = .small
-        let bottomRow = NSStackView(views: [rulesButton, resetButton])
+        let bottomRow = NSStackView()
         bottomRow.orientation = .horizontal
-        bottomRow.spacing = 8
+        bottomRow.addView(rulesButton, in: .leading)
+        bottomRow.addView(resetButton, in: .trailing)
+        bottomRow.widthAnchor.constraint(equalToConstant: 440).isActive = true
 
+        let manualPreviewRow = labeledRow("預覽：", control: manualPreview)
         let stack = NSStackView(views: [
-            manualLabel, manualRow, manualPreview,
-            quickLabel, notifyCheckbox, quickRow, quickPreview, quickButtons,
-            autoLabel, autoSaveCheckbox, autoRow, autoPreview, autoButtons,
+            manualLabel,
+            labeledRow("檔案名稱：", control: manualNameField),
+            manualPreviewRow,
+            quickLabel, notifyCheckbox,
+            labeledRow("路徑：", control: quickPathField),
+            labeledRow("預覽：", control: quickPreview),
+            quickButtons,
+            autoLabel, autoSaveCheckbox,
+            labeledRow("路徑：", control: autoPathField),
+            labeledRow("預覽：", control: autoPreview),
+            autoButtons,
             bottomRow
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
-        stack.setCustomSpacing(16, after: manualPreview)
+        stack.setCustomSpacing(16, after: manualPreviewRow)
         stack.setCustomSpacing(16, after: quickButtons)
         stack.setCustomSpacing(16, after: autoButtons)
         view = settingsPageView(wrapping: stack)
@@ -82,48 +97,58 @@ final class OutputSettingsViewController: NSViewController {
         return label
     }
 
-    private func fieldRow(title: String, field: NSTextField, value: String) -> NSView {
+    /// 「右對齊 label（76pt）：控件」列；列寬統一 440——各列左右緣對齊（排版規格）。
+    private func labeledRow(_ title: String, control: NSView) -> NSView {
         let label = NSTextField(labelWithString: title)
-        label.setContentHuggingPriority(.required, for: .horizontal)
-        field.stringValue = value
-        field.lineBreakMode = .byTruncatingMiddle
-        field.delegate = self
-        field.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
-        let row = NSStackView(views: [label, field])
+        label.alignment = .right
+        label.widthAnchor.constraint(equalToConstant: 76).isActive = true
+        let row = NSStackView(views: [label, control])
         row.orientation = .horizontal
         row.spacing = 8
+        row.widthAnchor.constraint(equalToConstant: 440).isActive = true
         return row
     }
 
-    private func setupPreview(_ label: NSTextField) {
-        label.font = .systemFont(ofSize: 11)
-        label.textColor = .secondaryLabelColor
-        label.lineBreakMode = .byTruncatingMiddle
-        label.widthAnchor.constraint(lessThanOrEqualToConstant: 440).isActive = true
+    /// 內容靠右的列（資料夾按鈕）。
+    private func trailingRow(_ views: [NSView]) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 8
+        for v in views { row.addView(v, in: .trailing) }
+        row.widthAnchor.constraint(equalToConstant: 440).isActive = true
+        return row
     }
 
-    private func folderButtons(open: Selector, change: Selector) -> NSStackView {
+    private func setupField(_ field: NSTextField, value: String) {
+        field.stringValue = value
+        field.lineBreakMode = .byTruncatingMiddle
+        field.delegate = self
+    }
+
+    /// 預覽＝唯讀欄位樣式（與輸入欄同寬對齊；可選取複製）。
+    private func setupPreview(_ field: NSTextField) {
+        field.isEditable = false
+        field.isSelectable = true
+        field.isBezeled = true
+        field.textColor = .secondaryLabelColor
+        field.lineBreakMode = .byTruncatingMiddle
+    }
+
+    private func folderButtons(open: Selector, change: Selector) -> [NSView] {
         let openButton = NSButton(title: "開啟資料夾", target: self, action: open)
         openButton.bezelStyle = .rounded
         openButton.controlSize = .small
         let changeButton = NSButton(title: "變更資料夾…", target: self, action: change)
         changeButton.bezelStyle = .rounded
         changeButton.controlSize = .small
-        let row = NSStackView(views: [openButton, changeButton])
-        row.orientation = .horizontal
-        row.spacing = 8
-        return row
-    }
-
-    private func controls(in row: NSStackView) -> [NSControl] {
-        row.arrangedSubviews.compactMap { $0 as? NSControl }
+        return [openButton, changeButton]
     }
 
     // MARK: - 預覽
 
-    /// 樣板 → 預覽文字（即時展開；結尾非 .png 加補正提示，spec）。
+    /// 樣板 → 預覽值（即時展開；結尾非 .png 加補正提示）。「預覽：」由 label 顯示，不再前綴。
     private func previewText(for template: String) -> String {
-        var text = "預覽：" + FilenameTemplate.expand(template, date: Date(), vars: previewVars)
+        var text = FilenameTemplate.expand(template, date: Date(), vars: previewVars)
         if !FilenameTemplate.hasPNGExtension(template) { text += "（將自動補 .png）" }
         return text
     }
@@ -141,7 +166,7 @@ final class OutputSettingsViewController: NSViewController {
         autoPreview.stringValue = previewText(for: auto)
     }
 
-    // MARK: - Actions
+    // MARK: - Actions（邏輯與改版前等價）
 
     @objc private func notifyToggled() {
         AppSettings.saveNotificationEnabled = (notifyCheckbox.state == .on)
@@ -155,7 +180,6 @@ final class OutputSettingsViewController: NSViewController {
     private func updateAutoSaveEnabledState() {
         let on = AppSettings.autoSaveEnabled
         for control in autoSaveControls { control.isEnabled = on }
-        autoPreview.textColor = on ? .secondaryLabelColor : .tertiaryLabelColor
     }
 
     /// 樣板展開後的目錄段（絕對路徑；日期 token 用當下時間）。
@@ -211,25 +235,11 @@ final class OutputSettingsViewController: NSViewController {
     }
 
     @objc private func showNamingRules() {
-        let alert = NSAlert()
-        alert.messageText = "命名規則"
-        alert.informativeText = """
-        日期時間寫在 $ $ 內，例：$yyyy-MM-dd HH.mm.ss$
-
-        d / dd　日（1-31／01-31）　　ddd / dddd　星期（Sun／Sunday）
-        M / MM　月（1-12／01-12）　　MMM / MMMM　月（Jul／July）
-        yy / yyyy　年（26／2026）　　H / HH　時（0-23／00-23）
-        m / mm　分　　s / ss　秒
-        z / zzz　毫秒（0-999／000-999）　　t　時區（如 +0800）
-
-        變數：%os%＝系統版本、%computername%＝電腦名稱、
-        %username%＝使用者名稱、%title%＝截圖前的使用中視窗標題、
-        %title:20%＝標題截前 20 字。
-
-        非法字元 | : * ? < > 會自動換成 -；路徑中的 / 是資料夾分隔。
-        目前僅支援 .png（樣板結尾不是 .png 會自動補上）。
-        """
-        alert.runModal()
+        let controller = namingRules ?? NamingRulesWindowController()
+        namingRules = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func resetOutput() {
