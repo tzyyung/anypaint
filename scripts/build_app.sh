@@ -7,9 +7,10 @@ CONFIG="${1:-debug}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-APP_NAME="anypaint"
+APP_NAME="anypaint"           # 執行檔名／CFBundleExecutable（不動）
+DISPLAY_NAME="任截圖"          # .app 磁碟檔名／Finder 顯示（顯示名）
 BUNDLE_ID="com.aidaris.anypaint"
-APP_DIR="$ROOT/$APP_NAME.app"
+APP_DIR="$ROOT/$DISPLAY_NAME.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
 RES_DIR="$CONTENTS/Resources"

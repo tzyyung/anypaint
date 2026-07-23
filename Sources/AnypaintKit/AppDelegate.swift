@@ -176,7 +176,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showPermissionAlert() {
         let alert = NSAlert()
         alert.messageText = "需要螢幕錄製權限"
-        alert.informativeText = "請到「系統設定 → 隱私權與安全性 → 螢幕錄製」允許 anypaint，然後再按一次截圖快鍵。"
+        alert.informativeText = "請到「系統設定 → 隱私權與安全性 → 螢幕錄製」允許 任截圖，然後再按一次截圖快鍵。"
         alert.addButton(withTitle: "開啟系統設定")
         alert.addButton(withTitle: "取消")
         if alert.runModal() == .alertFirstButtonReturn {
