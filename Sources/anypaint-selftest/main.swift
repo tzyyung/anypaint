@@ -8,7 +8,13 @@ import AppKit
 // 任一失敗會印出並以非零狀態結束（方便日後接 CI）。
 
 // 斷言工具移至 TestHarness.swift（T.*）；保留同名墊片讓既有測試零改動。
-var failures: Int {
+// .v6 下 top-level var 隱式 @MainActor（SE-0343），本檔中段 11 處測試 helper 都是
+// nonisolated top-level 函式，直接對 @MainActor var 做 += 會報
+// "main actor-isolated var 'failures' can not be mutated from a nonisolated context"。
+// 用 nonisolated 標記這個 computed property shim（本身只是轉呼叫 T.failures，
+// 真正的狀態已在 TestHarness.swift 用 nonisolated(unsafe) 處理過併發豁免），
+// 讓 shim 本身不落地在 MainActor 隔離域，呼叫端維持原樣不必逐一改動。
+nonisolated var failures: Int {
     get { T.failures }
     set { T.failures = newValue }
 }
