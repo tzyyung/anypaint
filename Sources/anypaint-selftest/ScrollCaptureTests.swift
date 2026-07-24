@@ -168,22 +168,15 @@ func staticBandTests() {
               StaticBandDetector.detect(frameA: a5, frameB: b5, dy: 200),
               BandInsets(top: 0, bottom: 6, left: 1, right: 0))
     // 整張純色：兩格逐位元組完全相同（同一個 LumaPlane 實例）。
-    // 【已知 brief 與演算法之間的落差，非本次實作偏離，記錄於 task-4-report.md 的 concerns】：
-    // brief 註解原意是「頂帶掃描立刻吃滿 cap、內容列判定失敗（r1-r0 > h/3 防呆觸發）→ nil」，
-    // 但代入 brief 給定的封頂公式可證明此防呆在 top/bottom 皆封頂情形下數學上永遠不會觸發：
-    // capTB = min(h/5,160)；h≤800 時 capTB=h/5，兩側封頂後剩餘內容列 = h-2*(h/5) = 3h/5，
-    // 恆大於 h/3（3/5 > 1/3 對任何 h 成立）；h>800 時 capTB=160，剩餘 = h-320，
-    // 要讓其 ≤ h/3 需 h ≤ 480，與 h>800 矛盾。故此防呆對任何 h 都無法由「雙側封頂」觸發，
-    // 純色頁不會被防呆擋下，而是直接回傳封頂後的 BandInsets(140,140,100,100)
-    // （h=700→capTB=min(140,160)=140，w=600→capLR=min(100,120)=100）。
-    // 這代表檔案頂端文件註解宣稱的「整張純色頁不可能被誤判成全靜態」在目前封頂公式下不成立，
-    // 是 brief 演算法本身的既有落差，不是本次實作的偏離——依規範「不許為了讓測試綠而改演算法」，
-    // 這裡只調整期望值以如實反映 brief 演算法的真實行為，不動 StaticBandDetector 的邏輯，
-    // 並在報告 concerns 中標記待 spec owner 決定是否要加強防呆。
+    // 【控制者裁決 Task 4：加退化守門，修回 brief 原意】：
+    // r1-r0 > h/3 防呆在「上下帶皆封頂」時數學上不可達（3h/5 恆大於 h/3），若無額外守門，
+    // 整張純色頁會誤回滿頂 BandInsets(140,140,100,100)。StaticBandDetector.detect 已補上
+    // 「四向同時封頂 → nil」的退化守門（真實頁面不會四向全頂到 cap，只有純色/全靜態頁會），
+    // 堵住這個數學缺口，使此案例如 spec 原意般回傳 nil（「無法判定」）。
     let solid = LumaPlane(SyntheticPage.solid(width: 600, height: 700, gray: 200))
-    T.checkEq("staticband: 純色頁 → 封頂全滿（非 nil，見上方註解，brief 防呆對此 h 數學上不可觸發）",
+    T.checkEq("staticband: 純色頁 → nil（四向全頂退化守門，見上方註解）",
               StaticBandDetector.detect(frameA: solid, frameB: solid, dy: 200),
-              BandInsets(top: 140, bottom: 140, left: 100, right: 100))
+              nil)
     // 封頂：塞一個 300px 的「假頂帶」也只回報 cap（min(700/5,160)=140）
     let (a6, b6) = framePair(top: 300, dy: 350)
     T.checkEq("staticband: 頂帶封頂 140", StaticBandDetector.detect(frameA: a6, frameB: b6, dy: 350)?.top ?? -1, 140)

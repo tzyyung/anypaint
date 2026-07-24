@@ -37,6 +37,11 @@ public enum StaticBandDetector {
         var right = 0
         while right < capLR, colDiff(w - 1 - right) < colDiffThreshold { right += 1 }
 
+        // 退化守門：四向同時打到封頂＝畫面缺乏可鑑別的捲動內容（純色/全靜態頁），
+        // 判定不可信回 nil。真實頁面不會四向全頂——這補上 r1-r0 > h/3 防呆
+        // 在「上下皆封頂」時數學不可達的缺口（3h/5 恆 > h/3，實作審查發現）。
+        if top >= capTB, bottom >= capTB, left >= capLR, right >= capLR { return nil }
+
         // 內容區防呆：扣完帶後低於最小寬/高 → 判定不可信（spec §7.2：丟格＋提示由上層做）
         guard w - left - right >= w / 5, (r1 - r0) >= 240 || (r1 - r0) >= h / 2 else { return nil }
         return BandInsets(top: top, bottom: bottom, left: left, right: right)
