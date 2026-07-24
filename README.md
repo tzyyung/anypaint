@@ -51,6 +51,7 @@ bash scripts/install.sh
 
 ## 開發
 ```bash
+bash scripts/menu.sh              # 互動選單（建置／安裝／測試／清理／簽章／移除）
 swift build                       # 建置
 swift run anypaint                # 直接跑
 swift run anypaint-selftest       # 純邏輯自我測試
