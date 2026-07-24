@@ -113,9 +113,10 @@ public final class ScrollHUDController: NSObject {
 
     private func tone(for m: GuidanceMessage) -> NSColor {
         switch m {
-        case .slowDown, .hardToMatch, .mouseOutside: return .systemYellow
+        case .slowDown, .hardToMatch: return .systemYellow
         case .gapNotStitched: return .systemRed
-        case .progress, .backscrollTrimming, .backscrollAtOrigin, .bottomProbing, .deadReckoning:
+        // mouseOutside 是「提醒」級（spec §10），與 backscroll/deadReckoning 同級＝中性白，非警告黃
+        case .progress, .mouseOutside, .backscrollTrimming, .backscrollAtOrigin, .bottomProbing, .deadReckoning:
             return .white
         }
     }
