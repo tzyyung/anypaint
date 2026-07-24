@@ -993,4 +993,6 @@ check("sideRect 底部超界 clamp",
                                size: CGSize(width: 320, height: 240), in: srScreen),
       CGRect(x: 308, y: 0, width: 320, height: 240))
 
+runScrollCaptureTests()
+
 T.finish()
