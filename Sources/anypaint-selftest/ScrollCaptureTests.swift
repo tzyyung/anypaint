@@ -26,6 +26,7 @@ func runScrollCaptureTests() {
     scrollMatcherTests()
     phaseCorrelationTests()
     scrollStitcherTests()
+    scrollGuidanceTests()
 }
 
 /// 量測 Vision registration 回傳的 ty 單位：
@@ -385,4 +386,26 @@ func scrollStitcherTests() {
     T.checkEq("stitcher: 成功 append 計數", stf.appendedFrameCount, 2)
     T.checkTrue("stitcher: 超限拒收", !stf.append(contentFrame: SyntheticPage.window(page, y: 500, height: h), dy: 500))
     T.checkEq("stitcher: 拒收不計數", stf.appendedFrameCount, 2)
+}
+
+func scrollGuidanceTests() {
+    var g = ScrollGuidance(selectionHeight: 800)
+    T.checkEq("guidance: 正常 → progress", g.frameAccepted(dy: 200, totalPx: 1000), GuidanceMessage.progress(px: 1000))
+    T.checkEq("guidance: dy>70% → slowDown", g.frameAccepted(dy: 561, totalPx: 1561), GuidanceMessage.slowDown)
+    // 失敗計數：1、2 次靜默，3 次 hardToMatch
+    T.checkEq("guidance: 失敗1 靜默", g.frameDropped(), nil as GuidanceMessage?)
+    T.checkEq("guidance: 失敗2 靜默", g.frameDropped(), nil as GuidanceMessage?)
+    T.checkEq("guidance: 失敗3 → hardToMatch", g.frameDropped(), GuidanceMessage.hardToMatch)
+    // 複合訊號：失敗中＋滾輪累計 > 選區高
+    T.checkEq("guidance: 複合訊號 gapNotStitched", g.wheelAccumulated(sinceLastAccept: 900), GuidanceMessage.gapNotStitched)
+    T.checkEq("guidance: 滾輪累計不足 → nil", g.wheelAccumulated(sinceLastAccept: 700), nil as GuidanceMessage?)
+    // 接受格重置失敗計數
+    _ = g.frameAccepted(dy: 100, totalPx: 2000)
+    T.checkEq("guidance: 接受後失敗計數歸零", g.consecutiveFailures, 0)
+    T.checkEq("guidance: 歸零後複合訊號不觸發", g.wheelAccumulated(sinceLastAccept: 900), nil as GuidanceMessage?)
+    // 回捲格不計失敗（spec §10 計數器語意）
+    _ = g.frameDropped(); _ = g.frameDropped()
+    _ = g.frameDroppedBackscroll()
+    T.checkEq("guidance: 回捲格不進失敗計數", g.consecutiveFailures, 2)
+    T.checkEq("guidance: 回捲訊息", g.frameDroppedBackscroll(), GuidanceMessage.backscrollTrimming)
 }
