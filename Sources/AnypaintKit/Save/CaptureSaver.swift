@@ -1,4 +1,6 @@
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 
 /// 截圖存檔：檔名規則、碰撞遞增、PNG 寫檔。
 /// 檔名與碰撞是純函式（exists 注入），selftest 可測；寫檔部分 headless 也可測。
@@ -36,5 +38,15 @@ public enum CaptureSaver {
             throw CocoaError(.fileWriteUnknown)
         }
         try png.write(to: url)
+    }
+
+    /// CGImage 直寫 PNG——長圖（可達 30000px）不得經 NSImage→tiffRepresentation
+    /// （該鏈同時存在 3 份拷貝，峰值近 GB；spec §8）。
+    public static func writePNG(cgImage: CGImage, to url: URL) throws {
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        CGImageDestinationAddImage(dest, cgImage, nil)
+        guard CGImageDestinationFinalize(dest) else { throw CocoaError(.fileWriteUnknown) }
     }
 }
