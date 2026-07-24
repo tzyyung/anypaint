@@ -7,4 +7,6 @@ public extension KeyboardShortcuts.Name {
     static let capture = Self("capture", default: .init(.a, modifiers: [.command, .shift]))
     /// 貼圖（預設 ⌘⇧V）
     static let pin = Self("pin", default: .init(.v, modifiers: [.command, .shift]))
+    /// 滾動截圖（預設 ⌘⇧X——⌘⇧S 會撞自家框選「另存為」與系統 Duplicate，spec D1）
+    static let scrollCapture = Self("scrollCapture", default: .init(.x, modifiers: [.command, .shift]))
 }

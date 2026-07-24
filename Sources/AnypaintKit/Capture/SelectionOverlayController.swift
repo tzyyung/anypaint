@@ -1,4 +1,5 @@
 import AppKit
+import KeyboardShortcuts
 
 // MARK: - Overlay 視窗
 
@@ -67,6 +68,9 @@ final class SelectionOverlayController {
         self.onSaveAs = onSaveAs
         self.onPin = onPin
         self.onCancel = onCancel
+        // 反向互斥（spec §9.1）：凍結框選中擋 ⌘⇧X。AppDelegate.beginScrollCapture 的
+        // .freeze guard 已守一層，這裡快鍵層再 disable 是雙保險（spec 明確要求兩者都做）。
+        KeyboardShortcuts.disable(.scrollCapture)
 
         NSApp.activate(ignoringOtherApps: true)
         for snapshot in snapshots {
@@ -301,6 +305,7 @@ final class SelectionOverlayController {
         onPin = nil
         onCancel = nil
         isActive = false
+        KeyboardShortcuts.enable(.scrollCapture)   // 反向互斥解除（spec §9.1）
     }
 }
 

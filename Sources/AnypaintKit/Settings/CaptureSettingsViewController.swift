@@ -3,6 +3,8 @@ import AppKit
 /// 截圖：框選相關（看門狗）。邏輯自 SettingsWindowController 純搬移。
 final class CaptureSettingsViewController: NSViewController {
     private let watchdogPopup = NSPopUpButton()
+    private let scrollWatchdogPopup = NSPopUpButton()
+    private let scrollMaxHeightPopup = NSPopUpButton()
 
     override func loadView() {
         let watchdogHint = NSTextField(labelWithString:
@@ -13,7 +15,16 @@ final class CaptureSettingsViewController: NSViewController {
         watchdogHint.font = .systemFont(ofSize: 11)
         watchdogHint.textColor = .secondaryLabelColor
 
-        let stack = NSStackView(views: [buildWatchdogRow(), watchdogHint])
+        let scrollHint = NSTextField(labelWithString:
+            "滾動截圖 capturing 期間讀內容較久屬正常，看門狗獨立於上方框選看門狗；「關閉」時仍以長度上限與連續匹配失敗自動收工兜底。")
+        scrollHint.usesSingleLineMode = false
+        scrollHint.cell?.wraps = true
+        scrollHint.preferredMaxLayoutWidth = 420
+        scrollHint.font = .systemFont(ofSize: 11)
+        scrollHint.textColor = .secondaryLabelColor
+
+        let stack = NSStackView(views: [buildWatchdogRow(), watchdogHint,
+                                        buildScrollWatchdogRow(), buildScrollMaxHeightRow(), scrollHint])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -24,7 +35,7 @@ final class CaptureSettingsViewController: NSViewController {
         let label = NSTextField(labelWithString: "自動取消：")
         label.alignment = .right
         label.setContentHuggingPriority(.required, for: .horizontal)
-        label.widthAnchor.constraint(equalToConstant: 76).isActive = true
+        label.widthAnchor.constraint(equalToConstant: 92).isActive = true   // 92：容納最長「滾動看門狗：」不截字
 
         for seconds in AppSettings.watchdogOptions {
             let title = seconds == 0 ? "關閉" : "\(Int(seconds) / 60) 分鐘"
@@ -48,5 +59,64 @@ final class CaptureSettingsViewController: NSViewController {
 
     @objc private func watchdogChanged() {
         AppSettings.overlayWatchdogSeconds = Double(watchdogPopup.selectedTag())
+    }
+
+    /// 滾動截圖 capturing 期間看門狗（沿用上方框選看門狗下拉的建構模式）。
+    private func buildScrollWatchdogRow() -> NSView {
+        let label = NSTextField(labelWithString: "滾動看門狗：")
+        label.alignment = .right
+        label.setContentHuggingPriority(.required, for: .horizontal)
+        label.widthAnchor.constraint(equalToConstant: 92).isActive = true   // 92：容納最長「滾動看門狗：」不截字
+
+        for seconds in AppSettings.scrollWatchdogOptions {
+            let title = seconds == 0 ? "關閉" : "\(Int(seconds) / 60) 分鐘"
+            scrollWatchdogPopup.addItem(withTitle: title)
+            scrollWatchdogPopup.lastItem?.tag = Int(seconds)
+        }
+        let current = AppSettings.scrollWatchdogSeconds
+        let nearest = AppSettings.scrollWatchdogOptions.min {
+            abs($0 - current) < abs($1 - current)
+        } ?? 300
+        _ = scrollWatchdogPopup.selectItem(withTag: Int(nearest))
+        scrollWatchdogPopup.target = self
+        scrollWatchdogPopup.action = #selector(scrollWatchdogChanged)
+
+        let row = NSStackView(views: [label, scrollWatchdogPopup])
+        row.orientation = .horizontal
+        row.spacing = 8
+        return row
+    }
+
+    @objc private func scrollWatchdogChanged() {
+        AppSettings.scrollWatchdogSeconds = Double(scrollWatchdogPopup.selectedTag())
+    }
+
+    /// 長圖高度上限（spec §7.5）。
+    private func buildScrollMaxHeightRow() -> NSView {
+        let label = NSTextField(labelWithString: "長圖上限：")
+        label.alignment = .right
+        label.setContentHuggingPriority(.required, for: .horizontal)
+        label.widthAnchor.constraint(equalToConstant: 92).isActive = true   // 92：容納最長「滾動看門狗：」不截字
+
+        for px in AppSettings.scrollMaxHeightOptions {
+            scrollMaxHeightPopup.addItem(withTitle: "\(px) px")
+            scrollMaxHeightPopup.lastItem?.tag = px
+        }
+        let current = AppSettings.scrollMaxHeightPx
+        let nearest = AppSettings.scrollMaxHeightOptions.min {
+            abs($0 - current) < abs($1 - current)
+        } ?? 30000
+        _ = scrollMaxHeightPopup.selectItem(withTag: nearest)
+        scrollMaxHeightPopup.target = self
+        scrollMaxHeightPopup.action = #selector(scrollMaxHeightChanged)
+
+        let row = NSStackView(views: [label, scrollMaxHeightPopup])
+        row.orientation = .horizontal
+        row.spacing = 8
+        return row
+    }
+
+    @objc private func scrollMaxHeightChanged() {
+        AppSettings.scrollMaxHeightPx = scrollMaxHeightPopup.selectedTag()
     }
 }

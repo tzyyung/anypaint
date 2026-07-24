@@ -51,6 +51,7 @@ final class ControlSettingsViewController: NSViewController {
         shortcutHint.textColor = .secondaryLabelColor
         let stack = NSStackView(views: [shortcutRow(title: "截圖：", name: .capture),
                                         shortcutRow(title: "貼圖：", name: .pin),
+                                        shortcutRow(title: "滾動截圖：", name: .scrollCapture),
                                         shortcutHint])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -62,7 +63,7 @@ final class ControlSettingsViewController: NSViewController {
         let label = NSTextField(labelWithString: title)
         label.alignment = .right
         label.setContentHuggingPriority(.required, for: .horizontal)
-        label.widthAnchor.constraint(equalToConstant: 76).isActive = true
+        label.widthAnchor.constraint(equalToConstant: 92).isActive = true   // 92：容納最長「滾動截圖：」不截字
 
         let recorder = KeyboardShortcuts.RecorderCocoa(for: name)
 

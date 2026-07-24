@@ -20,10 +20,15 @@ public final class PinboardService {
     /// 檔案 URL 是它們的降級路徑——writeObjects 允許同時放多個 writer，各自以自己的型別
     /// 註冊，讀端揀自己認得的那個（已查證 NSPasteboard.writeObjects 官方文件）。
     /// 暫存檔放系統暫存目錄，session 結束不主動清（系統會清）。
-    public func copyLarge(cgImage: CGImage) {
+    ///
+    /// - Parameter scale: 擷取時的 backingScaleFactor。cgImage 是擷取像素；NSImage 的 `size`
+    ///   是點數（point）——Retina（scale=2）下若直接拿像素當點數會讓貼到其他 app 的圖顯示成
+    ///   兩倍大（對齊 SelectionView.currentCroppedImage 的既有正解：size = 像素 / scale）。
+    public func copyLarge(cgImage: CGImage, scale: CGFloat) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        let pointSize = NSSize(width: CGFloat(cgImage.width) / scale, height: CGFloat(cgImage.height) / scale)
+        let image = NSImage(cgImage: cgImage, size: pointSize)
         var items: [NSPasteboardWriting] = [image]
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("anypaint-scroll-\(ProcessInfo.processInfo.globallyUniqueString).png")

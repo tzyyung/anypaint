@@ -125,6 +125,12 @@ public enum AppSettings {
     private static let scrollWatchdogKey = "scrollWatchdogSeconds"
     private static let scrollMaxHeightKey = "scrollMaxHeightPx"
 
+    /// 設定頁滾動看門狗下拉選項：0＝關閉，其餘為秒數。
+    public static let scrollWatchdogOptions: [Double] = [0, 60, 300, 600, 1800]
+
+    /// 設定頁長圖高度上限下拉選項（px）。
+    public static let scrollMaxHeightOptions: [Int] = [10000, 30000, 50000]
+
     /// capturing 期間看門狗（獨立於框選看門狗；讀內容 2 分鐘是正常行為——spec §9.3）。
     /// 0 = 關閉（以長度上限＋連續失敗自動收工為保底）；預設 300。
     public static var scrollWatchdogSeconds: Double {

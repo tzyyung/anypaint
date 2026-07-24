@@ -9,14 +9,18 @@ final class ScrollPreviewWindow: NSWindow {
     private let vars: [String: String]
     private let output: CaptureOutputService
     private let pinboard: PinboardService
+    /// 擷取當下的 backingScaleFactor（session 未回傳實際擷取 scale，近似用主螢幕；見
+    /// ScrollPreviewWindowController.present 的說明）。用來把像素換算成點數（Finding #1）。
+    private let scale: CGFloat
     weak var controller: ScrollPreviewWindowController?
 
     init(cgImage: CGImage, vars: [String: String],
-         output: CaptureOutputService, pinboard: PinboardService, contentRect: NSRect) {
+         output: CaptureOutputService, pinboard: PinboardService, scale: CGFloat, contentRect: NSRect) {
         self.cgImage = cgImage
         self.vars = vars
         self.output = output
         self.pinboard = pinboard
+        self.scale = scale
         super.init(
             contentRect: contentRect,
             styleMask: [.titled, .closable, .resizable],
@@ -42,8 +46,12 @@ final class ScrollPreviewWindow: NSWindow {
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
         let imageView = NSImageView()
+        // size 除 scale（Finding #1 對齊 SelectionView 正解）：顯示比例本身不受影響
+        // （imageView 之後靠 Auto Layout 依 aspect 重算 frame），但為一致性一併改，避免
+        // NSImage.size 與實際擷取像素的點數換算不一致造成日後誤用。
         imageView.image = NSImage(cgImage: cgImage,
-                                   size: NSSize(width: cgImage.width, height: cgImage.height))
+                                   size: NSSize(width: CGFloat(cgImage.width) / scale,
+                                                height: CGFloat(cgImage.height) / scale))
         // 只縮小不放大（已查證 NSImageScaling 官方文件）：小圖不強行拉大失真。
         imageView.imageScaling = .scaleProportionallyDown
         imageView.translatesAutoresizingMaskIntoConstraints = false
@@ -93,7 +101,7 @@ final class ScrollPreviewWindow: NSWindow {
 
     /// 複製：影像＋暫存 PNG 檔案 URL 雙型別（大圖降級，spec §8）；不關窗。
     @objc private func copyAction() {
-        pinboard.copyLarge(cgImage: cgImage)
+        pinboard.copyLarge(cgImage: cgImage, scale: scale)
     }
 
     /// 存檔：快速儲存樣板路徑直寫＋掛自動儲存；不關窗。
@@ -145,7 +153,8 @@ public final class ScrollPreviewWindowController {
     public func present(image: CGImage, vars: [String: String]) {
         let screen = NSScreen.main
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        // preview 視窗顯示用（非擷取本身），用主螢幕 backingScaleFactor 換算點數合理。
+        // session 未回傳實際擷取時的 backingScaleFactor，用主螢幕近似（Finding #1：
+        // 這個 scale 同時用於複製到剪貼簿的 NSImage.size 換算，見 PinboardService.copyLarge）。
         let scale = screen?.backingScaleFactor ?? 2.0
         let width = min(CGFloat(image.width) / scale + 40, visible.width * 0.6)
         let height = visible.height * 0.8
@@ -153,7 +162,7 @@ public final class ScrollPreviewWindowController {
 
         let window = ScrollPreviewWindow(cgImage: image, vars: vars,
                                           output: output, pinboard: pinboard,
-                                          contentRect: contentRect)
+                                          scale: scale, contentRect: contentRect)
         window.controller = self
         windows.append(window)
         window.center()

@@ -4,6 +4,10 @@ import UniformTypeIdentifiers
 
 /// 應用協調者：組裝各模組、註冊快鍵、串起截圖與貼圖流程。
 /// 自己不做底層細節，只負責「誰在什麼時候呼叫誰」。
+/// @MainActor：ScrollCaptureSession（Task 12）與 ScrollPreviewWindowController（Task 13）都是
+/// @MainActor-isolated 型別，這裡的 stored property 初始化與呼叫都需要在 MainActor context 下
+/// 執行——AppDelegate 本就全程跑在主執行緒（NSApplicationDelegate），標註只是讓編譯器認可既有事實。
+@MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let menuBar = MenuBarController()
     private let capturer = ScreenCapturer()
@@ -16,7 +20,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     // 同步防重入旗標：擷取是 async，這個旗標在按下當下就設，擋住連按空窗期。
     private var captureInFlight = false
 
+    private let scrollSession = ScrollCaptureSession()
+    private var previewController: ScrollPreviewWindowController?
+
     private var settingsWindowController: SettingsWindowController?
+
+    /// 三入口互斥（spec §9.1）：任一 capture mode active 時其他入口 guard-return。
+    /// preview 不佔 mode（session 已結束，開著可以再截）。
+    private enum ActiveMode { case none, freeze, scroll }
+    private var activeMode: ActiveMode {
+        if overlayController.isActive || captureInFlight { return .freeze }
+        if scrollSession.isActive { return .scroll }
+        return .none
+    }
 
     public override init() { super.init() }
 
@@ -24,17 +40,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // 選單列動作
         menuBar.onCapture = { [weak self] in self?.beginCapture() }
         menuBar.onPin = { [weak self] in self?.pinFromClipboard() }
+        menuBar.onScrollCapture = { [weak self] in self?.beginScrollCapture() }
         menuBar.onCloseAllPins = { [weak self] in self?.pinController.closeAll() }
         menuBar.onOpenSettings = { [weak self] in self?.openSettings() }
 
         // 全域快鍵（可在設定頁更改；底層為 Carbon，免輔助使用權限）
         KeyboardShortcuts.onKeyDown(for: .capture) { [weak self] in self?.beginCapture() }
         KeyboardShortcuts.onKeyDown(for: .pin) { [weak self] in self?.pinFromClipboard() }
+        KeyboardShortcuts.onKeyDown(for: .scrollCapture) { [weak self] in self?.beginScrollCapture() }
     }
 
     // MARK: - 截圖：凍結 → 框選 → 複製到剪貼簿
 
     private func beginCapture() {
+        guard !scrollSession.isActive else { return }   // 滾動中不疊凍結（spec §9.1）
         // 已在框選中 → 再按一次截圖快鍵視為「取消/逃生」。
         if overlayController.isActive {
             overlayController.cancelIfActive()
@@ -87,11 +106,36 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 貼圖：讀剪貼簿 → 置頂浮動視窗
 
     private func pinFromClipboard() {
+        guard !scrollSession.isActive else { return }   // 滾動中不疊貼圖（spec §9.1）
         guard let image = pinboard.imageFromPasteboard() else {
             NSSound.beep()
             return
         }
         pinController.pin(image: image, at: NSEvent.mouseLocation)
+    }
+
+    // MARK: - 滾動截圖：拉框 → 手捲拼接 → 預覽
+
+    private func beginScrollCapture() {
+        switch activeMode {
+        case .scroll: scrollSession.cancelIfActive(); return   // 再按 = 取消（保證退出，spec §6）
+        case .freeze: return                                    // 凍結框選中 → 不疊加
+        case .none: break
+        }
+        KeyboardShortcuts.disable(.capture, .pin)               // 滾動中擋另外兩入口（spec §9.1）
+        menuBar.setScrollCapturing(true)
+        let vars = CaptureVars.makeVars(title: CaptureVars.currentFrontTitle())
+        scrollSession.onFinished = { [weak self] image in
+            guard let self else { return }
+            KeyboardShortcuts.enable(.capture, .pin)            // 恢復點集中在單一出口（spec §9.1）
+            self.menuBar.setScrollCapturing(false)
+            guard let image else { return }                     // 取消或 0 格 → 靜默（spec §3）
+            if self.previewController == nil {
+                self.previewController = ScrollPreviewWindowController(output: self.output, pinboard: self.pinboard)
+            }
+            self.previewController?.present(image: image, vars: vars)
+        }
+        scrollSession.begin()
     }
 
     // MARK: - 設定
