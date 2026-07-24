@@ -10,6 +10,7 @@ public final class ScrollFrameSource: NSObject {
     public private(set) var lastFrameAt: TimeInterval = 0
 
     private var stream: SCStream?
+    private var pendingStop = false
     // nonisolated：handler 在 sampleQueue（非 MainActor）上直接讀取；CIContext 本身執行緒安全，
     // 但 @MainActor class 的 stored property 預設吃 MainActor 隔離，nonisolated context 存取不了——
     // 移出隔離讓 delegate callback 能直接用（brief 註記的編譯器限制，行為不變）。
@@ -17,6 +18,7 @@ public final class ScrollFrameSource: NSObject {
     private let sampleQueue = DispatchQueue(label: "anypaint.scroll.frames")
 
     public func start(selectionGlobal: CGRect, screen: NSScreen) async throws {
+        pendingStop = false
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         guard let displayID = screen.deviceDescription[key] as? CGDirectDisplayID,
@@ -42,10 +44,16 @@ public final class ScrollFrameSource: NSObject {
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
         try await stream.startCapture()
+        if pendingStop {
+            // start 的 await 期間被 stop()——立即收掉這條剛啟動的 stream，不外洩
+            try? await stream.stopCapture()
+            return
+        }
         self.stream = stream
     }
 
     public func stop() async {
+        pendingStop = true
         guard let stream else { return }
         self.stream = nil
         try? await stream.stopCapture()
