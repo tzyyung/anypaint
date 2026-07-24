@@ -7,10 +7,10 @@ CONFIG="${1:-debug}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-APP_NAME="anypaint"           # 執行檔名／CFBundleExecutable（不動）
-DISPLAY_NAME="anypaint"          # .app 磁碟檔名／Finder 顯示（顯示名）
+APP_NAME="anypaint"           # 執行檔名／CFBundleExecutable／.app 檔名
 BUNDLE_ID="com.aidaris.anypaint"
-APP_DIR="$ROOT/$DISPLAY_NAME.app"
+BUILD_DIR="$ROOT/build.noindex"   # 目錄名以 .noindex 結尾＝Spotlight 明確略過（避免 dev 產物與 /Applications 安裝版都被搜到）
+APP_DIR="$BUILD_DIR/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
 RES_DIR="$CONTENTS/Resources"
@@ -24,7 +24,8 @@ if [[ ! -f "$BIN_PATH" ]]; then
   exit 1
 fi
 
-echo "==> 組裝 $DISPLAY_NAME.app"
+echo "==> 組裝 $APP_NAME.app"
+mkdir -p "$BUILD_DIR"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RES_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"

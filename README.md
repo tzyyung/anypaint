@@ -54,7 +54,7 @@ bash scripts/install.sh
 swift build                       # 建置
 swift run anypaint                # 直接跑
 swift run anypaint-selftest       # 純邏輯自我測試
-./scripts/build_app.sh release    # 組 .app bundle 並簽章
+./scripts/build_app.sh release    # 組 .app bundle 並簽章（產出 build.noindex/anypaint.app）
 ```
 
 架構：`Sources/AnypaintKit/`（核心模組）、`Sources/anypaint/`（進入點）、`Sources/anypaint-selftest/`（測試執行檔）。KeyboardShortcuts 為本機 vendored（`vendored/KeyboardShortcuts`，patch 過資源查找）。設計文件見 `docs/superpowers/specs/`。

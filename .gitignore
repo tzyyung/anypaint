@@ -4,6 +4,7 @@
 *.xcodeproj
 DerivedData/
 build/
+build.noindex/
 *.app/
 *.pem
 *.p12

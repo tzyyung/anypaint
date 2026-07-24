@@ -53,7 +53,7 @@ fi
 pkill -x anypaint 2>/dev/null || true
 sleep 1
 rm -rf "$DST/$DISPLAY_NAME.app"
-cp -R "$ROOT/$DISPLAY_NAME.app" "$DST/"
+cp -R "$ROOT/build.noindex/$DISPLAY_NAME.app" "$DST/"
 
 echo ""
 echo "✅ 已安裝到 $DST/$DISPLAY_NAME.app"
