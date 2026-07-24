@@ -119,4 +119,28 @@ public enum AppSettings {
         get { UserDefaults.standard.integer(forKey: settingsTabKey) }
         set { UserDefaults.standard.set(newValue, forKey: settingsTabKey) }
     }
+
+    // MARK: - 滾動截圖
+
+    private static let scrollWatchdogKey = "scrollWatchdogSeconds"
+    private static let scrollMaxHeightKey = "scrollMaxHeightPx"
+
+    /// capturing 期間看門狗（獨立於框選看門狗；讀內容 2 分鐘是正常行為——spec §9.3）。
+    /// 0 = 關閉（以長度上限＋連續失敗自動收工為保底）；預設 300。
+    public static var scrollWatchdogSeconds: Double {
+        get {
+            guard let v = UserDefaults.standard.object(forKey: scrollWatchdogKey) as? Double else { return 300 }
+            return v <= 0 ? 0 : min(1800, max(60, v))
+        }
+        set { UserDefaults.standard.set(newValue, forKey: scrollWatchdogKey) }
+    }
+
+    /// 長圖高度上限 px（spec §7.5）。預設 30000。
+    public static var scrollMaxHeightPx: Int {
+        get {
+            let v = UserDefaults.standard.integer(forKey: scrollMaxHeightKey)
+            return v > 0 ? min(100_000, max(5000, v)) : 30000
+        }
+        set { UserDefaults.standard.set(newValue, forKey: scrollMaxHeightKey) }
+    }
 }
