@@ -41,8 +41,10 @@ public enum CaptureSaver {
     }
 
     /// CGImage 直寫 PNG——長圖（可達 30000px）不得經 NSImage→tiffRepresentation
-    /// （該鏈同時存在 3 份拷貝，峰值近 GB；spec §8）。
+    /// （該鏈同時存在 3 份拷貝，峰值近 GB；spec §8）。上層目錄不存在自動建立（與 NSImage 版對齊）。
     public static func writePNG(cgImage: CGImage, to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
             throw CocoaError(.fileWriteUnknown)
         }
