@@ -136,6 +136,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             self.previewController?.present(image: image, vars: vars)
         }
         scrollSession.begin()
+        // begin() 在無主螢幕時會靜默 no-op（onFinished 永不 fire）——
+        // 若沒真的進場就立刻把剛 disable 的快鍵/選單恢復，否則 .capture/.pin 永久失效需重啟。
+        guard scrollSession.isActive else {
+            KeyboardShortcuts.enable(.capture, .pin)
+            menuBar.setScrollCapturing(false)
+            return
+        }
     }
 
     // MARK: - 設定
