@@ -54,27 +54,35 @@ public enum ScrollMatcher {
         let n1 = new.downsampled(), n2 = n1.downsampled()
         let r1 = reference.downsampled(), r2 = r1.downsampled()
 
-        // L2 全域掃（含先驗軟懲罰），保留 best 與排除窗外的 second 供 ambiguity 判定
+        // L2 全域掃（含先驗軟懲罰），保留 best 與排除窗外的 second 供 ambiguity 判定。
+        // I1 修正：BPC 早停只對「次佳候選」設門檻（不能對 best，否則 best2 逼近 0 時
+        // 門檻≈0，把所有真次佳候選提前殺光，second2 永遠登記不到、比值信心閘失效）。
+        // M1 修正：second2 追蹤用未加先驗懲罰的 raw 分數；best 排序仍用含懲罰的 s；
+        // 比值 = second2Raw / best2.raw，讓比值純反映影像證據、不被先驗污染。
         let l2Range = max(1, config.minDelta / 4)...max(1, maxDy / 4)
-        var best2 = (dy: -1, score: Float.greatestFiniteMagnitude)
-        var second2 = Float.greatestFiniteMagnitude
+        var best2 = (dy: -1, score: Float.greatestFiniteMagnitude, raw: Float.greatestFiniteMagnitude)
+        var second2Raw = Float.greatestFiniteMagnitude
         let excl2 = max(1, config.exclusionRadius / 4)
         for dy in l2Range {
-            var s = bandScore(new: n2, ref: r2, dy: dy, config: config, level: 4,
-                              earlyExit: min(best2.score, second2))
+            let raw = bandScore(new: n2, ref: r2, dy: dy, config: config, level: 4,
+                                earlyExit: second2Raw)          // BPC 對次佳，不對 best（I1 修正）
+            guard raw.isFinite else { continue }                 // 被早停殺掉＝進不了 top-2
+            var s = raw
             if let p = prior {
                 s += Float(config.priorWeight) * min(1, abs(Float(dy * 4 - p)) / Float(h))
             }
             if s < best2.score {
-                if best2.dy >= 0, abs(best2.dy - dy) > excl2 { second2 = best2.score }
-                best2 = (dy, s)
-            } else if abs(dy - best2.dy) > excl2, s < second2 {
-                second2 = s
+                if best2.dy >= 0, abs(best2.dy - dy) > excl2 {
+                    second2Raw = min(second2Raw, best2.raw)      // 舊 best 降級成次佳候選（raw）
+                }
+                best2 = (dy, s, raw)
+            } else if abs(dy - best2.dy) > excl2, raw < second2Raw {
+                second2Raw = raw
             }
         }
         guard best2.dy >= 0 else { return .noOverlap }
         // L2 ambiguity 早判：排除窗外的次佳貼著最佳 → 多解
-        if second2.isFinite, second2 / max(best2.score, 1e-6) < 1.1 { return .ambiguous }
+        if second2Raw.isFinite, second2Raw / max(best2.raw, 1e-6) < 1.1 { return .ambiguous }
 
         // L1 → L0 逐層精修（±3）
         let dy1 = refine(new: n1, ref: r1, center: best2.dy * 2, radius: 3, config: config, level: 2)
@@ -86,8 +94,8 @@ public enum ScrollMatcher {
         guard q.mean <= config.absoluteGateMax else { return .lowConfidence }
         guard q.worst <= config.worstBandMax else { return .ambiguous }   // 局部污染 → 不可信
 
-        // 比值閘（用 L2 的全域 second 換算；epsilon 防除零）
-        let confidence = Double(second2.isFinite ? second2 / max(best2.score, 1e-6) : 10)
+        // 比值閘（用 L2 的全域 raw second 換算；epsilon 防除零；上限 cap 防 inf 外洩下游，I1 修正）
+        let confidence = Double(min(second2Raw.isFinite ? second2Raw / max(best2.raw, 1e-6) : 1000, 1000))
         guard confidence >= config.ratioGateMin else { return .lowConfidence }
         return .accepted(dy: dy0, confidence: confidence)
     }

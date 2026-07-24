@@ -206,6 +206,15 @@ func scrollMatcherTests() {
         T.checkEq("matcher: dy=\(dy) 精確命中",
                   acceptedDy(ScrollMatcher.match(new: n, reference: r, wheelDirection: 1, prior: nil)) ?? -1, dy)
     }
+    // I1 迴歸：唯一匹配的 confidence 必須有限且過閘（修前為 inf/垃圾值——BPC 早停用
+    // min(best2.score, second2) 對 best 也早停，best2 逼近 0 時門檻≈0，真次佳候選被提前
+    // 殺掉、second2 永遠登記不到 → confidence 溢位）
+    for dy in [30, 200, 620] {
+        let (n, r) = frames(dy)
+        if case let .accepted(_, c) = ScrollMatcher.match(new: n, reference: r, wheelDirection: 1, prior: nil) {
+            T.checkTrue("matcher: dy=\(dy) confidence 有限且 ≥1.3（I1 迴歸）", c.isFinite && c >= 1.3 && c <= 1000)
+        } else { T.checkTrue("matcher: dy=\(dy) confidence 迴歸取樣", false) }
+    }
     // 位移 0（低於 minDelta）→ 不可 accepted
     let (n0, r0) = frames(0)
     T.checkTrue("matcher: dy=0 不為 accepted",
