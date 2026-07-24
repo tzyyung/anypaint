@@ -25,6 +25,7 @@ func runScrollCaptureTests() {
     staticBandTests()
     scrollMatcherTests()
     phaseCorrelationTests()
+    scrollStitcherTests()
 }
 
 /// 量測 Vision registration 回傳的 ty 單位：
@@ -291,4 +292,74 @@ func phaseCorrelationTests() {
         let o = (r0 * 500 + c) * 4; sparseB.bytes[o] = 20; sparseB.bytes[o+1] = 20; sparseB.bytes[o+2] = 20 } }
     let sr = PhaseCorrelation1D.estimateShift(new: LumaPlane(sparseB), reference: LumaPlane(sparseA))
     T.checkTrue("phasecorr: 特徵稀疏救援 dy=150±1", abs((sr?.dy ?? -999) - 150) <= 1)
+}
+
+func scrollStitcherTests() {
+    let page = SyntheticPage.make(width: 400, height: 3000, seed: 21)
+    let h = 600
+
+    // 端到端：位移序列 [180, 250, 90]，拼完應逐像素等於 page[0, 600+520)
+    var st = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
+    st.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h))
+    var pos = 0
+    for dy in [180, 250, 90] {
+        pos += dy
+        T.checkTrue("stitcher: append dy=\(dy)",
+                    st.append(contentFrame: SyntheticPage.window(page, y: pos, height: h), dy: dy))
+    }
+    T.checkEq("stitcher: 總高 = 600+Σdy", st.height, 600 + 520)
+    let expected = SyntheticPage.window(page, y: 0, height: 600 + 520)
+    if let cg = st.finalize(), let got = PixelBuffer(cgImage: cg) {
+        T.checkTrue("stitcher: 端到端逐像素相同",
+                    zip(got.bytes, expected.bytes).allSatisfy { abs(Int($0) - Int($1)) <= 2 })
+    } else { T.checkTrue("stitcher: finalize", false) }
+
+    // 回捲組（裁尾是不可逆操作——此組是防線非裝飾，spec §11）
+    var st2 = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
+    st2.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h))
+    _ = st2.append(contentFrame: SyntheticPage.window(page, y: 300, height: h), dy: 300)
+    T.checkEq("stitcher: 裁尾 120 → 實裁 120", st2.cropTail(120), 120)
+    T.checkEq("stitcher: 裁尾後高度", st2.height, 600 + 300 - 120)
+    // 裁到起點即停：再裁 500 只能裁 180
+    T.checkEq("stitcher: 裁到 base 停（600）", st2.cropTail(500), 180)
+    T.checkEq("stitcher: 起點後高度不再減", st2.cropTail(50), 0)
+    // 回捲後重拼：來回多次端到端仍逐像素正確
+    _ = st2.append(contentFrame: SyntheticPage.window(page, y: 250, height: h), dy: 250)
+    _ = st2.cropTail(100)
+    _ = st2.append(contentFrame: SyntheticPage.window(page, y: 400, height: h), dy: 250)
+    let expect2 = SyntheticPage.window(page, y: 0, height: 600 + 400)
+    if let cg2 = st2.finalize(), let got2 = PixelBuffer(cgImage: cg2) {
+        T.checkTrue("stitcher: 下上下上下端到端仍正確",
+                    zip(got2.bytes, expect2.bytes).allSatisfy { abs(Int($0) - Int($1)) <= 2 })
+    } else { T.checkTrue("stitcher: finalize 2", false) }
+
+    // 上限＋額度退還：max=1300，600+300=900 → append 500 拒；裁 200 後 append 500 收（1200≤1300）
+    var st3 = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 1300)
+    st3.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h))
+    _ = st3.append(contentFrame: SyntheticPage.window(page, y: 300, height: h), dy: 300)
+    T.checkTrue("stitcher: 超上限拒收", !st3.append(contentFrame: SyntheticPage.window(page, y: 800, height: h), dy: 500))
+    _ = st3.cropTail(200)
+    T.checkTrue("stitcher: 裁尾退還額度後可續拼",
+                st3.append(contentFrame: SyntheticPage.window(page, y: 600, height: h), dy: 500))
+
+    // 底帶回裁＋finalize 補回：帶 bottom=50 的影格流
+    var f0 = SyntheticPage.window(page, y: 0, height: h)
+    SyntheticPage.stamp(&f0, bottom: 50, seed: 88)
+    var st4 = ScrollStitcher(firstFrame: f0, maxHeightPx: 30000)
+    st4.lockBands(BandInsets(bottom: 50), bottomBandFrom: f0)
+    T.checkEq("stitcher: 鎖帶後 base 高 550", st4.height, 550)
+    // 內容影格（已扣 bottom）
+    let cf = SyntheticPage.window(page, y: 200, height: h - 50)
+    _ = st4.append(contentFrame: cf, dy: 200)
+    if let cg4 = st4.finalize(), let got4 = PixelBuffer(cgImage: cg4) {
+        T.checkEq("stitcher: finalize 高 = 550+200+50", got4.height, 800)
+        // 最底 50 列 == 鎖定影格的底帶
+        let bandGot = got4.cropped(x: 0, y: 750, width: 400, height: 50)
+        let bandWant = f0.cropped(x: 0, y: 550, width: 400, height: 50)
+        T.checkTrue("stitcher: 底帶補回在最底端",
+                    zip(bandGot.bytes, bandWant.bytes).allSatisfy { abs(Int($0) - Int($1)) <= 2 })
+    } else { T.checkTrue("stitcher: finalize 4", false) }
+
+    // referenceTail
+    T.checkEq("stitcher: referenceTail 高度", st.referenceTail(maxHeight: 600).height, 600)
 }
