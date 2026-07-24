@@ -314,6 +314,7 @@ public final class ScrollCaptureSession {
     }
 
     private func cancel() {
+        guard state != .idle else { return }   // 冪等：teardown 已把 state 設回 idle，擋二次 onFinished（防未來新增呼叫源回歸）
         teardown()
         onFinished?(nil)
     }
