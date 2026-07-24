@@ -23,6 +23,7 @@ func runScrollCaptureTests() {
     pixelBufferTests()
     scrollCoordsTests()
     staticBandTests()
+    scrollMatcherTests()
 }
 
 /// 量測 Vision registration 回傳的 ty 單位：
@@ -187,4 +188,76 @@ func staticBandTests() {
     SyntheticPage.addNoise(&av, amplitude: 2, seed: 11); SyntheticPage.addNoise(&bv, amplitude: 2, seed: 22)
     let iv = StaticBandDetector.detect(frameA: LumaPlane(av), frameB: LumaPlane(bv), dy: 200)
     T.checkTrue("staticband: 偽 vibrancy（±2 雜訊）頂帶 78~82", (78...82).contains(iv?.top ?? -1))
+}
+
+func scrollMatcherTests() {
+    let page = SyntheticPage.make(width: 500, height: 4000, seed: 3)
+    func nb0() -> PixelBuffer { SyntheticPage.window(page, y: 500, height: 800) }
+    func frames(_ dy: Int, h: Int = 800) -> (LumaPlane, LumaPlane) {
+        (LumaPlane(SyntheticPage.window(page, y: 500 + dy, height: h)),
+         LumaPlane(SyntheticPage.window(page, y: 500, height: h)))
+    }
+    func acceptedDy(_ o: MatchOutcome) -> Int? {
+        if case let .accepted(dy, _) = o { return dy }; return nil
+    }
+    // 已知位移 小/中/大
+    for dy in [30, 200, 620] {   // 620 < 800−max(96, 800×0.16)=672 上限內
+        let (n, r) = frames(dy)
+        T.checkEq("matcher: dy=\(dy) 精確命中",
+                  acceptedDy(ScrollMatcher.match(new: n, reference: r, wheelDirection: 1, prior: nil)) ?? -1, dy)
+    }
+    // 位移 0（低於 minDelta）→ 不可 accepted
+    let (n0, r0) = frames(0)
+    T.checkTrue("matcher: dy=0 不為 accepted",
+                acceptedDy(ScrollMatcher.match(new: n0, reference: r0, wheelDirection: 1, prior: nil)) == nil)
+    // 負向（回捲）：鏡像機制
+    let (nn, rn) = frames(200)
+    T.checkEq("matcher: 負向 dy=-200（角色互換＋wheel=-1）",
+              acceptedDy(ScrollMatcher.match(new: rn, reference: nn, wheelDirection: -1, prior: nil)) ?? 0, -200)
+    // 滾輪閘門未開（wheel=+1）時同樣輸入不可回報負值
+    let posOnly = ScrollMatcher.match(new: rn, reference: nn, wheelDirection: 1, prior: nil)
+    T.checkTrue("matcher: 閘門未開不輸出負 dy", (acceptedDy(posOnly) ?? 0) >= 0)
+    // 重複紋理 → ambiguous
+    let stripes = LumaPlane(SyntheticPage.periodicStripes(width: 500, height: 800, period: 48))
+    T.checkEq("matcher: 週期紋理 → ambiguous",
+              ScrollMatcher.match(new: stripes, reference: stripes, wheelDirection: 1, prior: nil), MatchOutcome.ambiguous)
+    // 純色 → 非 accepted（lowConfidence 或 ambiguous 皆可，鎖「不硬猜」）
+    let solid = LumaPlane(SyntheticPage.solid(width: 500, height: 800, gray: 128))
+    T.checkTrue("matcher: 純色不硬猜",
+                acceptedDy(ScrollMatcher.match(new: solid, reference: solid, wheelDirection: 1, prior: nil)) == nil)
+    // 雜訊（±6，模擬次像素重繪）仍精確
+    var na = SyntheticPage.window(page, y: 700, height: 800)
+    var nb = SyntheticPage.window(page, y: 500, height: 800)
+    SyntheticPage.addNoise(&na, amplitude: 6, seed: 5); SyntheticPage.addNoise(&nb, amplitude: 6, seed: 9)
+    T.checkEq("matcher: ±6 雜訊 dy=200",
+              acceptedDy(ScrollMatcher.match(new: LumaPlane(na), reference: LumaPlane(nb), wheelDirection: 1, prior: nil)) ?? -1, 200)
+    // 非整數位移：dy=200 的影格經 0.5px 垂直重採樣 → 容差 ±1
+    let half = SyntheticPage.window(page, y: 700, height: 801)
+    var resampled = [UInt8](repeating: 0, count: 500 * 800 * 4)
+    for r in 0..<800 { for c in 0..<(500 * 4) {
+        let a = Int(half.bytes[r * 500 * 4 + c]), b = Int(half.bytes[(r + 1) * 500 * 4 + c])
+        resampled[r * 500 * 4 + c] = UInt8((a + b) / 2)
+    } }
+    let halfShift = LumaPlane(PixelBuffer(width: 500, height: 800, bytes: resampled))
+    let got = acceptedDy(ScrollMatcher.match(new: halfShift, reference: LumaPlane(nb0()), wheelDirection: 1, prior: nil)) ?? -999
+    T.checkTrue("matcher: 0.5px 重採樣 dy≈200（±1）", abs(got - 200) <= 1)
+    // 動態塊污染：new 影格中央蓋 120×120 隨機塊，多 band 仍算對
+    var dyn = SyntheticPage.window(page, y: 700, height: 800)
+    SyntheticPage.stampDynamicBlock(&dyn, x: 190, y: 340, w: 120, h: 120, seed: 77)
+    T.checkEq("matcher: 動態塊污染仍 dy=200",
+              acceptedDy(ScrollMatcher.match(new: LumaPlane(dyn), reference: LumaPlane(nb0()), wheelDirection: 1, prior: nil)) ?? -1, 200)
+    // 先驗軟懲罰不鎖死：prior=500 但真值 200，仍應命中 200（軟不是硬）
+    let (np, rp) = frames(200)
+    T.checkEq("matcher: 先驗偏差大仍命中真值（軟懲罰）",
+              acceptedDy(ScrollMatcher.match(new: np, reference: rp, wheelDirection: 1, prior: 500)) ?? -1, 200)
+    // 金字塔一致性：dy=200 在 L2（÷4=50）就該在正確位置附近（此為內部函式測試）
+    let (nq, rq) = frames(200)
+    let n2 = nq.downsampled().downsampled(), r2 = rq.downsampled().downsampled()
+    var bestL2 = (dy: -1, s: Float.greatestFiniteMagnitude)
+    for d in 1...170 {
+        let s = ScrollMatcher.bandScore(new: n2, ref: r2, dy: d, config: .default, level: 4,
+                                        earlyExit: .greatestFiniteMagnitude)
+        if s < bestL2.s { bestL2 = (d, s) }
+    }
+    T.checkTrue("matcher: L2 粗估在 50±1", abs(bestL2.dy - 50) <= 1)
 }
