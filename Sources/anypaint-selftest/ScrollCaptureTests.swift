@@ -24,6 +24,7 @@ func runScrollCaptureTests() {
     scrollCoordsTests()
     staticBandTests()
     scrollMatcherTests()
+    phaseCorrelationTests()
 }
 
 /// 量測 Vision registration 回傳的 ty 單位：
@@ -269,4 +270,25 @@ func scrollMatcherTests() {
         if s < bestL2.s { bestL2 = (d, s) }
     }
     T.checkTrue("matcher: L2 粗估在 50±1", abs(bestL2.dy - 50) <= 1)
+}
+
+func phaseCorrelationTests() {
+    let page = SyntheticPage.make(width: 500, height: 4000, seed: 3)
+    let ref = LumaPlane(SyntheticPage.window(page, y: 500, height: 800))
+    let new = LumaPlane(SyntheticPage.window(page, y: 700, height: 800))
+    let r = PhaseCorrelation1D.estimateShift(new: new, reference: ref)
+    T.checkTrue("phasecorr: dy=200 誤差 ≤1", abs((r?.dy ?? -999) - 200) <= 1)
+    // 重複紋理 → 多峰 → nil
+    let stripes = LumaPlane(SyntheticPage.periodicStripes(width: 500, height: 800, period: 48))
+    T.checkTrue("phasecorr: 週期紋理 → nil", PhaseCorrelation1D.estimateShift(new: stripes, reference: stripes) == nil)
+    // 獨立性：特徵稀疏（大片純色+一條細線）讓 band matcher 失敗、相位相關仍中
+    var sparseA = SyntheticPage.solid(width: 500, height: 800, gray: 250)
+    var sparseB = SyntheticPage.solid(width: 500, height: 800, gray: 250)
+    // 只有一條 3px 深色橫線：A 在 y=400、B 在 y=250（=下捲 150）
+    for r0 in 400..<403 { for c in 0..<500 {
+        let o = (r0 * 500 + c) * 4; sparseA.bytes[o] = 20; sparseA.bytes[o+1] = 20; sparseA.bytes[o+2] = 20 } }
+    for r0 in 250..<253 { for c in 0..<500 {
+        let o = (r0 * 500 + c) * 4; sparseB.bytes[o] = 20; sparseB.bytes[o+1] = 20; sparseB.bytes[o+2] = 20 } }
+    let sr = PhaseCorrelation1D.estimateShift(new: LumaPlane(sparseB), reference: LumaPlane(sparseA))
+    T.checkTrue("phasecorr: 特徵稀疏救援 dy=150±1", abs((sr?.dy ?? -999) - 150) <= 1)
 }
