@@ -362,4 +362,27 @@ func scrollStitcherTests() {
 
     // referenceTail
     T.checkEq("stitcher: referenceTail 高度", st.referenceTail(maxHeight: 600).height, 600)
+
+    // lockBands 契約組（審查 I1/I2/M4——契約做成可測拒絕）
+    var stc = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
+    _ = stc.append(contentFrame: SyntheticPage.window(page, y: 300, height: h), dy: 300)
+    let hBefore = stc.height
+    T.checkTrue("stitcher: 先拼後鎖 → 拒絕", !stc.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h)))
+    T.checkEq("stitcher: 拒絕後 buffer 不動", stc.height, hBefore)
+    var std = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: 300), maxHeightPx: 30000)
+    T.checkTrue("stitcher: 底帶≥高 → 拒絕", !std.lockBands(BandInsets(bottom: 300), bottomBandFrom: SyntheticPage.window(page, y: 0, height: 300)))
+    var ste = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
+    let narrow = SyntheticPage.window(page, y: 0, height: h).cropped(x: 0, y: 0, width: 200, height: h)
+    T.checkTrue("stitcher: 鎖帶影格寬不符 → 拒絕", !ste.lockBands(.zero, bottomBandFrom: narrow))
+    T.checkTrue("stitcher: 合法鎖帶仍成功", ste.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h)))
+    // appendedFrameCount 語意（審查 M3）：dy≤0 no-op 不計、超限不計、成功計
+    var stf = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 700)
+    stf.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h))
+    T.checkEq("stitcher: 初始 frameCount=1", stf.appendedFrameCount, 1)
+    _ = stf.append(contentFrame: SyntheticPage.window(page, y: 0, height: h), dy: 0)
+    T.checkEq("stitcher: dy=0 no-op 不計", stf.appendedFrameCount, 1)
+    _ = stf.append(contentFrame: SyntheticPage.window(page, y: 50, height: h), dy: 50)
+    T.checkEq("stitcher: 成功 append 計數", stf.appendedFrameCount, 2)
+    T.checkTrue("stitcher: 超限拒收", !stf.append(contentFrame: SyntheticPage.window(page, y: 500, height: h), dy: 500))
+    T.checkEq("stitcher: 拒收不計數", stf.appendedFrameCount, 2)
 }

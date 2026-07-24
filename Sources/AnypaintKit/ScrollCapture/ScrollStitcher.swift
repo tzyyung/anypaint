@@ -25,8 +25,18 @@ public final class ScrollStitcher {
         self.maxHeightPx = maxHeightPx
     }
 
-    public func lockBands(_ insets: BandInsets, bottomBandFrom frame: PixelBuffer) {
-        guard lockedInsets == nil else { return }
+    // 契約（審查 I1/I2/M4）：鎖帶必須在任何 append 之前（底帶才不會埋進 buffer 中段、
+    // 裁尾下限=session 起點才成立）；退化 insets 與寬度不符一律拒絕。
+    // 回傳 false=拒絕不動 buffer——Session 端（T12）據此採「鎖定成功前不 append」的遞延策略。
+    @discardableResult
+    public func lockBands(_ insets: BandInsets, bottomBandFrom frame: PixelBuffer) -> Bool {
+        guard lockedInsets == nil,
+              appendedFrameCount == 1,                    // I1：先拼後鎖 → 拒
+              insets.bottom < height,                     // I2：底帶吃掉整個 base → 拒
+              frame.width == contentWidth,                // M4：寬度契約 fail-fast
+              frame.height > insets.bottom
+        else { return false }
+
         lockedInsets = insets
         let newW = contentWidth - insets.left - insets.right
         // base 水平裁到內容寬（頂帶保留——本來就該出現一次）
@@ -37,23 +47,26 @@ public final class ScrollStitcher {
             out.replaceSubrange(r * dstRow..<(r + 1) * dstRow, with: bytes[s..<s + dstRow])
         }
         // base 底帶移除＋暫存（spec §7.2 base 回裁：否則固定頁尾燒在長圖第一屏位置）
-        bottomBandHeight = insets.bottom
-        if insets.bottom > 0 {
+        // 守護已保證 insets.bottom < height，trimmed 必等於 insets.bottom；此處保留 min() 作雙保險。
+        let trimmed = min(insets.bottom, height - 1)
+        bottomBandHeight = trimmed
+        if trimmed > 0 {
             // 底帶像素取自鎖定當下的影格（水平同樣裁到內容寬）
             let fh = frame.height
-            var band = [UInt8](repeating: 0, count: newW * insets.bottom * 4)
-            for r in 0..<insets.bottom {
-                let s = ((fh - insets.bottom + r) * frame.width + insets.left) * 4
+            var band = [UInt8](repeating: 0, count: newW * trimmed * 4)
+            for r in 0..<trimmed {
+                let s = ((fh - trimmed + r) * frame.width + insets.left) * 4
                 band.replaceSubrange(r * dstRow..<(r + 1) * dstRow, with: frame.bytes[s..<s + dstRow])
             }
             bottomBandPixels = band
-            let trimmed = min(insets.bottom, height - 1)
             out.removeLast(trimmed * dstRow)
             height -= trimmed
-            baseHeight = height
         }
+        // 守護保證 lockBands 發生在任何 append 之前，此時 height 必等於 session 起點內容高。
+        baseHeight = height
         bytes = out
         contentWidth = newW
+        return true
     }
 
     public func append(contentFrame: PixelBuffer, dy: Int) -> Bool {
