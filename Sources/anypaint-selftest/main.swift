@@ -7,34 +7,15 @@ import AppKit
 // 所以用可直接執行的執行檔跑斷言：swift run anypaint-selftest
 // 任一失敗會印出並以非零狀態結束（方便日後接 CI）。
 
-var failures = 0
-
-func check(_ name: String, _ got: CGRect, _ want: CGRect) {
-    if got == want {
-        print("✅ \(name)")
-    } else {
-        failures += 1
-        print("❌ \(name)\n   got : \(got)\n   want: \(want)")
-    }
+// 斷言工具移至 TestHarness.swift（T.*）；保留同名墊片讓既有測試零改動。
+var failures: Int {
+    get { T.failures }
+    set { T.failures = newValue }
 }
 
-func checkEq<T: Equatable>(_ name: String, _ got: T, _ want: T) {
-    if got == want {
-        print("✅ \(name)")
-    } else {
-        failures += 1
-        print("❌ \(name)\n   got : \(got)\n   want: \(want)")
-    }
-}
-
-func checkTrue(_ name: String, _ cond: Bool) {
-    if cond {
-        print("✅ \(name)")
-    } else {
-        failures += 1
-        print("❌ \(name)")
-    }
-}
+func check(_ name: String, _ got: CGRect, _ want: CGRect) { T.check(name, got, want) }
+func checkEq<V: Equatable>(_ name: String, _ got: V, _ want: V) { T.checkEq(name, got, want) }
+func checkTrue(_ name: String, _ cond: Bool) { T.checkTrue(name, cond) }
 
 // 1) 座標翻轉 + Retina 縮放
 check(
@@ -1006,10 +987,4 @@ check("sideRect 底部超界 clamp",
                                size: CGSize(width: 320, height: 240), in: srScreen),
       CGRect(x: 308, y: 0, width: 320, height: 240))
 
-print("---")
-if failures == 0 {
-    print("全部通過 🎉")
-} else {
-    print("\(failures) 項失敗")
-    exit(1)
-}
+T.finish()
