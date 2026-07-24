@@ -63,6 +63,18 @@ func pixelBufferTests() {
                     zip(back.bytes, page.bytes).allSatisfy { abs(Int($0) - Int($1)) <= 2 })  // 色彩管理容差
     } else { T.checkTrue("pixelbuffer: CGImage 往返", false) }
 
+    // 通道順序鑑別：灰階測資對 R/B 對調零鑑別力（審查 Important）——用彩色像素守 RGBA 順序。
+    var colored = [UInt8](repeating: 255, count: 2 * 2 * 4)
+    colored[0] = 200; colored[1] = 10; colored[2] = 30    // (0,0) 偏紅
+    colored[4] = 10; colored[5] = 200; colored[6] = 30    // (1,0) 偏綠
+    colored[8] = 10; colored[9] = 30; colored[10] = 200   // (0,1) 偏藍
+    let cbuf = PixelBuffer(width: 2, height: 2, bytes: colored)
+    if let ccg = cbuf.makeCGImage(), let cback = PixelBuffer(cgImage: ccg) {
+        T.checkTrue("pixelbuffer: 通道順序（R 像素 R>B）", cback.bytes[0] > 100 && cback.bytes[2] < 100)
+        T.checkTrue("pixelbuffer: 通道順序（B 像素 B>R）", cback.bytes[10] > 100 && cback.bytes[8] < 100)
+        T.checkTrue("pixelbuffer: 通道順序（G 像素）", cback.bytes[5] > 100)
+    } else { T.checkTrue("pixelbuffer: 通道順序往返", false) }
+
     // crop
     let c = page.cropped(x: 8, y: 8, width: 16, height: 16)
     T.checkEq("pixelbuffer: crop 尺寸", c.width * 100 + c.height, 1616)
@@ -74,6 +86,10 @@ func pixelBufferTests() {
     T.checkTrue("luma: 翻轉兩次 == 原圖", l.flippedVertically().flippedVertically().v == l.v)
     // 降採樣尺寸
     T.checkEq("luma: 降採樣尺寸", l.downsampled().width * 100 + l.downsampled().height, 3232)
+
+    // 奇數尺寸：捨去最後一列/欄（65→32）
+    let odd = LumaPlane(width: 65, height: 65, v: [Float](repeating: 7, count: 65 * 65))
+    T.checkEq("luma: 奇數降採樣 65→32", odd.downsampled().width * 100 + odd.downsampled().height, 3232)
 }
 
 func scrollCoordsTests() {
@@ -92,6 +108,8 @@ func scrollCoordsTests() {
     //   pixelHeight = round(401.5*2) = 803
     T.checkEq("coords: pixelWidth", g.pixelWidth, Int(((400.5 - 100.0) * 2).rounded()))
     T.checkEq("coords: pixelHeight", g.pixelHeight, Int(((602.0 - 200.5) * 2).rounded()))
+    T.checkTrue("coords: sourceRect minX", abs(g.sourceRect.minX - 100.0) < 0.001)
+    T.checkTrue("coords: sourceRect width", abs(g.sourceRect.width - 300.5) < 0.001)
     T.checkTrue("coords: sourceRect Y 翻轉（上左原點）",
                 abs(g.sourceRect.minY - (1117 - 200.5 - (602.0 - 200.5))) < 0.001)
     // scale=1 螢幕：對齊到整數點
@@ -101,4 +119,5 @@ func scrollCoordsTests() {
         scale: 1)
     T.checkTrue("coords: 副螢幕（負 x 全域座標）sourceRect 為螢幕相對", g1.sourceRect.minX >= 0)
     T.checkEq("coords: scale=1 pixelWidth == 點寬", g1.pixelWidth, 101)
+    T.checkEq("coords: scale=1 pixelHeight == 點高", g1.pixelHeight, 52)
 }
