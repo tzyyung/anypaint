@@ -42,8 +42,9 @@ public enum StaticBandDetector {
         // 在「上下皆封頂」時數學不可達的缺口（3h/5 恆 > h/3，實作審查發現）。
         if top >= capTB, bottom >= capTB, left >= capLR, right >= capLR { return nil }
 
-        // 內容區防呆：扣完帶後低於最小寬/高 → 判定不可信（spec §7.2：丟格＋提示由上層做）
-        guard w - left - right >= w / 5, (r1 - r0) >= 240 || (r1 - r0) >= h / 2 else { return nil }
+        // 內容區高度防呆（活碼：h=600 且上下帶合計 380 時觸發）。寬度不需對稱防呆——
+        // capLR=min(w/6,120) 結構性保證 w−left−right ≥ 2w/3，恆寬於任何合理下限（審查驗證 0 反例）。
+        guard (r1 - r0) >= 240 || (r1 - r0) >= h / 2 else { return nil }
         return BandInsets(top: top, bottom: bottom, left: left, right: right)
     }
 }
