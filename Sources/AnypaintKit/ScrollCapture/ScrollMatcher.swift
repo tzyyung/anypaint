@@ -26,29 +26,49 @@ public enum ScrollMatcher {
         public init() {}
     }
 
+    /// - Parameter priorIsTrusted: prior 來自**獨立來源**（Vision 全圖對位／1-D 相位相關）時設 true：
+    ///   直接在原解析度於 prior 附近精修，**跳過 L2 全域粗掃**。
+    ///   必要性（實機重現）：稀疏內容（大半空白、只有少數幾行字）在 1/4 金字塔層訊號幾乎消失，
+    ///   L2 粗掃必判 ambiguous 而提前返回——於是救援層即使算出正確位移也永遠救不回來
+    ///   （症狀：長圖等於單張影格）。此模式改由「絕對閘＋最差區塊閘」把關，
+    ///   而呼叫端本來就要求救援估計與 matcher 結果互相吻合，等於雙重獨立佐證。
     public static func match(new: LumaPlane, reference: LumaPlane,
                              wheelDirection: Int, prior: Int?,
+                             priorIsTrusted: Bool = false,
                              config: Config = .default) -> MatchOutcome {
         guard new.width == reference.width, new.height == reference.height else { return .noOverlap }
         if wheelDirection < 0 {
             // 負向 = 翻轉兩圖跑正向再取負（一條路徑吃雙向；先驗同步鏡像）
             let r = matchPositive(new: new.flippedVertically(),
                                   reference: reference.flippedVertically(),
-                                  prior: prior.map { -$0 }, config: config)
+                                  prior: prior.map { -$0 }, priorIsTrusted: priorIsTrusted,
+                                  config: config)
             if case let .accepted(dy, c) = r { return .accepted(dy: -dy, confidence: c) }
             return r
         }
-        return matchPositive(new: new, reference: reference, prior: prior, config: config)
+        return matchPositive(new: new, reference: reference, prior: prior,
+                             priorIsTrusted: priorIsTrusted, config: config)
     }
 
     // MARK: - 正向主流程
 
     static func matchPositive(new: LumaPlane, reference: LumaPlane,
-                              prior: Int?, config: Config) -> MatchOutcome {
+                              prior: Int?, priorIsTrusted: Bool = false,
+                              config: Config) -> MatchOutcome {
         let h = new.height
         let minOverlap = max(config.minOverlapPx, Int(Double(h) * config.minOverlapFraction))
         let maxDy = h - minOverlap
         guard maxDy > config.minDelta else { return .noOverlap }
+
+        // 受信任的 prior：直接原解析度精修，跳過 L2 粗掃（見 match 的參數說明）。
+        if priorIsTrusted, let p = prior, p >= config.minDelta, p <= maxDy {
+            let dy = refine(new: new, ref: reference, center: p, radius: 8, rowStep: 1)
+            guard dy >= config.minDelta, dy <= maxDy else { return .noOverlap }
+            let q = overlapScore(new: new, ref: reference, dy: dy, rowStep: 1)
+            guard q.mean <= config.absoluteGateMax else { return .lowConfidence }
+            guard q.worst <= config.worstBandMax else { return .ambiguous }
+            return .accepted(dy: dy, confidence: Double(config.ratioGateMin))
+        }
 
         // 金字塔：L0=原、L1=1/2、L2=1/4
         let n1 = new.downsampled(), n2 = n1.downsampled()

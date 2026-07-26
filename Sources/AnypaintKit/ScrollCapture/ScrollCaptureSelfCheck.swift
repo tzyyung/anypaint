@@ -32,14 +32,29 @@ public final class ScrollCaptureSelfCheck {
     private var bottomBandCompensation = 0
     private var lines: [String] = []
     /// 每步位移（點）。24pt＝Retina 48px，遠大於 minDelta，模擬正常速度捲動。
-    private let stepPoints: CGFloat = 24
+    /// 可用啟動參數覆寫，方便重現特定實機條件：
+    /// `--selfcheck-height=186 --selfcheck-step=90 --selfcheck-sparse=1`
+    private let stepPoints: CGFloat = {
+        for a in CommandLine.arguments where a.hasPrefix("--selfcheck-step=") {
+            if let v = Double(a.dropFirst("--selfcheck-step=".count)) { return CGFloat(v) }
+        }
+        return 24
+    }()
+    private let windowHeightPoints: CGFloat = {
+        for a in CommandLine.arguments where a.hasPrefix("--selfcheck-height=") {
+            if let v = Double(a.dropFirst("--selfcheck-height=".count)) { return CGFloat(v) + 80 }
+        }
+        return 520
+    }()
+    /// 稀疏模式：只有底部 ~15% 有文字，其餘全空（模擬「終端機大半空白」的實機條件）。
+    static let sparseMode = CommandLine.arguments.contains("--selfcheck-sparse=1")
     private let totalSteps = 40
 
     public init() {}
 
     public func run() {
         guard let screen = NSScreen.main else { emit("FAIL 無主螢幕"); finishNow(); return }
-        let winRect = CGRect(x: screen.frame.minX + 80, y: screen.frame.minY + 120, width: 720, height: 520)
+        let winRect = CGRect(x: screen.frame.minX + 80, y: screen.frame.minY + 120, width: 720, height: windowHeightPoints)
         let view = SelfCheckContentView(frame: CGRect(origin: .zero, size: winRect.size))
         let w = NSWindow(contentRect: winRect, styleMask: [.titled], backing: .buffered, defer: false)
         w.title = "anypaint self-check"
@@ -219,6 +234,8 @@ final class SelfCheckContentView: NSView {
             func rnd(_ n: Int) -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int(seed >> 33) % n }
             // 每 3 行只有 1 行有字，模擬終端機輸出的空白間隔
             guard i % 3 == 0 else { continue }
+            // 稀疏模式：只有畫面底部 15% 有字（模擬終端機大半空白的實機條件）
+            if ScrollCaptureSelfCheck.sparseMode, y < bounds.height * 0.85 { continue }
             var x: CGFloat = CGFloat(8 + rnd(40))
             while x < bounds.width - 30 {
                 let w = CGFloat(30 + rnd(110))

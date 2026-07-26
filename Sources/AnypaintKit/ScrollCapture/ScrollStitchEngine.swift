@@ -179,7 +179,7 @@ public final class ScrollStitchEngine {
            visionDy > 0,
            case let .accepted(dy, _) = ScrollMatcher.match(
                new: LumaPlane(contentFrame), reference: LumaPlane(reference),
-               wheelDirection: 1, prior: visionDy),
+               wheelDirection: 1, prior: visionDy, priorIsTrusted: true),
            abs(dy - visionDy) <= max(18, visionDy / 3) {
             return accept(dy: dy, full: full, contentFrame: contentFrame)
         }
@@ -192,7 +192,7 @@ public final class ScrollStitchEngine {
            pcDy >= ScrollMatcher.Config.default.minDelta,
            case let .accepted(dy, _) = ScrollMatcher.match(
                new: LumaPlane(contentFrame), reference: LumaPlane(reference),
-               wheelDirection: 1, prior: pcDy),
+               wheelDirection: 1, prior: pcDy, priorIsTrusted: true),
            abs(dy - pcDy) <= max(18, pcDy / 3) {
             return accept(dy: dy, full: full, contentFrame: contentFrame)
         }
