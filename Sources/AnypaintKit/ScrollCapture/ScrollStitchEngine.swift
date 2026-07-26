@@ -70,10 +70,17 @@ public final class ScrollStitchEngine {
     /// 「滾輪量→像素換算因 app 而異」列為已接受風險而不敢用推算；從真實匹配自我校準
     /// 就沒有這個問題——每個 app、每種輸入裝置都會校出自己的比例。
     private var pxPerWheelPoint: Double?
+    /// 上次成功接受的位移（速度連續性推算用）。
+    private var lastAcceptedDy: Int?
+    // 已知限制（待改）：相位相關在「等行距的稀疏文字」上會對齊到錯誤的行倍數
+    // （自檢實測估出 64/72/96，真值 48 → 長圖過量約 47%，內容重複）。用真實匹配的平均速度
+    // 當上界試過但在真實匹配稀少時起不了作用，需要別的判準（見 ledger 待辦）。
     /// 本次 consume 收到的累積滾輪點數（校準與推算共用）。
     private var lastGatePoints: CGFloat = 0
     /// 最近一格內容影格的高度（推算時算 maxDy 用）。
     private var lastFrameHeight = 0
+    /// 上次「實際跑過匹配」的那格指紋（動作判定基準）。
+    private var lastProcessedFingerprint: [UInt8]?
     /// 初始估計（尚未校準時用）：Retina 上 1 點 ≈ 2 像素。
     private let fallbackPxPerPoint: Double
 
@@ -97,10 +104,15 @@ public final class ScrollStitchEngine {
         guard let stitcher else {
             stitcher = ScrollStitcher(firstFrame: full, maxHeightPx: maxHeightPx)
             lastAcceptedFullFrame = full
+            lastProcessedFingerprint = fingerprint(of: full)   // 基準格也要當動作判定的基準
             return .baseCaptured(height: full.height)
         }
-        // motion gate：累積捲動不足就不浪費一次完整金字塔匹配，也不算失敗（見型別註解）。
-        guard wheelAccumulatedPoints >= motionGatePoints else { return .waitingForMotion }
+        // 動作判定用**影像變化**，不可用滾輪事件量（實機證據：整場 session 累積滾輪只有 3 點，
+        // 卻收到 116 格影格＝畫面確實一直在動，全部被 10 點的門檻擋掉，一次匹配都沒跑）。
+        // 滾輪事件量不可靠：不同裝置的 scrollingDeltaY 尺度差很大，而且使用者可能用捲軸拖曳、
+        // 鍵盤 Page Down、或頁面自己捲動——那些都沒有滾輪事件。
+        // SCStream 只在畫面改變時供格，所以「這格與上次處理過的格不同」才是動作的唯一可靠證據。
+        guard frameDiffers(from: full) else { return .waitingForMotion }
         lastGatePoints = wheelAccumulatedPoints
 
         let contentFrame: PixelBuffer
@@ -111,6 +123,7 @@ public final class ScrollStitchEngine {
         } else { contentFrame = full }
 
         lastFrameHeight = contentFrame.height
+        lastProcessedFingerprint = fingerprint(of: full)
         let reference = stitcher.referenceTail(maxHeight: contentFrame.height)
         guard reference.height == contentFrame.height else { return .waitingForMotion }
 
@@ -168,7 +181,35 @@ public final class ScrollStitchEngine {
         appendedFrameCount += 1
         lastAcceptedFullFrame = full
         calibrate(dy: dy)
+        lastAcceptedDy = dy
         return .appended(dy: dy, totalHeight: stitcher.height)
+    }
+
+    /// 便宜的影像變化偵測：抽樣約 2000 個像素比對上次「處理過」的格。
+    /// 差異像素比例超過 0.5% 即視為畫面有動（門檻遠高於編碼雜訊，遠低於一次可辨識的捲動）。
+    private func frameDiffers(from full: PixelBuffer) -> Bool {
+        guard let prev = lastProcessedFingerprint, prev.count == fingerprintSize else {
+            lastProcessedFingerprint = fingerprint(of: full)
+            return true          // 沒有基準可比＝當作有動（第一次匹配機會不放掉）
+        }
+        let now = fingerprint(of: full)
+        var diff = 0
+        for i in 0..<fingerprintSize where abs(Int(now[i]) - Int(prev[i])) > 6 { diff += 1 }
+        return diff * 200 > fingerprintSize        // > 0.5%
+    }
+
+    private var fingerprintSize: Int { 2048 }
+
+    private func fingerprint(of p: PixelBuffer) -> [UInt8] {
+        var out = [UInt8](repeating: 0, count: fingerprintSize)
+        guard p.bytes.count > 4 else { return out }
+        let stride = max(4, (p.bytes.count / fingerprintSize) & ~3)
+        var i = 0
+        for k in 0..<fingerprintSize {
+            out[k] = p.bytes[min(i, p.bytes.count - 1)]
+            i += stride
+        }
+        return out
     }
 
     /// 從一次成功匹配反推「點→像素」比例並指數平滑（見 pxPerWheelPoint）。
@@ -226,7 +267,10 @@ public final class ScrollStitchEngine {
         // 三層全敗 → **不可直接丟格**：使用者確實捲動了，丟格會讓那段內容永久消失
         // （實機症狀：長圖等於單張影格）。改用自我校準的「點→像素」比例推算位移接上；
         // 接縫可能有數像素誤差，但完整性優先於接縫完美（使用者裁定）。
-        if let dy = deadReckonedDy(), let stitcher {
+        // 近似接合的位移估計，**優先用影像證據**（1-D 相位相關的原始結果）而不是猜速度：
+        // 曾用「上次成功位移」當速度推算，結果同一步內的多張影格被重複接上（實測過量 47%）。
+        let approxDy = rawPhaseEstimate(new: contentFrame, reference: reference) ?? deadReckonedDy()
+        if let dy = approxDy, let stitcher {
             // 仍要守 T7 契約：鎖帶必須在任何 append 之前。未鎖帶時本格先用於鎖定嘗試
             // （否則之後 lockBands 會因「已 append 過」被永久拒絕，靜態帶再也鎖不上）。
             guard insets != nil else { return attemptLock(dy: dy, full: full) }
@@ -244,13 +288,37 @@ public final class ScrollStitchEngine {
         return .rejected(consecutiveFailures: consecutiveFailures)
     }
 
+    /// 1-D 相位相關的**原始**估計（不要求 matcher 複核），僅用於「近似接合」：
+    /// 它是影像證據，與輸入裝置無關，遠優於用上次位移猜速度。仍夾在合法範圍內。
+    private func rawPhaseEstimate(new: PixelBuffer, reference: PixelBuffer) -> Int? {
+        guard let (dy, ratio) = PhaseCorrelation1D.estimateShift(new: LumaPlane(new),
+                                                                reference: LumaPlane(reference)),
+              ratio < 0.6, dy >= ScrollMatcher.Config.default.minDelta else { return nil }
+        let h = new.height
+        let minOverlap = max(ScrollMatcher.Config.default.minOverlapPx,
+                             Int(Double(h) * ScrollMatcher.Config.default.minOverlapFraction))
+        guard dy <= h - minOverlap else { return nil }
+        // 絕對品質閘：這個位移下的重疊區必須真的相關。實測分佈——真匹配 ≈0.0、
+        // 完全沒有重疊 ≈0.43（且次佳幾乎同分）——所以 0.35 能把「稀疏但有重疊」
+        // 與「快捲已無重疊」分開。少了這道閘，快捲影格會被接上假位移污染長圖。
+        let q = ScrollMatcher.overlapScore(new: LumaPlane(new), ref: LumaPlane(reference),
+                                          dy: dy, rowStep: 1)
+        guard q.mean <= ScrollMatcher.Config.default.absoluteGateMax else { return nil }
+        return dy
+    }
+
     /// 依累積滾輪量推算位移（dead reckoning）。用校準值（無則用初始估計），
     /// 並夾在 [minDelta, maxDy] 內——超出可接受範圍代表使用者捲太快、已無重疊可言，
     /// 那時硬接會產生錯誤內容，寧可回 nil 交由 HUD 提示回捲。
     private func deadReckonedDy() -> Int? {
         guard let stitcher else { return nil }
-        let ratio = pxPerWheelPoint ?? fallbackPxPerPoint
-        let estimate = Int((Double(lastGatePoints) * ratio).rounded())
+        // 優先用滾輪量×校準比例；滾輪不可靠或缺席時（捲軸拖曳／鍵盤／頁面自捲）改用
+        // 「上次成功位移」的速度連續性推算——捲動速度短時間內是連續的。
+        // 只用滾輪×校準比例。**不可**用「上次成功位移」猜速度——那會讓同一步內的多張影格
+        // 各自被接上一次，內容重複（實測過量 47%）。
+        let fromWheel = Double(lastGatePoints) * (pxPerWheelPoint ?? fallbackPxPerPoint)
+        guard fromWheel >= Double(ScrollMatcher.Config.default.minDelta) else { return nil }
+        let estimate = Int(fromWheel.rounded())
         let h = stitcher.height >= 0 ? lastFrameHeight : 0
         guard h > 0 else { return nil }
         let minOverlap = max(ScrollMatcher.Config.default.minOverlapPx,

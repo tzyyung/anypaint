@@ -475,14 +475,20 @@ func scrollStitchEngineTests() {
                     zip(got.bytes, expected.bytes).allSatisfy { abs(Int($0) - Int($1)) <= 2 })
     } else { T.checkTrue("engine: finalize 成功", false) }
 
-    // motion gate 語意：閘未過不得算失敗
+    // 動作判定語意（改為影像變化驅動）：**畫面完全沒變**才是 waitingForMotion。
+    // 不可用滾輪事件量當門檻——實機證據：整場 session 累積滾輪僅 3 點卻收到 116 格影格
+    // （畫面一直在動），全被 10 點門檻擋掉、一次匹配都沒跑，長圖等於單張影格。
     let gated = ScrollStitchEngine(maxHeightPx: 30000)
-    _ = gated.consume(frame: SyntheticPage.window(page, y: 0, height: frameH),
-                      wheelAccumulatedPoints: 0, wheelDirection: 1)   // base
-    let out = gated.consume(frame: SyntheticPage.window(page, y: 3, height: frameH),
-                            wheelAccumulatedPoints: 3, wheelDirection: 1)
-    T.checkEq("engine: 閘未過回 waitingForMotion", out, ScrollStitchOutcome.waitingForMotion)
-    T.checkEq("engine: 閘未過不計失敗", gated.consecutiveFailures, 0)
+    let sameFrame = SyntheticPage.window(page, y: 0, height: frameH)
+    _ = gated.consume(frame: sameFrame, wheelAccumulatedPoints: 0, wheelDirection: 1)   // base
+    let still = gated.consume(frame: sameFrame, wheelAccumulatedPoints: 0, wheelDirection: 1)
+    T.checkEq("engine: 畫面沒變回 waitingForMotion", still, ScrollStitchOutcome.waitingForMotion)
+    T.checkEq("engine: 畫面沒變不計失敗", gated.consecutiveFailures, 0)
+    // 反面：畫面有變（且滾輪量為 0，模擬捲軸拖曳／鍵盤捲動）→ 必須真的跑匹配並拼接
+    let moved = gated.consume(frame: SyntheticPage.window(page, y: 60, height: frameH),
+                              wheelAccumulatedPoints: 0, wheelDirection: 0)
+    T.checkTrue("engine: 無滾輪事件但畫面有變 → 仍會處理（實得 \(moved)）",
+                moved != ScrollStitchOutcome.waitingForMotion)
 
     // 回捲：先下捲累積再上捲，長圖尾端要縮
     let back = ScrollStitchEngine(maxHeightPx: 30000, motionGatePoints: 10)

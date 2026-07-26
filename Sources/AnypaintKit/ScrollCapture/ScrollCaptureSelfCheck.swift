@@ -235,7 +235,9 @@ final class SelfCheckContentView: NSView {
             // 每 3 行只有 1 行有字，模擬終端機輸出的空白間隔
             guard i % 3 == 0 else { continue }
             // 稀疏模式：只有畫面底部 15% 有字（模擬終端機大半空白的實機條件）
-            if ScrollCaptureSelfCheck.sparseMode, y < bounds.height * 0.85 { continue }
+            // 稀疏模式：文字只出現在**選區內的下半段**。注意不能用 bounds.height*0.85——
+            // 選區是視窗往內縮 40pt，那個位置落在選區外，擷取到的會是 100% 純空白（無效情境）。
+            if ScrollCaptureSelfCheck.sparseMode, y < bounds.height * 0.62 { continue }
             var x: CGFloat = CGFloat(8 + rnd(40))
             while x < bounds.width - 30 {
                 let w = CGFloat(30 + rnd(110))
