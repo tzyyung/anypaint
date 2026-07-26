@@ -27,6 +27,9 @@ public final class ScrollCaptureSelfCheck {
     private var engineBusy = false
     private var pendingFrame: PixelBuffer?
     private var dropped = 0
+    private var firstFrameHeight = 0
+    /// finalize 會把底帶補回最底端，補的高度不算「拼接進度」，比對時要加回來。
+    private var bottomBandCompensation = 0
     private var lines: [String] = []
     /// 每步位移（點）。24pt＝Retina 48px，遠大於 minDelta，模擬正常速度捲動。
     private let stepPoints: CGFloat = 24
@@ -41,7 +44,9 @@ public final class ScrollCaptureSelfCheck {
         let w = NSWindow(contentRect: winRect, styleMask: [.titled], backing: .buffered, defer: false)
         w.title = "anypaint self-check"
         w.contentView = view
-        w.level = .normal
+        // .floating：自檢期間必須確保這個視窗在最上層，否則擷取到的是蓋在上面的別的視窗
+        // （實測被終端機蓋住時拼出 118% 的垃圾內容，判定會誤導）。
+        w.level = .floating
         w.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         window = w
@@ -86,8 +91,20 @@ public final class ScrollCaptureSelfCheck {
         wheelAccum += stepPoints
     }
 
+    /// 平均亮度（0-255）：用來抓「SCStream 供出黑格／半渲染格」的情況。
+    private static func meanLuma(_ p: PixelBuffer) -> Int {
+        guard !p.bytes.isEmpty else { return -1 }
+        var sum = 0
+        var i = 0
+        let stride = 997 * 4          // 質數跳點抽樣，夠代表整張
+        while i < p.bytes.count - 4 { sum += Int(p.bytes[i]); i += stride }
+        return sum / max(1, (p.bytes.count / stride))
+    }
+
     private func onFrame(_ pb: PixelBuffer) {
         frames += 1
+        if firstFrameHeight == 0 { firstFrameHeight = pb.height }
+        if frames <= 6 { emit("  frame#\(frames) 平均亮度=\(Self.meanLuma(pb))") }
         if pendingFrame != nil { dropped += 1 }
         pendingFrame = pb            // 背壓：只留最新
         pump()
@@ -111,8 +128,9 @@ public final class ScrollCaptureSelfCheck {
                 case .appended, .trimmed, .bandsLocked: self.wheelAccum = 0
                 default: break
                 }
-                if n <= 12 || n % 5 == 0 {
-                    self.emit("frame#\(n) \(frame.width)x\(frame.height) step=\(self.step) consume=\(ms)ms → \(out) 長圖高=\(h)")
+                // 記錄所有「非等待」結果，才看得到從成功轉為永久失敗的斷點
+                if case .waitingForMotion = out {} else {
+                    self.emit("frame#\(n) step=\(self.step) \(ms)ms → \(out) 高=\(h) matcher=\(engine.lastMatchNote)")
                 }
                 self.pump()
             }
@@ -124,13 +142,43 @@ public final class ScrollCaptureSelfCheck {
         Task { @MainActor in
             await source.stop()
             let e = engine
-            let finalH = e?.finalize().map { "\($0.width)x\($0.height)" } ?? "nil"
+            let finalCG = e?.finalize()
+            let finalH = finalCG.map { "\($0.width)x\($0.height)" } ?? "nil"
+            if let cg = finalCG {
+                try? CaptureSaver.writePNG(cgImage: cg, to: URL(fileURLWithPath: "/tmp/anypaint-selfcheck.png"))
+                if let pb = PixelBuffer(cgImage: cg) {
+                    var blackRows = 0
+                    var firstBlack = -1, lastBlack = -1
+                    for r in 0..<pb.height {
+                        let base = r * pb.width * 4
+                        var s = 0
+                        var c = 0
+                        while c < pb.width { s += Int(pb.bytes[base + c * 4]); c += 37 }
+                        if s == 0 {
+                            blackRows += 1
+                            if firstBlack < 0 { firstBlack = r }
+                            lastBlack = r
+                        }
+                    }
+                    emit("全黑列數=\(blackRows)/\(pb.height) 範圍=[\(firstBlack)...\(lastBlack)] PNG=/tmp/anypaint-selfcheck.png")
+                }
+            }
             emit("---- 結果 ----")
             emit("收到影格數=\(frames) 背壓丟格=\(dropped) 步數=\(step)")
             emit("engine 長圖高=\(e?.height ?? -1) appended格數=\(e?.appendedFrameCount ?? -1) 連續失敗=\(e?.consecutiveFailures ?? -1) 已鎖帶=\(e?.isLocked ?? false)")
             emit("finalize=\(finalH)")
-            let grew = (e?.height ?? 0) > 0 && (e?.appendedFrameCount ?? 0) > 1
-            emit(grew ? "PASS 長圖有增長" : "FAIL 長圖沒有增長")
+            // 正確性判準（不只「有增長」）：內容每步位移 stepPoints×scale 像素，總共 totalSteps 步，
+            // 所以長圖高應該 ≈ 基準格高 + 總位移。只檢查「有增長」會漏掉「拼了但缺內容」
+            // （實測有一版只拼到 45% 就 PASS，之後才發現救援層被過嚴的驗證擋掉）。
+            let scale = NSScreen.main?.backingScaleFactor ?? 2
+            let baseH = Double(firstFrameHeight)
+            let expected = baseH + Double(totalSteps) * Double(stepPoints) * Double(scale)
+            let actual = Double((e?.height ?? 0) + bottomBandCompensation)
+            let ratio = expected > 0 ? actual / expected : 0
+            emit("預期高≈\(Int(expected)) 實得=\(Int(actual)) 達成率=\(Int(ratio * 100))%")
+            // 上下都要卡：只設下限的話「拼太多」（重複內容）也會 PASS——實測曾出現 203% 卻報 PASS。
+            let ok = (e?.appendedFrameCount ?? 0) > 1 && ratio >= 0.9 && ratio <= 1.1
+            emit(ok ? "PASS 長圖拼接量正確" : "FAIL 拼接量不足（預期 \(Int(expected))、實得 \(Int(actual))）")
             finishNow()
         }
     }
@@ -154,8 +202,10 @@ final class SelfCheckContentView: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// 模仿深色終端機：近黑底＋亮色等寬字塊，且**大片區域是空白**——這是實機失效的場景
+    /// （使用者在深色終端機上滾動截圖，長圖等於單張影格）。
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.white.setFill()
+        NSColor(white: 0.11, alpha: 1).setFill()
         bounds.fill()
         // 決定性內容：以 y 絕對座標算出每行的縮排與長度，位移時同一行內容不變（可被匹配追蹤）。
         let lineH: CGFloat = 18
@@ -167,10 +217,12 @@ final class SelfCheckContentView: NSView {
             let y = absY - scrollOffset
             var seed = UInt64(bitPattern: Int64(i)) &* 6364136223846793005 &+ 1442695040888963407
             func rnd(_ n: Int) -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int(seed >> 33) % n }
+            // 每 3 行只有 1 行有字，模擬終端機輸出的空白間隔
+            guard i % 3 == 0 else { continue }
             var x: CGFloat = CGFloat(8 + rnd(40))
             while x < bounds.width - 30 {
                 let w = CGFloat(30 + rnd(110))
-                let g = CGFloat(30 + rnd(120)) / 255.0
+                let g = CGFloat(150 + rnd(105)) / 255.0     // 亮字（深底上）
                 NSColor(white: g, alpha: 1).setFill()
                 CGRect(x: x, y: y + 3, width: min(w, bounds.width - 10 - x), height: lineH - 7).fill()
                 x += w + CGFloat(10 + rnd(24))

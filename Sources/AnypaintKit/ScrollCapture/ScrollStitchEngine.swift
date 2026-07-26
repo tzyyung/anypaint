@@ -46,6 +46,8 @@ public final class ScrollStitchEngine {
 
     public private(set) var appendedFrameCount = 1
     public private(set) var consecutiveFailures = 0
+    /// 最近一次 matcher 主判的結果字串（診斷用：區分 ambiguous／lowConfidence／noOverlap）。
+    public private(set) var lastMatchNote = ""
     public var height: Int { stitcher?.height ?? 0 }
     public var isLocked: Bool { insets != nil }
 
@@ -56,6 +58,11 @@ public final class ScrollStitchEngine {
     private var lastAcceptedFullFrame: PixelBuffer?
     private var priorDy: Int?
     private var lockAttempts = 0
+    /// 滾輪符號 → 影像位移符號的對應（nil＝尚未學到）。AppKit 的 scrollingDeltaY 正負會隨裝置與
+    /// 系統「自然捲動」設定翻轉，賭錯會讓 matcher 只搜反向、永遠拼不出東西。做法：未學到前允許
+    /// 兩個方向都試，第一次成功匹配就把對應記下來，之後只搜推算出的方向——既與系統設定無關，
+    /// 也不會在「本來就無法匹配」的快捲格上因反向搜尋撿到假峰（實測會污染長圖）。
+    private var wheelToImageSign: Int?
 
     public init(maxHeightPx: Int, motionGatePoints: CGFloat = ScrollStitchEngine.defaultMotionGatePoints) {
         self.maxHeightPx = maxHeightPx
@@ -89,8 +96,26 @@ public final class ScrollStitchEngine {
         let reference = stitcher.referenceTail(maxHeight: contentFrame.height)
         guard reference.height == contentFrame.height else { return .waitingForMotion }
 
-        let outcome = ScrollMatcher.match(new: LumaPlane(contentFrame), reference: LumaPlane(reference),
-                                          wheelDirection: wheelDirection, prior: priorDy)
+        // 方向**不信任滾輪符號**：AppKit 的 scrollingDeltaY 正負會隨裝置與系統「自然捲動」設定翻轉，
+        // 賭錯的話 matcher 只搜反向、真正的位移永遠找不到 → 零拼接（實機症狀：長圖＝單張影格）。
+        // 做法：先試滾輪暗示的方向，失敗再試反向。成功時只跑一次（無額外成本），
+        // 失敗時多跑一次換來對系統設定的完全免疫。
+        let newLuma = LumaPlane(contentFrame)
+        let refLuma = LumaPlane(reference)
+        let rawWheelSign = wheelDirection >= 0 ? 1 : -1
+        let primary = (wheelToImageSign ?? 1) * rawWheelSign
+        var outcome = ScrollMatcher.match(new: newLuma, reference: refLuma,
+                                          wheelDirection: primary, prior: priorDy)
+        if wheelToImageSign == nil, case .accepted = outcome {} else if wheelToImageSign == nil {
+            // 僅在對應未知時試反向（開場幾格），避免在無法匹配的快捲格上撿假峰
+            let alternate = ScrollMatcher.match(new: newLuma, reference: refLuma,
+                                                wheelDirection: -primary, prior: nil)
+            if case .accepted = alternate { outcome = alternate }
+        }
+        lastMatchNote = "\(outcome)"
+        if wheelToImageSign == nil, case let .accepted(dy, _) = outcome, dy != 0 {
+            wheelToImageSign = (dy > 0 ? 1 : -1) * rawWheelSign
+        }
         switch outcome {
         case let .accepted(dy, _) where dy > 0:
             return accept(dy: dy, full: full, contentFrame: contentFrame)
@@ -151,16 +176,24 @@ public final class ScrollStitchEngine {
     private func rescue(contentFrame: PixelBuffer, reference: PixelBuffer, full: PixelBuffer,
                         wheelDirection: Int) -> ScrollStitchOutcome {
         if let visionDy = visionEstimate(new: contentFrame, reference: reference),
-           visionDy > 0, wheelDirection >= 0,
+           visionDy > 0,
            case let .accepted(dy, _) = ScrollMatcher.match(
                new: LumaPlane(contentFrame), reference: LumaPlane(reference),
                wheelDirection: 1, prior: visionDy),
            abs(dy - visionDy) <= max(18, visionDy / 3) {
             return accept(dy: dy, full: full, contentFrame: contentFrame)
         }
-        if let (dy, _) = PhaseCorrelation1D.estimateShift(new: LumaPlane(contentFrame),
-                                                         reference: LumaPlane(reference)),
-           dy >= ScrollMatcher.Config.default.minDelta, wheelDirection >= 0 {
+        // PC 的 dy 來自 1-D 投影，實測常有 ±1px 誤差，且它自己沒有任何 ambiguity 閘門——
+        // 因此**不可直接採用**（實測：完全沒有重疊的快捲影格會被 PC 給出假 dy 而拼進長圖）。
+        // 一律交回 matcher 以它為 prior 複核：matcher 的 L0 精修會修掉 ±1px 誤差，
+        // 而它的絕對閘＋比值閘（真匹配分數 0.0 vs 無重疊 0.43 且次低幾乎同分）能擋掉假匹配。
+        if let (pcDy, _) = PhaseCorrelation1D.estimateShift(new: LumaPlane(contentFrame),
+                                                           reference: LumaPlane(reference)),
+           pcDy >= ScrollMatcher.Config.default.minDelta,
+           case let .accepted(dy, _) = ScrollMatcher.match(
+               new: LumaPlane(contentFrame), reference: LumaPlane(reference),
+               wheelDirection: 1, prior: pcDy),
+           abs(dy - pcDy) <= max(18, pcDy / 3) {
             return accept(dy: dy, full: full, contentFrame: contentFrame)
         }
         consecutiveFailures += 1

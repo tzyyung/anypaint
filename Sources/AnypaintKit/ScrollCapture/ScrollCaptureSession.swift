@@ -47,6 +47,10 @@ public final class ScrollCaptureSession {
     private var watchdog: DispatchWorkItem?
     private var lastWatchdogResetUptimeNs: UInt64 = 0
     private var bottomProbeCount = 0
+    /// 最近一次「有進展」（拼接／裁尾／鎖帶）的時刻。用於停滯收工判定——不可用「連續失敗次數」：
+    /// 30fps 下連續 10 次失敗只有 1/3 秒，使用者手一甩超出可匹配範圍就被強制收工（實機症狀：
+    /// 預覽只有單張影格）。改成時間門檻後，使用者有時間依 HUD 提示回捲救回。
+    private var lastProgressAt: TimeInterval = 0
 
     // MARK: 進入/取消
 
@@ -163,6 +167,7 @@ public final class ScrollCaptureSession {
         hud.onDone = { [weak self] in self?.finish() }
         guidance = ScrollGuidance(selectionHeight: Int(overlay.selectionGlobal.height))
         engine = ScrollStitchEngine(maxHeightPx: AppSettings.scrollMaxHeightPx)
+        lastProgressAt = ProcessInfo.processInfo.systemUptime
         startBottomWatch()
         frameSource.onFrame = { [weak self] pb in self?.consume(frame: pb) }
         frameSource.onStreamError = { [weak self] _ in self?.finish() }   // stream 死亡 → 保留已拼（spec §3）
@@ -221,14 +226,17 @@ public final class ScrollCaptureSession {
             break                                     // 皆非失敗，不需提示
         case .bandsLocked:
             wheelAccumulator = 0
+            lastProgressAt = ProcessInfo.processInfo.systemUptime
         case let .appended(dy, total):
             wheelAccumulator = 0
+            lastProgressAt = ProcessInfo.processInfo.systemUptime
             if var guidance {
                 hud.update(message: guidance.frameAccepted(dy: dy, totalPx: total))
                 self.guidance = guidance
             }
         case .trimmed:
             wheelAccumulator = 0
+            lastProgressAt = ProcessInfo.processInfo.systemUptime
             if var guidance {
                 hud.update(message: guidance.frameDroppedBackscroll())
                 self.guidance = guidance
@@ -247,7 +255,9 @@ public final class ScrollCaptureSession {
                 }
                 self.guidance = guidance
             }
-            if failures >= 10 { finish() }            // spec §3
+            // 不在此立即收工：連續失敗次數在 30fps 下太敏感（10 次＝1/3 秒）。
+            // 停滯收工改由 bottomTick 依「多久沒有任何進展」判定（見 stallSeconds）。
+            _ = failures
         case .limitReached:
             finish()
         }
@@ -268,8 +278,15 @@ public final class ScrollCaptureSession {
         bottomWatch = t
     }
 
+    /// 多久「完全沒有進展」就搶救收工（保留已拼）。要遠大於一次快捲＋回捲救回所需時間。
+    private let stallSeconds: TimeInterval = 12
+
     private func bottomTick() {
         guard state == .capturing else { return }
+        if ProcessInfo.processInfo.systemUptime - lastProgressAt > stallSeconds {
+            finish()                                  // 內容已完全變樣（切了 app／永久失去重疊）
+            return
+        }
         let framesStalled = ProcessInfo.processInfo.systemUptime - frameSource.lastFrameAt > 1.0
         defer { wheelTicksSinceCheck = 0 }
         guard wheelTicksSinceCheck > 0, framesStalled else {

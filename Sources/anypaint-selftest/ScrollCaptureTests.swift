@@ -18,7 +18,13 @@ import AnypaintKit
 /// 由 visionTyUnitTest 持續看守——Vision 行為改變時此測試會先紅。
 let visionTyIsInPixels = true
 
+
+
+
 func runScrollCaptureTests() {
+    fastScrollRecoveryTests()
+    wheelSignIndependenceTests()
+    sparseContentTests()
     scrollStitchEngineTests()
     visionTyUnitTest()
     pixelBufferTests()
@@ -268,8 +274,7 @@ func scrollMatcherTests() {
     let n2 = nq.downsampled().downsampled(), r2 = rq.downsampled().downsampled()
     var bestL2 = (dy: -1, s: Float.greatestFiniteMagnitude)
     for d in 1...170 {
-        let s = ScrollMatcher.bandScore(new: n2, ref: r2, dy: d, config: .default, level: 4,
-                                        earlyExit: .greatestFiniteMagnitude)
+        let s = ScrollMatcher.overlapScore(new: n2, ref: r2, dy: d).mean
         if s < bestL2.s { bestL2 = (d, s) }
     }
     T.checkTrue("matcher: L2 粗估在 50±1", abs(bestL2.dy - 50) <= 1)
@@ -495,4 +500,135 @@ func scrollStitchEngineTests() {
     } else {
         T.checkTrue("engine: 回捲應回 trimmed（實得 \(backOut)）", false)
     }
+}
+
+/// 稀疏內容回歸：實機在深色終端機上「長圖幾乎不增長」的重現。
+/// 選區大半是均勻背景（終端機空白區），只有小部分有文字紋理。
+func sparseContentTests() {
+    let w = 400, pageH = 4000, frameH = 420
+    // 造一頁：只有每個視窗的下方 25% 有紋理，其餘為均勻深色（模擬終端機空白區）
+    var bytes = [UInt8](repeating: 0, count: w * pageH * 4)
+    for i in 0..<(w * pageH) {           // 均勻深色底 (28,28,30)
+        bytes[i*4] = 28; bytes[i*4+1] = 28; bytes[i*4+2] = 30; bytes[i*4+3] = 255
+    }
+    var rng = SyntheticPage.LCG(seed: 77)
+    var y = 0
+    while y < pageH {
+        // 每 4 段中只有 1 段有文字（＝約 25% 有紋理）
+        if (y / 100) % 4 == 3 {
+            for line in stride(from: y, to: min(y + 100, pageH), by: 18) {
+                var x = 10 + rng.int(30)
+                while x < w - 30 {
+                    let bw = 25 + rng.int(90)
+                    let g = UInt8(170 + rng.int(80))
+                    for r in line..<min(line + 11, pageH) {
+                        for c in x..<min(x + bw, w) {
+                            let o = (r * w + c) * 4
+                            bytes[o] = g; bytes[o+1] = g; bytes[o+2] = g
+                        }
+                    }
+                    x += bw + 8 + rng.int(18)
+                }
+            }
+        }
+        y += 100
+    }
+    let page = PixelBuffer(width: w, height: pageH, bytes: bytes)
+
+    let engine = ScrollStitchEngine(maxHeightPx: 30000)
+    var pos = 0
+    var accum: CGFloat = 0
+    var appends = 0
+    for _ in 0..<24 {
+        accum += 20
+        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH),
+                                 wheelAccumulatedPoints: accum, wheelDirection: 1)
+        switch out {
+        case .appended: appends += 1; accum = 0
+        case .bandsLocked, .trimmed: accum = 0
+        default: break
+        }
+        pos += 40
+    }
+    T.checkTrue("sparse: 稀疏內容仍能拼接（appends=\(appends), 高=\(engine.height)）", appends >= 8)
+    T.checkTrue("sparse: 稀疏內容長圖有增長（\(engine.height) > \(frameH)）", engine.height > frameH + 300)
+}
+
+/// 滾輪符號無關性回歸：內容確實往下捲，但呼叫端給了**相反**的方向提示
+/// （AppKit scrollingDeltaY 正負會隨裝置／自然捲動設定翻轉）。
+/// 修正前：matcher 只搜反向 → 零拼接（實機症狀：長圖＝單張影格 1476x517）。
+func wheelSignIndependenceTests() {
+    let page = SyntheticPage.make(width: 400, height: 3000, seed: 53)
+    let frameH = 420
+    func run(direction: Int) -> (appends: Int, height: Int) {
+        let engine = ScrollStitchEngine(maxHeightPx: 30000)
+        var pos = 0, appends = 0
+        var accum: CGFloat = 0
+        for _ in 0..<16 {
+            accum += 20
+            let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH),
+                                     wheelAccumulatedPoints: accum, wheelDirection: direction)
+            switch out {
+            case .appended: appends += 1; accum = 0
+            case .bandsLocked, .trimmed: accum = 0
+            default: break
+            }
+            pos += 40
+        }
+        return (appends, engine.height)
+    }
+    let correct = run(direction: 1)
+    let inverted = run(direction: -1)
+    T.checkTrue("wheelsign: 方向提示正確時可拼接（appends=\(correct.appends)）", correct.appends >= 8)
+    T.checkTrue("wheelsign: 方向提示相反時仍可拼接（appends=\(inverted.appends), 高=\(inverted.height)）",
+                inverted.appends >= 8)
+    T.checkEq("wheelsign: 兩種方向提示得到相同長圖高（符號無關）", inverted.height, correct.height)
+}
+
+/// 快捲（超過可匹配範圍）與其復原：實機在終端機甩一下就跳數百 px 的情境。
+/// maxDy = 選區高 − max(96, 高×16%)；超過就沒有重疊帶，匹配必然失敗。
+/// 關鍵行為要求：失敗**不可**很快就自動收工（spec 原訂「連續 10 格失敗」在 30fps 下只有 1/3 秒），
+/// 且回到可匹配的步幅後必須能續拼（匹配基準是固定的長圖尾端，故天然可復原）。
+func fastScrollRecoveryTests() {
+    let page = SyntheticPage.make(width: 400, height: 6000, seed: 61)
+    let frameH = 420
+    let engine = ScrollStitchEngine(maxHeightPx: 30000)
+    var pos = 0
+    var accum: CGFloat = 0
+    // 先正常拼幾格（建立 base＋鎖帶）
+    for _ in 0..<6 {
+        accum += 20
+        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH),
+                                 wheelAccumulatedPoints: accum, wheelDirection: 1)
+        if case .appended = out { accum = 0 }
+        if case .bandsLocked = out { accum = 0 }
+        pos += 40
+    }
+    let heightBeforeBurst = engine.height
+    T.checkTrue("fastscroll: 前置正常拼接成立（高=\(heightBeforeBurst)）", heightBeforeBurst > frameH)
+
+    // 快捲：每次跳 600px（> maxDy=420−96=324）→ 無重疊，必然失敗
+    var rejects = 0
+    for _ in 0..<8 {
+        pos += 600                        // 先跳再擷：確保每一格都超出可匹配範圍
+        accum += 300
+        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH),
+                                 wheelAccumulatedPoints: accum, wheelDirection: 1)
+        if case .rejected = out { rejects += 1 }
+    }
+    T.checkTrue("fastscroll: 快捲確實造成匹配失敗（rejects=\(rejects)）", rejects >= 5)
+    T.checkEq("fastscroll: 失敗期間長圖不被破壞", engine.height, heightBeforeBurst)
+
+    // 復原：使用者回捲到斷點附近（長圖尾端仍是舊內容），再以正常步幅前進
+    pos = heightBeforeBurst - frameH + 40      // 回到與長圖尾端有重疊的位置
+    var recovered = 0
+    for _ in 0..<8 {
+        accum += 20
+        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH),
+                                 wheelAccumulatedPoints: accum, wheelDirection: 1)
+        if case .appended = out { recovered += 1; accum = 0 }
+        pos += 40
+    }
+    T.checkTrue("fastscroll: 回到可匹配步幅後能續拼（recovered=\(recovered), 高=\(engine.height)）",
+                recovered >= 4)
 }
