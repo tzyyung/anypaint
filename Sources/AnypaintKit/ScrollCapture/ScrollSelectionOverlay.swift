@@ -43,7 +43,11 @@ public final class ScrollSelectionOverlayController {
 
     /// selecting：建 panel（同 SelectionOverlayWindow 配置）＋ ScrollSelectionView，全螢幕拉框。
     public func present(on screen: NSScreen) {
-        dismiss()
+        // 只收舊視窗，**不可**呼 dismiss()——呼叫端（Session.begin）是「先設回呼、再 present」，
+        // 而 dismiss() 會把 onSelectionLocked/onCancelRequested 清成 nil，等於把剛設好的回呼抹掉：
+        // enterArmed 永遠不會被呼叫 → 沒 HUD、沒裝滾輪 monitor、進不了 capturing
+        // → overlay 的 ignoresMouseEvents 一直是 false → 滾輪全被 overlay 吃掉、頁面捲不動。
+        teardownWindow()
         let window = ScrollSelectionWindow(screen: screen)
         window.selectionView?.onSelectionLocked = { [weak self, weak window] rect in
             guard let self, let window else { return }
@@ -58,6 +62,11 @@ public final class ScrollSelectionOverlayController {
             self.onSelectionChanged?(global)
         }
         window.selectionView?.onCancelRequested = { [weak self] in self?.onCancelRequested?() }
+        // anypaint 是選單列 app（.accessory/LSUIElement），平時非前景。nonactivating panel 在
+        // 非前景 app 下 makeKeyAndOrderFront 不會真正成為系統 key window → keyDown/Esc 丟失、
+        // 事件路由不可靠。必須先 activate 把 app 帶到前景（對齊 SelectionOverlayController.swift:75，
+        // 同為 accessory + nonactivatingPanel + canBecomeKey 的可運作範本）。
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(window.contentView)
         NSCursor.crosshair.set()
@@ -70,14 +79,20 @@ public final class ScrollSelectionOverlayController {
         window?.selectionView?.mode = .capturing
     }
 
+    /// session 收尾：收視窗＋斷回呼（斷回呼是為了不讓已死的 session 被殘留事件回叫）。
     public func dismiss() {
+        teardownWindow()
+        onSelectionLocked = nil
+        onSelectionChanged = nil
+        onCancelRequested = nil
+    }
+
+    /// 只收視窗與視覺狀態，不動回呼——present() 重建視窗時用（見 present 的註解）。
+    private func teardownWindow() {
         window?.orderOut(nil)
         window = nil
         selectionGlobal = .zero
         NSCursor.arrow.set()
-        onSelectionLocked = nil
-        onSelectionChanged = nil
-        onCancelRequested = nil
     }
 }
 

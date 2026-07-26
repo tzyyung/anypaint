@@ -19,6 +19,7 @@ import AnypaintKit
 let visionTyIsInPixels = true
 
 func runScrollCaptureTests() {
+    scrollStitchEngineTests()
     visionTyUnitTest()
     pixelBufferTests()
     scrollCoordsTests()
@@ -408,4 +409,90 @@ func scrollGuidanceTests() {
     _ = g.frameDroppedBackscroll()
     T.checkEq("guidance: 回捲格不進失敗計數", g.consecutiveFailures, 2)
     T.checkEq("guidance: 回捲訊息", g.frameDroppedBackscroll(), GuidanceMessage.backscrollTrimming)
+}
+
+
+/// 端到端整合測試：模擬真實 30fps 影格序列（含慢捲小位移）跑完整 engine 鏈。
+/// 這組是實機「長圖不增長、剛捲就結束」bug 的回歸防線——舊邏輯在此必紅。
+func scrollStitchEngineTests() {
+    let page = SyntheticPage.make(width: 400, height: 4000, seed: 31)
+    let frameH = 420
+
+    // 慢捲：每格只前進 5px（< minDelta=14），滾輪每格 2.5 點。
+    // 舊邏輯：每格判失敗 → 10 格收工、長圖不增長。新邏輯：累積過閘後一次接上。
+    func runSlowScroll(motionGate: CGFloat) -> (height: Int, failures: Int, appended: Int) {
+        let engine = ScrollStitchEngine(maxHeightPx: 30000, motionGatePoints: motionGate)
+        var y = 0
+        var accum: CGFloat = 0
+        for _ in 0..<40 {
+            accum += 2.5
+            let out = engine.consume(frame: SyntheticPage.window(page, y: y, height: frameH),
+                                     wheelAccumulatedPoints: accum, wheelDirection: 1)
+            switch out {
+            case .appended, .trimmed, .bandsLocked: accum = 0
+            default: break
+            }
+            y += 5
+        }
+        return (engine.height, engine.consecutiveFailures, engine.appendedFrameCount)
+    }
+    let slow = runSlowScroll(motionGate: ScrollStitchEngine.defaultMotionGatePoints)
+    T.checkTrue("engine: 慢捲 5px/格 長圖有增長（\(slow.height) > \(frameH)）", slow.height > frameH)
+    T.checkTrue("engine: 慢捲不累積失敗（failures=\(slow.failures) < 10）", slow.failures < 10)
+    T.checkTrue("engine: 慢捲有多次 append（\(slow.appended) 格）", slow.appended >= 3)
+    // gate 的作用是省掉「必然失敗」的匹配（30fps 下相鄰格位移常 <minDelta=14），不是拼接正確性的
+    // 前提：匹配基準是固定的長圖尾端，位移會累積（5→10→15px）到達標，所以 gate=0 也拼得出來，
+    // 只是白跑很多次昂貴的金字塔匹配、且接合點分段不同（故高度不必相同，只需同樣有增長）。
+    // 實機的真正瓶頸是「匹配放在主執行緒」——debug build 單格 1.3–1.7 秒，主執行緒被塞爆。
+    let noGate = runSlowScroll(motionGate: 0)
+    T.checkTrue("engine: gate=0 也能拼出來（\(noGate.height)）", noGate.height > frameH)
+
+    // 正常速度：每格 40px、滾輪 20 點/格。
+    let engine = ScrollStitchEngine(maxHeightPx: 30000, motionGatePoints: ScrollStitchEngine.defaultMotionGatePoints)
+    var y = 0
+    var appendedTotal = 0
+    var accum2: CGFloat = 0
+    for _ in 0..<16 {
+        accum2 += 20
+        let out = engine.consume(frame: SyntheticPage.window(page, y: y, height: frameH),
+                                 wheelAccumulatedPoints: accum2, wheelDirection: 1)
+        if case let .appended(dy, _) = out { appendedTotal += dy; accum2 = 0 }
+        if case .bandsLocked = out { accum2 = 0 }
+        y += 40
+    }
+    T.checkTrue("engine: 正常速度累積拼接（拼進 \(appendedTotal)px）", appendedTotal > 500)
+    T.checkEq("engine: 正常速度零失敗", engine.consecutiveFailures, 0)
+
+    // 端到端逐像素：拼完的長圖須等於原頁面對應區段。
+    if let cg = engine.finalize(), let got = PixelBuffer(cgImage: cg) {
+        let expected = SyntheticPage.window(page, y: 0, height: got.height)
+        T.checkTrue("engine: 端到端逐像素正確（高 \(got.height)）",
+                    zip(got.bytes, expected.bytes).allSatisfy { abs(Int($0) - Int($1)) <= 2 })
+    } else { T.checkTrue("engine: finalize 成功", false) }
+
+    // motion gate 語意：閘未過不得算失敗
+    let gated = ScrollStitchEngine(maxHeightPx: 30000)
+    _ = gated.consume(frame: SyntheticPage.window(page, y: 0, height: frameH),
+                      wheelAccumulatedPoints: 0, wheelDirection: 1)   // base
+    let out = gated.consume(frame: SyntheticPage.window(page, y: 3, height: frameH),
+                            wheelAccumulatedPoints: 3, wheelDirection: 1)
+    T.checkEq("engine: 閘未過回 waitingForMotion", out, ScrollStitchOutcome.waitingForMotion)
+    T.checkEq("engine: 閘未過不計失敗", gated.consecutiveFailures, 0)
+
+    // 回捲：先下捲累積再上捲，長圖尾端要縮
+    let back = ScrollStitchEngine(maxHeightPx: 30000, motionGatePoints: 10)
+    _ = back.consume(frame: SyntheticPage.window(page, y: 0, height: frameH),
+                     wheelAccumulatedPoints: 0, wheelDirection: 1)
+    _ = back.consume(frame: SyntheticPage.window(page, y: 60, height: frameH),
+                     wheelAccumulatedPoints: 30, wheelDirection: 1)    // 鎖帶
+    _ = back.consume(frame: SyntheticPage.window(page, y: 120, height: frameH),
+                     wheelAccumulatedPoints: 30, wheelDirection: 1)    // append
+    let hBefore = back.height
+    let backOut = back.consume(frame: SyntheticPage.window(page, y: 60, height: frameH),
+                               wheelAccumulatedPoints: 30, wheelDirection: -1)
+    if case let .trimmed(amount, _) = backOut {
+        T.checkTrue("engine: 回捲裁尾 \(amount)px、高度變小", back.height < hBefore)
+    } else {
+        T.checkTrue("engine: 回捲應回 trimmed（實得 \(backOut)）", false)
+    }
 }

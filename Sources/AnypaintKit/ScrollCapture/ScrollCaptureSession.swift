@@ -1,6 +1,7 @@
 import AppKit
 import Vision
 
+
 /// 滾動截圖協調者（spec §3 狀態機）。組裝 overlay/HUD/frameSource/matcher/stitcher/guidance，
 /// 自己不做演算法，只管「誰在什麼時候呼叫誰」＋逃生路徑。
 ///
@@ -28,21 +29,24 @@ public final class ScrollCaptureSession {
     private let overlay = ScrollSelectionOverlayController()
     private let hud = ScrollHUDController()
     private let frameSource = ScrollFrameSource()
-    private var stitcher: ScrollStitcher?
     private var guidance: ScrollGuidance?
-    private var insets: BandInsets?             // nil = 未鎖定
     private var screen: NSScreen?
-    private var lastAcceptedFullFrame: PixelBuffer?   // 鎖帶前的 detect 素材／鎖帶後的上一格全幅
-    private var priorDy: Int?
+    /// 影格消化引擎。**只在 engineQueue 上被觸碰**——匹配鏈很重（debug build 單格可達 1.7 秒），
+    /// 放主執行緒會把計時器／HUD／事件監聽全部餓死（實測：長圖完全不增長）。
+    private var engine: ScrollStitchEngine?
+    private let engineQueue = DispatchQueue(label: "anypaint.scroll.engine", qos: .userInitiated)
+    private var engineBusy = false
+    /// 背壓：engine 忙碌時只保留「最新」一格。丟掉中間格無害——匹配基準是固定的長圖尾端，
+    /// 位移會累積到下一次匹配一併接上。
+    private var pendingFrame: PixelBuffer?
     private var eventMonitors: [Any] = []        // 滾輪（local+global）＋ mouseMoved（global）監聽
     private var wheelAccumulator: CGFloat = 0    // 自上次接受後的滾輪累計（px 級 delta）
     private var recentWheelDirection = 0         // +1 下捲 / -1 上捲 / 0 無（bounce 豁免的閘門）
-    private var wheelIdleTimer: Timer?           // 到底判定：滾輪持續但 1.5s 無新格
+    private var bottomWatch: Timer?              // 到底判定的週期檢查
+    private var wheelTicksSinceCheck = 0         // 兩次檢查之間收到的滾輪事件數
     private var watchdog: DispatchWorkItem?
     private var lastWatchdogResetUptimeNs: UInt64 = 0
-    private var consecutiveFailures = 0          // 三層匹配鏈連續失敗（≥10 → 收工，spec §3）
     private var bottomProbeCount = 0
-    private var lockAttempts = 0                 // 鎖帶前累積的「已接受但未能鎖定」格數（T7 遞延重試）
 
     // MARK: 進入/取消
 
@@ -51,10 +55,35 @@ public final class ScrollCaptureSession {
         self.screen = screen
         state = .selecting
         overlay.onSelectionLocked = { [weak self] sel, scr in self?.enterArmed(sel, scr) }
+        // 調框時重新判定：選區太小被擋住後，拉大就能進 armed（否則是只能取消重來的死路）。
+        // enterArmed 對「已 armed」是冪等的（只更新 HUD 位置，不重裝 monitor）。
+        overlay.onSelectionChanged = { [weak self] sel in
+            guard let self, let scr = self.screen else { return }
+            self.enterArmed(sel, scr)
+        }
         overlay.onCancelRequested = { [weak self] in self?.cancel() }
         overlay.present(on: screen)
+        installEscMonitor()                                        // 逃生：local keyDown 攔 Esc（見方法註解）
         armWatchdog(seconds: AppSettings.overlayWatchdogSeconds)   // selecting/armed 沿用既有語意
         installGlobalMouseMovedWatchdogReset()                     // spec §9.3：滑鼠移動也算互動
+    }
+
+    /// 逃生路：local keyDown monitor 攔 Esc。不能只靠 ScrollSelectionView.keyDown——
+    /// nonactivating panel「被點擊前收不到 responder 事件」（範本 SelectionOverlayController:100-102
+    /// 的實測結論），view.keyDown 不可靠。local monitor 不依賴 responder chain、不需 AX 權限
+    /// （與 global 不同），但需 app 為前景（present 的 NSApp.activate 已保證）。
+    /// capturing 後使用者點過選區（穿透）→ app 失去前景 → local 收不到，此時取消靠 HUD／⌘⇧X／
+    /// 看門狗（spec §6：Esc 於 capturing 是 bonus）。
+    private func installEscMonitor() {
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            if event.keyCode == 53, self.state == .selecting || self.state == .armed {
+                self.cancel()
+                return nil   // 吞掉，不再往下派發
+            }
+            return event
+        }
+        if let monitor { eventMonitors.append(monitor) }
     }
 
     public func cancelIfActive() { if isActive { cancel() } }
@@ -63,9 +92,19 @@ public final class ScrollCaptureSession {
         // 兩個分支都要先掛好取消：太小選區的死路訊息也要有一顆按得下去的「取消」按鈕，
         // 不能只靠 Esc／看門狗（免按鍵保證退出＋多條取消路徑，逃生路徑守則）。
         hud.onCancel = { [weak self] in self?.cancel() }
-        guard selection.height >= 320 else {    // spec §3 最小選區高
+        // spec §3 的最小選區高是 **320 像素**（matcher 的 probe/重疊幾何全以像素計）——
+        // selection 是點座標，Retina 上 1pt=2px，直接拿點比 320 會把門檻抬成 640px、
+        // 比設計嚴格一倍（實測：600px 的合格選區被誤擋）。一律換算成像素再比。
+        let scale = scr.backingScaleFactor      // 同一顆螢幕上等同擷取端的 pointPixelScale
+        let pixelHeight = Int((selection.height * scale).rounded())
+        guard pixelHeight >= 320 else {
             hud.show(near: selection, on: scr, mode: .armed)
-            hud.update(message: .hardToMatch)   // 文案沿用（未新增專屬訊息，記錄於報告）
+            hud.update(message: .selectionTooSmall)   // 明確告知原因（原本誤用 .hardToMatch 語意不符）
+            return
+        }
+        // 已 armed（使用者在調框）→ 只跟著更新 HUD 位置，不可重跑進場流程（會重複裝滾輪 monitor）。
+        guard state != .armed else {
+            hud.show(near: selection, on: scr, mode: .armed)
             return
         }
         state = .armed
@@ -92,8 +131,8 @@ public final class ScrollCaptureSession {
             self.wheelAccumulator += abs(e.scrollingDeltaY)
             if e.scrollingDeltaY != 0 { self.recentWheelDirection = e.scrollingDeltaY < 0 ? 1 : -1 }
             // AppKit 慣例：deltaY < 0 = 內容上移 = 頁面下捲（自然捲動）。實跑驗證後如相反，翻轉此行並註記。
+            self.wheelTicksSinceCheck += 1
             self.resetWatchdogFromInteraction()
-            self.scheduleBottomProbe()
         }
         if let local = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel, handler: { e in handler(e); return e }) {
             eventMonitors.append(local)
@@ -123,6 +162,8 @@ public final class ScrollCaptureSession {
         hud.show(near: overlay.selectionGlobal, on: screen, mode: .capturing)
         hud.onDone = { [weak self] in self?.finish() }
         guidance = ScrollGuidance(selectionHeight: Int(overlay.selectionGlobal.height))
+        engine = ScrollStitchEngine(maxHeightPx: AppSettings.scrollMaxHeightPx)
+        startBottomWatch()
         frameSource.onFrame = { [weak self] pb in self?.consume(frame: pb) }
         frameSource.onStreamError = { [weak self] _ in self?.finish() }   // stream 死亡 → 保留已拼（spec §3）
         let selectionGlobal = overlay.selectionGlobal
@@ -143,161 +184,106 @@ public final class ScrollCaptureSession {
         armWatchdog(seconds: AppSettings.scrollWatchdogSeconds)
     }
 
-    // MARK: 影格消化（spec §2 單格資料流）
+    // MARK: 影格消化（委派 engine，跑在背景佇列）
 
     private func consume(frame full: PixelBuffer) {
         guard state == .capturing else { return }   // T10：stop 後在途 sample 仍可能派發，guard 掉
-        bottomProbeCount = 0                        // 新 .complete 影格重置到底計數（spec §10）
-        guard let stitcher else {                    // 第 1 張 = base
-            stitcher = ScrollStitcher(firstFrame: full, maxHeightPx: AppSettings.scrollMaxHeightPx)
-            lastAcceptedFullFrame = full
-            return
+        pendingFrame = full                          // 背壓：永遠只留最新一格
+        pumpEngine()
+    }
+
+    private func pumpEngine() {
+        guard state == .capturing, !engineBusy,
+              let frame = pendingFrame, let engine else { return }
+        pendingFrame = nil
+        engineBusy = true
+        let accumulated = wheelAccumulator
+        let direction = recentWheelDirection
+        engineQueue.async { [weak self] in
+            let outcome = engine.consume(frame: frame,
+                                         wheelAccumulatedPoints: accumulated,
+                                         wheelDirection: direction)
+            let height = engine.height
+            let failures = engine.consecutiveFailures
+            Task { @MainActor in
+                guard let self else { return }
+                self.engineBusy = false
+                self.handle(outcome: outcome, height: height, failures: failures)
+                self.pumpEngine()                    // 消化下一格（若期間又收到）
+            }
         }
-        let contentFrame: PixelBuffer
-        if let insets {
-            contentFrame = full.cropped(x: insets.left, y: insets.top,
-                                        width: full.width - insets.left - insets.right,
-                                        height: full.height - insets.top - insets.bottom)
-        } else { contentFrame = full }
-        let reference = stitcher.referenceTail(maxHeight: contentFrame.height)
-        guard reference.height == contentFrame.height else { return }   // 起步未滿一屏的邊界，等下一格
-        let outcome = ScrollMatcher.match(new: LumaPlane(contentFrame), reference: LumaPlane(reference),
-                                          wheelDirection: recentWheelDirection, prior: priorDy)
+    }
+
+    private func handle(outcome: ScrollStitchOutcome, height: Int, failures: Int) {
+        guard state == .capturing else { return }
         switch outcome {
-        case let .accepted(dy, _) where dy > 0:
-            handleAccepted(dy: dy, full: full, contentFrame: contentFrame)
-        case let .accepted(dy, _) where dy < 0:
-            // 回捲仍是 matcher 的「成功接受格」——重置連續失敗（回捲格不計失敗，guidance 同語意）。
-            consecutiveFailures = 0
-            let trimmed = stitcher.cropTail(-dy)     // 回捲裁尾（spec D6）
+        case .baseCaptured, .waitingForMotion, .awaitingBandLock, .noMotion:
+            break                                     // 皆非失敗，不需提示
+        case .bandsLocked:
+            wheelAccumulator = 0
+        case let .appended(dy, total):
+            wheelAccumulator = 0
             if var guidance {
-                hud.update(message: trimmed > 0 ? guidance.frameDroppedBackscroll()
-                                                : guidance.backscrollAtOrigin())
+                hud.update(message: guidance.frameAccepted(dy: dy, totalPx: total))
                 self.guidance = guidance
             }
-            priorDy = nil
-        case .accepted:                              // dy == 0：同樣是成功匹配，重置連續失敗
-            consecutiveFailures = 0
-        case .ambiguous, .lowConfidence, .noOverlap:
-            handleRejected(contentFrame: contentFrame, reference: reference, full: full)
+        case .trimmed:
+            wheelAccumulator = 0
+            if var guidance {
+                hud.update(message: guidance.frameDroppedBackscroll())
+                self.guidance = guidance
+            }
+        case .atOrigin:
+            wheelAccumulator = 0
+            if var guidance {
+                hud.update(message: guidance.backscrollAtOrigin())
+                self.guidance = guidance
+            }
+        case .rejected:
+            if var guidance {
+                if let m = guidance.frameDropped() { hud.update(message: m) }
+                if let m = guidance.wheelAccumulated(sinceLastAccept: Int(wheelAccumulator)) {
+                    hud.update(message: m)
+                }
+                self.guidance = guidance
+            }
+            if failures >= 10 { finish() }            // spec §3
+        case .limitReached:
+            finish()
         }
+        _ = height
     }
 
-    private func handleAccepted(dy: Int, full: PixelBuffer, contentFrame: PixelBuffer) {
-        guard let stitcher else { return }
-        // 任一成功接受格重置「連續失敗」（含 Vision/PC 救援層走到這裡的情況；spec §10 計數器語意）。
-        consecutiveFailures = 0
+    // MARK: 到底判定（自我重排的週期檢查，spec §5.3）
 
-        guard insets != nil else {
-            // 未鎖帶：T7 契約——鎖定必須在任何 append 之前。本格只當偵測素材／鎖定嘗試，絕不 append。
-            attemptLockOrDeferredRetry(dy: dy, full: full)
+    /// 「使用者還在捲，但畫面已經不動」＝到底。畫面靜止時 SCStream 不供格，所以訊號是
+    /// 「這段期間有滾輪事件、卻沒有新 .complete 影格」。必須用**週期性**計時器自我重排：
+    /// 原本的一次性計時器由滾輪事件重排，使用者到底後停手就再也不會重排，永遠累積不到門檻。
+    private func startBottomWatch() {
+        bottomWatch?.invalidate()
+        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.bottomTick() }
+        }
+        RunLoop.main.add(t, forMode: .common)   // tracking loop（拖捲軸）期間也要跳
+        bottomWatch = t
+    }
+
+    private func bottomTick() {
+        guard state == .capturing else { return }
+        let framesStalled = ProcessInfo.processInfo.systemUptime - frameSource.lastFrameAt > 1.0
+        defer { wheelTicksSinceCheck = 0 }
+        guard wheelTicksSinceCheck > 0, framesStalled else {
+            if !framesStalled { bottomProbeCount = 0 }   // 影格還在流＝沒到底
             return
         }
-
-        guard stitcher.append(contentFrame: contentFrame, dy: dy) else { finish(); return }  // 高度上限
-        priorDy = dy
-        wheelAccumulator = 0
-        lastAcceptedFullFrame = full
+        bottomProbeCount += 1
         if var guidance {
-            hud.update(message: guidance.frameAccepted(dy: dy, totalPx: stitcher.height))
+            hud.update(message: guidance.bottomProbing())
             self.guidance = guidance
+        } else {
+            hud.update(message: .bottomProbing)
         }
-    }
-
-    /// 未鎖帶前的每一格：拿本格與上一張全幅做四向偵測嘗試鎖定（spec §7.2）。
-    /// lockBands 契約（T7）可能拒絕（先拼後鎖／退化底帶／寬度不符）——遞延到下一格重試；
-    /// 累積 5 次仍未能鎖定（含 detect 本身沒找到帶）→ fallback 用 zero insets 強制鎖定，
-    /// 避免永遠鎖不上卡死（記一筆 log）。
-    private func attemptLockOrDeferredRetry(dy: Int, full: PixelBuffer) {
-        defer { lastAcceptedFullFrame = full }
-        guard let stitcher else { return }
-        guard let prev = lastAcceptedFullFrame,
-              let detected = StaticBandDetector.detect(frameA: LumaPlane(full), frameB: LumaPlane(prev), dy: dy),
-              stitcher.lockBands(detected, bottomBandFrom: full)
-        else {
-            lockAttempts += 1
-            if lockAttempts >= 5 {
-                let attempts = lockAttempts
-                if stitcher.lockBands(.zero, bottomBandFrom: full) {
-                    insets = .zero
-                    lockAttempts = 0
-                    NSLog("anypaint: 滾動截圖靜態帶連續 %d 次鎖定失敗，改用 zero insets 強制鎖定", attempts)
-                }
-            }
-            return
-        }
-        insets = detected
-        lockAttempts = 0
-    }
-
-    private func handleRejected(contentFrame: PixelBuffer, reference: PixelBuffer, full: PixelBuffer) {
-        // 第二層：Vision 對帳／引導（spec §7.4）——Vision 全圖估計；同意閾值 max(18, dy/3)
-        if let visionDy = visionEstimate(new: contentFrame, reference: reference),
-           visionDy > 0, recentWheelDirection >= 0 {
-            // Vision 引導重搜：以 visionDy 為 prior 再跑一次 matcher
-            if case let .accepted(dy, _) = ScrollMatcher.match(
-                new: LumaPlane(contentFrame), reference: LumaPlane(reference),
-                wheelDirection: 1, prior: visionDy), abs(dy - visionDy) <= max(18, visionDy / 3) {
-                handleAccepted(dy: dy, full: full, contentFrame: contentFrame); return
-            }
-        }
-        // 第三層：1-D 相位相關救援（spec §7.4）。PC 本身不套 minDelta 閘（會回 3px 級微捲雜訊），
-        // Session 端自套與 matcher 相同的 minDelta 閾值（T6 交付契約）。
-        if let (dy, _) = PhaseCorrelation1D.estimateShift(new: LumaPlane(contentFrame),
-                                                          reference: LumaPlane(reference)),
-           dy >= ScrollMatcher.Config.default.minDelta, recentWheelDirection >= 0 {
-            handleAccepted(dy: dy, full: full, contentFrame: contentFrame); return
-        }
-        // TODO(spec §7.5 dead-reckoning)：三層全敗時，若 wheelAccumulator > 0 可用其當 dy 走
-        // handleAccepted 並發 .deadReckoning 提示——v1 不自動啟用（滾輪 delta→px 換算因 app 而異，
-        // spec §13 已列為已接受風險）。待量測到可靠換算係數後的版本再開，此處故意不留死碼。
-        consecutiveFailures += 1
-        if var guidance {
-            if let m = guidance.frameDropped() { hud.update(message: m) }
-            if let m = guidance.wheelAccumulated(sinceLastAccept: Int(wheelAccumulator)) { hud.update(message: m) }
-            self.guidance = guidance
-        }
-        if consecutiveFailures >= 10 { finish() }    // spec §3
-    }
-
-    /// Vision 全圖位移估計。ty 單位／正負號依 Task 2 實測結論（visionTyIsInPixels，
-    /// ScrollCaptureTests.visionTyUnitTest 鎖死）：targeted=new、handler=reference 時，
-    /// 頁面向下捲 ty 為負；換算成本 session「正值＝下捲」的慣例＝ -ty（不可用 abs，否則上捲
-    /// 誤判也會回正值）。
-    private func visionEstimate(new: PixelBuffer, reference: PixelBuffer) -> Int? {
-        guard new.height > 80, let cgNew = new.makeCGImage(), let cgRef = reference.makeCGImage() else { return nil }
-        let request = VNTranslationalImageRegistrationRequest(targetedCGImage: cgNew)
-        let handler = VNImageRequestHandler(cgImage: cgRef, options: [:])
-        try? handler.perform([request])
-        guard let ty = (request.results?.first)?.alignmentTransform.ty else { return nil }
-        return Int((-ty).rounded())   // scrollDownPixels = -ty（Task 2 結論；勿用 abs）
-    }
-
-    // MARK: 到底判定（計時器驅動，spec §5.3）
-
-    private func scheduleBottomProbe() {
-        wheelIdleTimer?.invalidate()
-        // Timer(timeInterval:repeats:block:) + RunLoop.common（非 .scheduledTimer 的 .default
-        // mode）：到底判定在使用者於目標視窗內拖曳捲軸等 tracking loop 期間也必須準時觸發
-        // （API 查證：scheduledTimer 預設掛在 .default mode，tracking/modal loop 期間已知不觸發）。
-        let timer = Timer(timeInterval: 1.5, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.state == .capturing else { return }
-                // 1.5s 內滾輪有動但沒有任何新 .complete 影格 → 到底候選
-                if ProcessInfo.processInfo.systemUptime - self.frameSource.lastFrameAt >= 1.4 {
-                    self.bottomProbeCount += 1
-                    if var guidance = self.guidance {
-                        self.hud.update(message: guidance.bottomProbing())
-                        self.guidance = guidance
-                    } else {
-                        self.hud.update(message: .bottomProbing)
-                    }
-                    if self.bottomProbeCount >= 2 { self.finish() }
-                }
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        wheelIdleTimer = timer
+        if bottomProbeCount >= 3 { finish() }            // 約 1.5 秒「捲了但畫面不動」
     }
 
     // MARK: 收尾／取消／看門狗
@@ -308,7 +294,7 @@ public final class ScrollCaptureSession {
         guard state == .capturing || state == .armed else { return }
         state = .finishing
         let image: CGImage?
-        if let stitcher, stitcher.appendedFrameCount >= 1 { image = stitcher.finalize() } else { image = nil }
+        if let engine, engine.appendedFrameCount >= 1 { image = engine.finalize() } else { image = nil }
         teardown()
         onFinished?(image)   // 呼叫端（AppDelegate）決定 0/1 格降級與 preview（spec §3）
     }
@@ -350,18 +336,17 @@ public final class ScrollCaptureSession {
     }
 
     private func teardown() {
-        wheelIdleTimer?.invalidate(); wheelIdleTimer = nil
+        bottomWatch?.invalidate(); bottomWatch = nil
         watchdog?.cancel(); watchdog = nil
         for m in eventMonitors { NSEvent.removeMonitor(m) }
         eventMonitors.removeAll()
         Task { await frameSource.stop() }
         overlay.dismiss()
         hud.dismiss()
-        stitcher = nil; guidance = nil; insets = nil
-        lastAcceptedFullFrame = nil; priorDy = nil
+        engine = nil; guidance = nil
+        pendingFrame = nil; engineBusy = false
         wheelAccumulator = 0; recentWheelDirection = 0
-        consecutiveFailures = 0; bottomProbeCount = 0
-        lockAttempts = 0
+        bottomProbeCount = 0; wheelTicksSinceCheck = 0
         state = .idle
     }
 }

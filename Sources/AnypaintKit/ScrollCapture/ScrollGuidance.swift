@@ -1,7 +1,7 @@
 import Foundation
 
 public enum GuidanceMessage: Equatable {
-    case progress(px: Int), slowDown, gapNotStitched, mouseOutside
+    case progress(px: Int), slowDown, gapNotStitched, mouseOutside, selectionTooSmall
     case backscrollTrimming, backscrollAtOrigin, hardToMatch, bottomProbing, deadReckoning
 }
 

@@ -12,10 +12,12 @@ INSTALLED_APP="/Applications/${APP_NAME}.app"
 pause() { printf "\n（按 Enter 回選單）"; read -r _; }
 
 build_and_open() {
-    echo "==> 關閉執行中實例並建置（debug）"
+    echo "==> 關閉執行中實例並建置（release）"
     pkill -x "${APP_NAME}" 2>/dev/null || true
     sleep 1
-    if "${ROOT}/scripts/build_app.sh" debug; then
+    # 用 release 不用 debug：滾動截圖的影像匹配在 -Onone 下慢約 50 倍（實測單格 1.7 秒 vs 20ms），
+    # debug build 的滾動截圖無法正常拼接。編譯錯誤迭代可直接用 swift build。
+    if "${ROOT}/scripts/build_app.sh" release; then
         open "${DEV_APP}" && echo "已開啟 ${DEV_APP}"
     else
         echo "建置失敗，未開啟。" >&2
@@ -50,6 +52,23 @@ make_cert() {
     bash "${ROOT}/scripts/make_signing_cert.sh"
 }
 
+# 滾動截圖自檢：自己開一個會動的視窗、真實擷取、跑完整匹配鏈，全自動驗證管線。
+scroll_selfcheck() {
+    echo "==> 建置 release 並執行滾動截圖自檢"
+    pkill -x "${APP_NAME}" 2>/dev/null || true
+    sleep 1
+    "${ROOT}/scripts/build_app.sh" release >/dev/null || { echo "建置失敗" >&2; return 1; }
+    rm -f /tmp/anypaint-selfcheck.log
+    # 必須用 open（走 launchd）而非直接跑 binary：從終端直跑會讓 TCC 把螢幕錄製責任歸給終端機。
+    open -a "${DEV_APP}" --args --scroll-selfcheck
+    echo "自檢執行中（約 10 秒）…"
+    sleep 13
+    echo "----------------"
+    cat /tmp/anypaint-selfcheck.log 2>/dev/null || echo "沒有產生 log（可能是螢幕錄製權限未授予）"
+    echo "----------------"
+    pkill -x "${APP_NAME}" 2>/dev/null || true
+}
+
 uninstall_app() {
     if [ -d "${INSTALLED_APP}" ]; then
         echo "==> 從 /Applications 移除 ${APP_NAME}"
@@ -65,13 +84,14 @@ while true; do
     cat <<MENU
 
 ======== anypaint 開發選單 ========
-  1) 建置並開啟 dev app（debug，快）
+  1) 建置並開啟 dev app（release）
   2) 安裝到 /Applications（release，正式）
   3) 執行自我測試（selftest）
   4) 關閉所有執行中實例
   5) 清理建置產物（build.noindex/、.build/）
   6) 建立持久簽章身分（避免權限每次重置）
   7) 從 /Applications 移除 anypaint
+  8) 滾動截圖自檢（自動，不需互動）
   0) 離開
 ===================================
 MENU
@@ -85,6 +105,7 @@ MENU
         5) clean_build; pause ;;
         6) make_cert; pause ;;
         7) uninstall_app; pause ;;
+        8) scroll_selfcheck; pause ;;
         0|q|Q) echo "掰。"; break ;;
         *) echo "無效選項：${choice}" ;;
     esac

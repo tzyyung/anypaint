@@ -36,7 +36,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public override init() { super.init() }
 
+    /// 內建自檢（ANYPAINT_SCROLL_SELFCHECK=1）：不進正常啟動流程，跑完寫檔即結束。
+    private var scrollSelfCheck: ScrollCaptureSelfCheck?
+
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        // 必須用啟動參數（不是環境變數）：從終端直跑 binary 時 TCC 把螢幕錄製的責任歸給終端機
+        // 而非 app（實測 -3801 拒絕）；走 `open -a … --args --scroll-selfcheck` 由 launchd 啟動，
+        // 才會套用 app 自己已授權的身分。
+        if CommandLine.arguments.contains("--scroll-selfcheck")
+            || ProcessInfo.processInfo.environment["ANYPAINT_SCROLL_SELFCHECK"] == "1" {
+            let check = ScrollCaptureSelfCheck()
+            scrollSelfCheck = check
+            check.run()
+            return
+        }
         // 選單列動作
         menuBar.onCapture = { [weak self] in self?.beginCapture() }
         menuBar.onPin = { [weak self] in self?.pinFromClipboard() }

@@ -17,7 +17,10 @@ public final class ScrollFrameSource: NSObject {
     private nonisolated let ciContext = CIContext(options: [.cacheIntermediates: false])
     private let sampleQueue = DispatchQueue(label: "anypaint.scroll.frames")
 
-    public func start(selectionGlobal: CGRect, screen: NSScreen) async throws {
+    /// - Parameter excludeSelf: 是否把自家 app 整個排除在擷取外（正式流程一律 true，才不會把
+    ///   選區框／HUD／預覽拍進長圖）。**僅內建自檢模式**傳 false——自檢要拍的正是自家那個
+    ///   會動的測試視窗，其餘管線與正式流程完全相同。
+    public func start(selectionGlobal: CGRect, screen: NSScreen, excludeSelf: Bool = true) async throws {
         pendingStop = false
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let key = NSDeviceDescriptionKey("NSScreenNumber")
@@ -26,7 +29,9 @@ public final class ScrollFrameSource: NSObject {
             throw CaptureError.noDisplays
         }
         // 按 app 排除自家（HUD/選區框/預覽全部涵蓋，含 session 中途才開的視窗）
-        let selfApps = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+        let selfApps = excludeSelf
+            ? content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+            : []
         let filter = SCContentFilter(display: display, excludingApplications: selfApps, exceptingWindows: [])
         let scale = CGFloat(filter.pointPixelScale)
         let geo = ScrollCoords.streamGeometry(selectionGlobal: selectionGlobal,
