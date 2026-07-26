@@ -46,19 +46,36 @@ bash scripts/install.sh
 
 ## 使用
 - 截圖 `⌘⇧A`：拖曳框選 → 可調整/標註 → 按「複製」（或 `Enter`）複製到剪貼簿；工具列另有 存檔/另存/貼上。
-- 滾動截圖 `⌘⇧X`：拉框圈住會捲動的內容 → 按「開始」（或直接開始捲）→ 自己往下捲（HUD 顯示已拼接進度；回捲會同步撤回）→ 捲到底自動結束或按「完成」→ 預覽視窗中 複製/存檔/另存/丟棄。提示：滑鼠留在框內、慢慢捲；固定頁首/頁尾與捲軸欄會自動裁除。
+- 滾動截圖 `⌘⇧X`：拉框圈住會捲動的內容 → 按「開始」（或滑鼠留在框內滾一下）→ 自己往下捲
+  （HUD 顯示已拼接進度；回捲會同步撤回）→ 捲到底自動結束或按「完成」→ 預覽視窗中
+  複製/存檔/另存/丟棄。
+  - **滑鼠要留在框內**；框選高度至少 320 像素（Retina 約 160 點）。
+  - **慢一點捲**最穩：一次跳超過選區高度就會失去重疊，HUD 會提示回捲到斷點附近續接。
+  - 固定頁首／頁尾與捲軸欄會自動偵測並裁除。
+  - 已知限制：內容大半空白且文字等行距時（例如只有幾行輸出的終端機），接合可能出現重複段。
+  - 若拼接結果不如預期，`/tmp/anypaint-scroll-session.log` 有該次的診斷紀錄可回報。
 - 貼圖 `⌘⇧V`：把剪貼簿影像貼成置頂浮動圖。滾輪縮放、`⌘`+滾輪調透明度、左鍵雙按關閉、`⇧`+雙按切換縮圖、中鍵重設、`⇧`+右鍵 OCR 取字。
 - 設定分四頁：一般（開機啟動）／截圖（看門狗）／輸出（檔名樣板與儲存）／控制（快鍵改鍵＋滑鼠一覽）。
 - 檔名樣板語法：`$…$` 日期 token（如 `$yyyy-MM-dd HH.mm.ss$`）、`%…%` 變數；詳見設定頁「命名規則」視窗。
 
 ## 開發
 ```bash
-bash scripts/menu.sh              # 互動選單（建置／安裝／測試／清理／簽章／移除）
+bash scripts/menu.sh              # 互動選單（建置／安裝／測試／清理／簽章／移除／滾動截圖自檢）
 swift build                       # 建置
 swift run anypaint                # 直接跑
 swift run anypaint-selftest       # 純邏輯自我測試
 ./scripts/build_app.sh release    # 組 .app bundle 並簽章（產出 build.noindex/anypaint.app）
 ```
+
+> **滾動截圖務必用 release 建置**：影像匹配在 debug（`-Onone`）下慢約 50 倍
+> （實測單格 1.3–1.7 秒 vs 30–46ms），主執行緒會被塞爆而無法正常拼接。
+> `menu.sh` 的 dev app 已改用 release；`swift build` 僅用於編譯錯誤迭代。
+> 選單第 8 項可執行**滾動截圖自檢**（自動開一個會動的視窗、真實擷取、驗證拼接量，不需人工互動）。
+
+```bash
+```
+
+開發規範與 macOS/AppKit 踩坑紀錄見 `CLAUDE.md`（動手改滾動截圖前務必先讀）。
 
 架構：`Sources/AnypaintKit/`（核心模組）、`Sources/anypaint/`（進入點）、`Sources/anypaint-selftest/`（測試執行檔）。KeyboardShortcuts 為本機 vendored（`vendored/KeyboardShortcuts`，patch 過資源查找）。設計文件見 `docs/superpowers/specs/`。
 
