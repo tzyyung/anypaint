@@ -19,6 +19,22 @@ import Vision
 /// - Task { @MainActor in ... }：本類別整體 @MainActor 隔離，await 期間（如 frameSource.start()
 ///   內的 SCShareableContent 非同步抓取）其他 MainActor 工作（如使用者按 Esc 觸發 cancel()）仍可能
 ///   插入執行——啟動流程對此顯式做了「啟動後若已非 capturing 就補收尾」的處理（見 startCapturing）。
+/// 常駐精簡診斷：每次 session 把關鍵事實寫到 /tmp/anypaint-scroll-session.log。
+/// 存在理由：合成自檢無法複製使用者真實環境（實測自檢 89-100% 但實機仍只拼出一格），
+/// 沒有真實 session 的數據就只能猜。內容極精簡（每格一行 outcome 摘要），無效能影響。
+enum ScrollSessionLog {
+    static let path = "/tmp/anypaint-scroll-session.log"
+    static func begin(_ header: String) {
+        try? (header + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+    }
+    static func add(_ line: String) {
+        guard let h = FileHandle(forWritingAtPath: path) else { return }
+        h.seekToEndOfFile()
+        if let d = (line + "\n").data(using: .utf8) { h.write(d) }
+        h.closeFile()
+    }
+}
+
 @MainActor
 public final class ScrollCaptureSession {
     public enum State { case idle, selecting, armed, capturing, finishing }
@@ -47,6 +63,12 @@ public final class ScrollCaptureSession {
     private var watchdog: DispatchWorkItem?
     private var lastWatchdogResetUptimeNs: UInt64 = 0
     private var bottomProbeCount = 0
+    private var frameSeq = 0
+
+    private func isWaiting(_ o: ScrollStitchOutcome) -> Bool {
+        if case .waitingForMotion = o { return true }
+        return false
+    }
     /// 最近一次「有進展」（拼接／裁尾／鎖帶）的時刻。用於停滯收工判定——不可用「連續失敗次數」：
     /// 30fps 下連續 10 次失敗只有 1/3 秒，使用者手一甩超出可匹配範圍就被強制收工（實機症狀：
     /// 預覽只有單張影格）。改成時間門檻後，使用者有時間依 HUD 提示回捲救回。
@@ -66,6 +88,7 @@ public final class ScrollCaptureSession {
             self.enterArmed(sel, scr)
         }
         overlay.onCancelRequested = { [weak self] in self?.cancel() }
+        ScrollSessionLog.begin("=== session 開始 screen=\(screen.frame) scale=\(screen.backingScaleFactor) ===")
         overlay.present(on: screen)
         installEscMonitor()                                        // 逃生：local keyDown 攔 Esc（見方法註解）
         armWatchdog(seconds: AppSettings.overlayWatchdogSeconds)   // selecting/armed 沿用既有語意
@@ -166,7 +189,9 @@ public final class ScrollCaptureSession {
         hud.show(near: overlay.selectionGlobal, on: screen, mode: .capturing)
         hud.onDone = { [weak self] in self?.finish() }
         guidance = ScrollGuidance(selectionHeight: Int(overlay.selectionGlobal.height))
-        engine = ScrollStitchEngine(maxHeightPx: AppSettings.scrollMaxHeightPx)
+        engine = ScrollStitchEngine(maxHeightPx: AppSettings.scrollMaxHeightPx,
+                                   fallbackPxPerPoint: Double(screen.backingScaleFactor))
+        ScrollSessionLog.add("capturing 開始 選區=\(overlay.selectionGlobal)")
         lastProgressAt = ProcessInfo.processInfo.systemUptime
         startBottomWatch()
         frameSource.onFrame = { [weak self] pb in self?.consume(frame: pb) }
@@ -193,6 +218,12 @@ public final class ScrollCaptureSession {
 
     private func consume(frame full: PixelBuffer) {
         guard state == .capturing else { return }   // T10：stop 後在途 sample 仍可能派發，guard 掉
+        if frameSeq == 0 {
+            // 基準格的尺寸與平均亮度：用來確認「擷取到的畫面」與使用者眼見是否一致
+            var sum = 0, n = 0, i = 0
+            while i < full.bytes.count - 4 { sum += Int(full.bytes[i]); n += 1; i += 997 * 4 }
+            ScrollSessionLog.add("第一格 \(full.width)x\(full.height) 平均亮度=\(n > 0 ? sum / n : -1)")
+        }
         pendingFrame = full                          // 背壓：永遠只留最新一格
         pumpEngine()
     }
@@ -221,6 +252,11 @@ public final class ScrollCaptureSession {
 
     private func handle(outcome: ScrollStitchOutcome, height: Int, failures: Int) {
         guard state == .capturing else { return }
+        frameSeq += 1
+        // 只記「非等待」與每 10 格一次，避免檔案爆量
+        if !isWaiting(outcome) || frameSeq % 10 == 0 {
+            ScrollSessionLog.add("#\(frameSeq) \(outcome) 高=\(height) 累積滾輪=\(Int(wheelAccumulator))pt matcher=\(engine?.lastMatchNote ?? "-")")
+        }
         switch outcome {
         case .baseCaptured, .waitingForMotion, .awaitingBandLock, .noMotion:
             break                                     // 皆非失敗，不需提示
@@ -321,6 +357,7 @@ public final class ScrollCaptureSession {
         state = .finishing
         let image: CGImage?
         if let engine, engine.appendedFrameCount >= 1 { image = engine.finalize() } else { image = nil }
+        ScrollSessionLog.add("=== 收尾 影格數=\(frameSeq) 長圖高=\(engine?.height ?? -1) append格數=\(engine?.appendedFrameCount ?? -1) 已鎖帶=\(engine?.isLocked ?? false) 輸出=\(image.map { "\($0.width)x\($0.height)" } ?? "nil") ===")
         teardown()
         onFinished?(image)   // 呼叫端（AppDelegate）決定 0/1 格降級與 preview（spec §3）
     }
