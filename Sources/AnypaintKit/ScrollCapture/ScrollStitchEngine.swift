@@ -20,7 +20,9 @@ public enum ScrollStitchOutcome: Equatable {
     case atOrigin
     /// 匹配成功但位移為 0（畫面沒動）。
     case noMotion
-    /// 三層匹配鏈全敗。
+    /// 三層匹配鏈全敗，但依滾動量推算接上（接縫可能有數像素誤差，**但內容不會遺失**）。
+    case appendedApproximate(dy: Int, totalHeight: Int)
+    /// 三層匹配鏈全敗且連推算都不可用（無校準值或推算量超出可接受範圍）。
     case rejected(consecutiveFailures: Int)
     /// 已達長度上限，該收工。
     case limitReached
@@ -63,10 +65,24 @@ public final class ScrollStitchEngine {
     /// 兩個方向都試，第一次成功匹配就把對應記下來，之後只搜推算出的方向——既與系統設定無關，
     /// 也不會在「本來就無法匹配」的快捲格上因反向搜尋撿到假峰（實測會污染長圖）。
     private var wheelToImageSign: Int?
+    /// 「1 點滾輪位移 ≈ 幾個影像像素」的自我校準值（nil＝尚未校準）。
+    /// 由每次成功匹配反推（dy ÷ 當時累積滾輪點數）並指數平滑。spec §13 原本把
+    /// 「滾輪量→像素換算因 app 而異」列為已接受風險而不敢用推算；從真實匹配自我校準
+    /// 就沒有這個問題——每個 app、每種輸入裝置都會校出自己的比例。
+    private var pxPerWheelPoint: Double?
+    /// 本次 consume 收到的累積滾輪點數（校準與推算共用）。
+    private var lastGatePoints: CGFloat = 0
+    /// 最近一格內容影格的高度（推算時算 maxDy 用）。
+    private var lastFrameHeight = 0
+    /// 初始估計（尚未校準時用）：Retina 上 1 點 ≈ 2 像素。
+    private let fallbackPxPerPoint: Double
 
-    public init(maxHeightPx: Int, motionGatePoints: CGFloat = ScrollStitchEngine.defaultMotionGatePoints) {
+    public init(maxHeightPx: Int,
+                motionGatePoints: CGFloat = ScrollStitchEngine.defaultMotionGatePoints,
+                fallbackPxPerPoint: Double = 2) {
         self.maxHeightPx = maxHeightPx
         self.motionGatePoints = motionGatePoints
+        self.fallbackPxPerPoint = fallbackPxPerPoint
     }
 
     /// - Parameters:
@@ -85,6 +101,7 @@ public final class ScrollStitchEngine {
         }
         // motion gate：累積捲動不足就不浪費一次完整金字塔匹配，也不算失敗（見型別註解）。
         guard wheelAccumulatedPoints >= motionGatePoints else { return .waitingForMotion }
+        lastGatePoints = wheelAccumulatedPoints
 
         let contentFrame: PixelBuffer
         if let insets {
@@ -93,6 +110,7 @@ public final class ScrollStitchEngine {
                                         height: full.height - insets.top - insets.bottom)
         } else { contentFrame = full }
 
+        lastFrameHeight = contentFrame.height
         let reference = stitcher.referenceTail(maxHeight: contentFrame.height)
         guard reference.height == contentFrame.height else { return .waitingForMotion }
 
@@ -149,7 +167,16 @@ public final class ScrollStitchEngine {
         priorDy = dy
         appendedFrameCount += 1
         lastAcceptedFullFrame = full
+        calibrate(dy: dy)
         return .appended(dy: dy, totalHeight: stitcher.height)
+    }
+
+    /// 從一次成功匹配反推「點→像素」比例並指數平滑（見 pxPerWheelPoint）。
+    private func calibrate(dy: Int) {
+        guard lastGatePoints > 0.5 else { return }
+        let sample = Double(dy) / Double(lastGatePoints)
+        guard sample.isFinite, sample > 0.2, sample < 20 else { return }
+        pxPerWheelPoint = pxPerWheelPoint.map { $0 * 0.7 + sample * 0.3 } ?? sample
     }
 
     /// 靜態帶鎖定嘗試；連續 5 次失敗改用 zero insets 強制鎖定，避免永遠鎖不上卡死。
@@ -196,8 +223,41 @@ public final class ScrollStitchEngine {
            abs(dy - pcDy) <= max(18, pcDy / 3) {
             return accept(dy: dy, full: full, contentFrame: contentFrame)
         }
+        // 三層全敗 → **不可直接丟格**：使用者確實捲動了，丟格會讓那段內容永久消失
+        // （實機症狀：長圖等於單張影格）。改用自我校準的「點→像素」比例推算位移接上；
+        // 接縫可能有數像素誤差，但完整性優先於接縫完美（使用者裁定）。
+        if let dy = deadReckonedDy(), let stitcher {
+            // 仍要守 T7 契約：鎖帶必須在任何 append 之前。未鎖帶時本格先用於鎖定嘗試
+            // （否則之後 lockBands 會因「已 append 過」被永久拒絕，靜態帶再也鎖不上）。
+            guard insets != nil else { return attemptLock(dy: dy, full: full) }
+            if stitcher.append(contentFrame: contentFrame, dy: dy) {
+                priorDy = nil                      // 推算值不當下一次的先驗（避免誤差累積）
+                appendedFrameCount += 1
+                lastAcceptedFullFrame = full
+                consecutiveFailures = 0
+                return .appendedApproximate(dy: dy, totalHeight: stitcher.height)
+            } else {
+                return .limitReached
+            }
+        }
         consecutiveFailures += 1
         return .rejected(consecutiveFailures: consecutiveFailures)
+    }
+
+    /// 依累積滾輪量推算位移（dead reckoning）。用校準值（無則用初始估計），
+    /// 並夾在 [minDelta, maxDy] 內——超出可接受範圍代表使用者捲太快、已無重疊可言，
+    /// 那時硬接會產生錯誤內容，寧可回 nil 交由 HUD 提示回捲。
+    private func deadReckonedDy() -> Int? {
+        guard let stitcher else { return nil }
+        let ratio = pxPerWheelPoint ?? fallbackPxPerPoint
+        let estimate = Int((Double(lastGatePoints) * ratio).rounded())
+        let h = stitcher.height >= 0 ? lastFrameHeight : 0
+        guard h > 0 else { return nil }
+        let minOverlap = max(ScrollMatcher.Config.default.minOverlapPx,
+                             Int(Double(h) * ScrollMatcher.Config.default.minOverlapFraction))
+        let maxDy = h - minOverlap
+        guard estimate >= ScrollMatcher.Config.default.minDelta, estimate <= maxDy else { return nil }
+        return estimate
     }
 
     /// Vision 全圖位移估計。ty 正負依 Task 2 實測（scrollDownPixels = -ty，勿用 abs）。

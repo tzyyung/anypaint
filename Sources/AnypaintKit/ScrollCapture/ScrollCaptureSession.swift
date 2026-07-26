@@ -227,6 +227,15 @@ public final class ScrollCaptureSession {
         case .bandsLocked:
             wheelAccumulator = 0
             lastProgressAt = ProcessInfo.processInfo.systemUptime
+        case let .appendedApproximate(_, total):
+            // 依滾動量推算接上（接縫可能有數像素誤差，但內容不遺失）——明確告知使用者。
+            wheelAccumulator = 0
+            lastProgressAt = ProcessInfo.processInfo.systemUptime
+            if var guidance {
+                hud.update(message: guidance.deadReckoningUsed())
+                self.guidance = guidance
+            }
+            _ = total
         case let .appended(dy, total):
             wheelAccumulator = 0
             lastProgressAt = ProcessInfo.processInfo.systemUptime

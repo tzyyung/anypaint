@@ -140,7 +140,7 @@ public final class ScrollCaptureSelfCheck {
                 guard let self else { return }
                 self.engineBusy = false
                 switch out {
-                case .appended, .trimmed, .bandsLocked: self.wheelAccum = 0
+                case .appended, .appendedApproximate, .trimmed, .bandsLocked: self.wheelAccum = 0
                 default: break
                 }
                 // 記錄所有「非等待」結果，才看得到從成功轉為永久失敗的斷點
