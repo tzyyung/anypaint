@@ -133,6 +133,31 @@ func scrollCoordsTests() {
     T.checkTrue("coords: 副螢幕（負 x 全域座標）sourceRect 為螢幕相對", g1.sourceRect.minX >= 0)
     T.checkEq("coords: scale=1 pixelWidth == 點寬", g1.pixelWidth, 101)
     T.checkEq("coords: scale=1 pixelHeight == 點高", g1.pixelHeight, 52)
+
+    // 多螢幕：挑出含滑鼠的那顆。不可用 NSScreen.main——它是「含鍵盤焦點視窗的螢幕」，
+    // 而本 app 是 accessory（平時無 key window），副螢幕上會落錯甚至回 nil。
+    // 典型配置：內建 Retina 在原點，外接螢幕在左側（全域 x 為負）。
+    let builtin = CGRect(x: 0, y: 0, width: 1440, height: 900)
+    let leftExternal = CGRect(x: -1920, y: 0, width: 1920, height: 1080)
+    let aboveExternal = CGRect(x: 0, y: 900, width: 1440, height: 900)
+    let frames = [builtin, leftExternal, aboveExternal]
+    T.checkEq("screen: 滑鼠在內建 → 0",
+              ScrollCoords.screenIndex(containing: CGPoint(x: 700, y: 400), screenFrames: frames) ?? -1, 0)
+    T.checkEq("screen: 滑鼠在左側外接（負座標）→ 1",
+              ScrollCoords.screenIndex(containing: CGPoint(x: -900, y: 500), screenFrames: frames) ?? -1, 1)
+    T.checkEq("screen: 滑鼠在上方外接 → 2",
+              ScrollCoords.screenIndex(containing: CGPoint(x: 700, y: 1200), screenFrames: frames) ?? -1, 2)
+    // 相鄰邊界只能命中一顆：x=0 是內建的左邊界（contains 含左下、不含右上），
+    // 同時是左側外接的 maxX → 必須算內建，不能兩顆都中。
+    T.checkEq("screen: 相鄰邊界 x=0 歸內建（不重複命中）",
+              ScrollCoords.screenIndex(containing: CGPoint(x: 0, y: 400), screenFrames: frames) ?? -1, 0)
+    T.checkEq("screen: y=900 邊界歸上方螢幕",
+              ScrollCoords.screenIndex(containing: CGPoint(x: 700, y: 900), screenFrames: frames) ?? -1, 2)
+    // 落在所有螢幕之外（螢幕熱插拔的瞬間可能發生）→ nil，由呼叫端決定退路
+    T.checkTrue("screen: 點在所有螢幕外 → nil",
+                ScrollCoords.screenIndex(containing: CGPoint(x: 5000, y: 5000), screenFrames: frames) == nil)
+    T.checkTrue("screen: 空螢幕清單 → nil",
+                ScrollCoords.screenIndex(containing: .zero, screenFrames: []) == nil)
 }
 
 func staticBandTests() {

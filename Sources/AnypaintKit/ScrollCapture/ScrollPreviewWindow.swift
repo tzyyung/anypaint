@@ -150,12 +150,15 @@ public final class ScrollPreviewWindowController {
 
     /// 開一個新的預覽視窗（不重用舊視窗——使用者可能同時留著多張長圖檢視）。
     /// 尺寸：寬 = min(圖寬/scale + 40, 螢幕可視寬×0.6)；高 = 螢幕可視高×0.8。
-    public func present(image: CGImage, vars: [String: String]) {
-        let screen = NSScreen.main
+    /// - Parameter captureScale: **實際擷取時那個螢幕**的 backingScaleFactor，由 session 傳入。
+    ///   原本這裡自己取 `NSScreen.main?.backingScaleFactor`（標記為 Finding #1 的近似），
+    ///   在混合 DPI 的多螢幕下會錯：這個 scale 同時用於複製到剪貼簿的 NSImage.size 換算
+    ///   （見 `PinboardService.copyLarge`），Retina 筆電＋外接 1080p 的組合會讓圖差一倍。
+    public func present(image: CGImage, vars: [String: String], captureScale: CGFloat) {
+        // 視窗尺寸用「要顯示這個視窗的螢幕」＝滑鼠所在螢幕；scale 則一律用擷取端傳來的值。
+        let screen = ScrollCaptureSession.screenUnderMouse()
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        // session 未回傳實際擷取時的 backingScaleFactor，用主螢幕近似（Finding #1：
-        // 這個 scale 同時用於複製到剪貼簿的 NSImage.size 換算，見 PinboardService.copyLarge）。
-        let scale = screen?.backingScaleFactor ?? 2.0
+        let scale = captureScale > 0 ? captureScale : 2.0
         let width = min(CGFloat(image.width) / scale + 40, visible.width * 0.6)
         let height = visible.height * 0.8
         let contentRect = NSRect(x: 0, y: 0, width: width, height: height)

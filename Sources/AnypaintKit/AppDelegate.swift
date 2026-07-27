@@ -138,7 +138,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         KeyboardShortcuts.disable(.capture, .pin)               // 滾動中擋另外兩入口（spec §9.1）
         menuBar.setScrollCapturing(true)
         let vars = CaptureVars.makeVars(title: CaptureVars.currentFrontTitle())
-        scrollSession.onFinished = { [weak self] image in
+        scrollSession.onFinished = { [weak self] image, captureScale in
             guard let self else { return }
             KeyboardShortcuts.enable(.capture, .pin)            // 恢復點集中在單一出口（spec §9.1）
             self.menuBar.setScrollCapturing(false)
@@ -146,7 +146,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.previewController == nil {
                 self.previewController = ScrollPreviewWindowController(output: self.output, pinboard: self.pinboard)
             }
-            self.previewController?.present(image: image, vars: vars)
+            // scale 必須用擷取端那顆螢幕的值（混合 DPI 多螢幕下與滑鼠所在螢幕可能不同）。
+            self.previewController?.present(image: image, vars: vars, captureScale: captureScale)
         }
         scrollSession.begin()
         // begin() 在無主螢幕時會靜默 no-op（onFinished 永不 fire）——

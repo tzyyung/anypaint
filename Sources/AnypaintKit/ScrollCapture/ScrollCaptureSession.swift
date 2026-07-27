@@ -40,7 +40,10 @@ public final class ScrollCaptureSession {
     public enum State { case idle, selecting, armed, capturing, finishing }
     public private(set) var state: State = .idle
     public var isActive: Bool { state != .idle }
-    public var onFinished: ((CGImage?) -> Void)?
+    /// 收尾回呼。第二個參數是**實際擷取時那個螢幕**的 backingScaleFactor——預覽視窗要用它換算
+    /// 剪貼簿圖片尺寸，不能自己去問 `NSScreen.main`：混合 DPI 的多螢幕（Retina 筆電＋外接 1080p）
+    /// 下 scale 不同，用錯會讓複製出的圖差一倍。取消／0 格時影像為 nil，scale 仍給實際值。
+    public var onFinished: ((CGImage?, CGFloat) -> Void)?
 
     private let overlay = ScrollSelectionOverlayController()
     private let hud = ScrollHUDController()
@@ -77,8 +80,20 @@ public final class ScrollCaptureSession {
 
     // MARK: 進入/取消
 
+    /// 滾動截圖要開在**滑鼠所在的螢幕**——見 `ScrollCoords.screenIndex(containing:screenFrames:)`
+    /// 的說明（`NSScreen.main` 對 accessory app 不可靠，副螢幕會落錯或回 nil）。
+    /// 退路依序是：滑鼠所在 → `NSScreen.main` → 第一個螢幕。
+    static func screenUnderMouse() -> NSScreen? {
+        let screens = NSScreen.screens
+        if let i = ScrollCoords.screenIndex(containing: NSEvent.mouseLocation,
+                                           screenFrames: screens.map(\.frame)) {
+            return screens[i]
+        }
+        return NSScreen.main ?? screens.first
+    }
+
     public func begin() {
-        guard state == .idle, let screen = NSScreen.main else { return }
+        guard state == .idle, let screen = Self.screenUnderMouse() else { return }
         self.screen = screen
         state = .selecting
         overlay.onSelectionLocked = { [weak self] sel, scr in self?.enterArmed(sel, scr) }
@@ -413,13 +428,13 @@ public final class ScrollCaptureSession {
         ]
         ScrollSessionLog.add(summary.joined(separator: " "))
         teardown()
-        onFinished?(image)   // 呼叫端（AppDelegate）決定 0/1 格降級與 preview（spec §3）
+        onFinished?(image, screen?.backingScaleFactor ?? 2)   // 呼叫端（AppDelegate）決定 0/1 格降級與 preview（spec §3）
     }
 
     private func cancel() {
         guard state != .idle else { return }   // 冪等：teardown 已把 state 設回 idle，擋二次 onFinished（防未來新增呼叫源回歸）
         teardown()
-        onFinished?(nil)
+        onFinished?(nil, screen?.backingScaleFactor ?? 2)
     }
 
     private func armWatchdog(seconds: Double) {
@@ -447,7 +462,7 @@ public final class ScrollCaptureSession {
 
     private func streamStartFailed(_ error: Error) {
         teardown()
-        onFinished?(nil)
+        onFinished?(nil, screen?.backingScaleFactor ?? 2)
         // 權限被撤等情況——提示交給 AppDelegate 的既有 showPermissionAlert 流程
         NSLog("anypaint: 滾動截圖 stream 啟動失敗 %@", String(describing: error))
     }

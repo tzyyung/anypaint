@@ -143,4 +143,22 @@ public enum ScrollCoords {
         return (CGRect(x: relX, y: relYTop, width: w, height: h),
                 Int((w * scale).rounded()), Int((h * scale).rounded()))
     }
+
+    /// 從螢幕 frame 清單裡挑出含指定點的那一個，回傳索引。
+    ///
+    /// 為什麼不用 `NSScreen.main`：它的語意是「含**鍵盤焦點視窗**的螢幕」，而 anypaint 是
+    /// accessory app（LSUIElement）平時沒有 key window——在副螢幕按快鍵時它會指向錯誤的螢幕，
+    /// 甚至回 nil 讓整個流程直接 no-op（commit a77aeb3 修的「無主螢幕」症狀就是這個）。
+    ///
+    /// 滾動截圖用**滑鼠所在螢幕**判定是安全的：這個功能本來就要求滑鼠留在選區內才收得到滾輪，
+    /// 所以滑鼠必然在目標螢幕上。
+    ///
+    /// 邊界（螢幕相鄰處的點只會屬於其中一個）：`CGRect.contains` 對右／上邊界回 false，
+    /// 所以相鄰螢幕不會重複命中。點落在所有螢幕之外（可能發生在螢幕熱插拔的瞬間）回 nil，
+    /// 由呼叫端決定退路。
+    /// - Parameter mouseGlobal: 全域座標的滑鼠位置（左下原點，與 `NSScreen.frame` 同座標系）。
+    public static func screenIndex(containing mouseGlobal: CGPoint,
+                                   screenFrames: [CGRect]) -> Int? {
+        screenFrames.firstIndex { $0.contains(mouseGlobal) }
+    }
 }
