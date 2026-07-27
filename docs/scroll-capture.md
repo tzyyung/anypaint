@@ -242,14 +242,14 @@ pairwise＋校正組合；只做 pairwise 串接才會 drift。
 ## 7. 驗證
 
 ```bash
-swift run -c release anypaint-selftest        # 純邏輯，目前 362 項
+swift run -c release anypaint-selftest        # 純邏輯（項數不記在文件裡，見 CLAUDE.md 基線紀律）
 ./scripts/build_app.sh release
 open -n -a "$PWD/build.noindex/anypaint.app" --args --scroll-selfcheck
 ```
 
 **三層驗證缺一不可**：
 
-1. **selftest**（362 項）：純邏輯。含位移估計的迴歸矩陣——稀疏度矩陣、跨內容類型
+1. **selftest**：純邏輯。含位移估計的迴歸矩陣——稀疏度矩陣、跨內容類型
    （密集文字／深色終端機風／照片類平滑紋理）、病態內容必須拒絕、prior 抗誤導；
    以及 Snapshot 與 engine 屬性的一致性、0 格靜默、窄選區（寬度**沒有下限**）的步進準確度。
 2. **app 內自檢**：真實 SCStream 擷取＋完整匹配鏈，驗證拼接量落在預期 ±10%。

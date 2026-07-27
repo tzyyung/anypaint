@@ -7,13 +7,15 @@ macOS / Swift / AppKit / ScreenCaptureKit 的實測經驗。**每一條都是實
 
 ```bash
 swift build                                  # 編譯錯誤迭代
-swift run -c release anypaint-selftest       # 純邏輯測試（release 才快；目前 362 項）
+swift run -c release anypaint-selftest       # 純邏輯測試（release 才快）
 ./scripts/build_app.sh release               # 組 .app（滾動截圖務必用 release，見下）
 bash scripts/menu.sh                         # 互動選單（選 8＝滾動截圖自檢）
 ```
 
 - **測試基線是硬約束**：`swift run -c release anypaint-selftest 2>&1 | grep -c "^✅"`，
   任何改動後不得低於基線且 `grep -c "^❌"` 必須是 0。
+  **基線＝動手前先跑一次拿到的數字，不是寫在文件裡的數字**——這裡刻意不記通過項數。
+  記了必然過期（已經發生兩次：302→362→396），而過期的基線比沒有基線更糟。
 - **debug build 的影像匹配慢約 50 倍**（實測單格 1.3–1.7 秒 vs release 21ms）。
   滾動截圖在 debug 下**不可用**：主執行緒被塞爆 → 計時器／HUD／事件監聽全部餓死。
   `menu.sh` 的 dev app 因此改用 release。
