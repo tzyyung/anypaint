@@ -38,6 +38,13 @@ public final class PinboardService {
         pb.writeObjects(items)
     }
 
+    /// 把文字寫入剪貼簿（OCR／QR 結果用）。
+    /// 與 `copy(image:)` 一樣會清掉舊內容——複製文字後貼上不該還拿到上一張圖。
+    func copy(text: String) {
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
     /// 從剪貼簿讀出影像；沒有影像則回 nil。
     func imageFromPasteboard() -> NSImage? {
         let classes: [AnyClass] = [NSImage.self]

@@ -16,6 +16,8 @@ final class SelectionToolbar: NSView {
     var onSaveAs: (() -> Void)?
     /// 按「存檔並開啟」＝存到預設資料夾後交給系統預設圖片程式（在那裡繼續標註）。
     var onOpen: (() -> Void)?
+    /// 按「複製文字」＝辨識框內文字／QR 並複製（Shottr 同款的一步到位）。
+    var onRecognizeText: (() -> Void)?
     /// 點工具按鈕；再點一次作用中的工具＝取消作用（回傳 nil）。
     var onToolSelected: ((AnnotationTool?) -> Void)?
     var onUndo: (() -> Void)?
@@ -104,6 +106,10 @@ final class SelectionToolbar: NSView {
         cancel.bezelStyle = .rounded
         cancel.controlSize = .small
         setHelp("放棄這次截圖（Esc）", for: cancel)
+        // 「取出內容」而非「輸出檔案」——所以擺在存檔那組之前，不混在一起。
+        let ocrButton = NSButton()
+        configureSymbolButton(ocrButton, "text.viewfinder", #selector(recognizeTextAction))
+        setHelp("辨識框內文字並複製；框到 QR 碼則複製其內容（⌘T）", for: ocrButton)
         let saveButton = NSButton()
         configureSymbolButton(saveButton, "square.and.arrow.down", #selector(saveAction))
         setHelp("儲存到預設資料夾（⌘S）", for: saveButton)
@@ -123,6 +129,7 @@ final class SelectionToolbar: NSView {
         setHelp("複製到剪貼簿並結束（↩）", for: confirm)
         confirm.keyEquivalent = "\r"   // Enter = 複製
         toolsRow.addArrangedSubview(cancel)
+        toolsRow.addArrangedSubview(ocrButton)
         toolsRow.addArrangedSubview(saveButton)
         toolsRow.addArrangedSubview(saveAsButton)
         toolsRow.addArrangedSubview(openButton)
@@ -304,5 +311,6 @@ final class SelectionToolbar: NSView {
     @objc private func saveAction() { onSave?() }
     @objc private func saveAsAction() { onSaveAs?() }
     @objc private func openAction() { onOpen?() }
+    @objc private func recognizeTextAction() { onRecognizeText?() }
 }
 

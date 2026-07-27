@@ -139,6 +139,8 @@ final class SelectionView: NSView {
     var onSaveAs: ((NSImage) -> Void)?
     /// 按下「存檔並開啟」→ 回傳裁切影像（AppDelegate 負責寫檔＋交給外部 App）。
     var onOpen: ((NSImage) -> Void)?
+    /// 按下「複製文字」→ 回傳裁切影像＋view 座標選取框（controller 轉全域，供結果窗定位）。
+    var onRecognizeText: ((NSImage, CGRect) -> Void)?
     /// 取消（Esc / 右鍵 / 工具列取消）。
     var onCancel: (() -> Void)?
     /// 任何互動 → 通知 controller 重置看門狗。
@@ -155,6 +157,7 @@ final class SelectionView: NSView {
         toolbar.onSave = { [weak self] in self?.saveConfirm() }
         toolbar.onSaveAs = { [weak self] in self?.saveAsConfirm() }
         toolbar.onOpen = { [weak self] in self?.openConfirm() }
+        toolbar.onRecognizeText = { [weak self] in self?.recognizeTextConfirm() }
         toolbar.onCancel = { [weak self] in self?.onCancel?() }
         toolbar.onToolSelected = { [weak self] tool in
             guard let self else { return }
@@ -332,7 +335,21 @@ final class SelectionView: NSView {
         onOpen?(image)
     }
 
-    /// 有效框（controller 監聽器的 ⌘S／⌘O 路由依賴）。
+    /// 「複製文字」的完成路徑：與 pinConfirm() 同紀律，差別只在交給 onRecognizeText。
+    ///
+    /// 用 `currentCroppedImage()`（**含標註**）而不是原圖，與其他所有出口一致：
+    /// 使用者若先畫了馬賽克，被遮住的內容本來就不該被辨識出來。
+    func recognizeTextConfirm() {
+        commitTextEditing()
+        guard let sel = selection, sel.width > minSize, sel.height > minSize else { return }
+        guard let image = currentCroppedImage() else {
+            onCancel?()   // 有框但裁切失敗 → 維持與 confirm() 一致：取消
+            return
+        }
+        onRecognizeText?(image, sel)
+    }
+
+    /// 有效框（controller 監聽器的 ⌘S／⌘O／⌘T 路由依賴）。
     var hasValidSelection: Bool {
         guard let sel = selection else { return false }
         return sel.width > minSize && sel.height > minSize

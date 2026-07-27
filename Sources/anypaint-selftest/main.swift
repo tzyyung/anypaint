@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage      // QR 測試圖（CIQRCodeGenerator）
 import Foundation
 import AnypaintKit
 import AppKit
@@ -986,6 +987,117 @@ if let ocrImg = makeOCRTestImage("HELLO 123") {
 } else {
     failures += 1
     print("❌ OCR e2e 無法建測試圖")
+}
+
+// 33b) QR／條碼辨識與「條碼優先於文字」
+// CIQRCodeGenerator 產生真 QR 進去實際辨識（同 OCR e2e 的紀律：真跑，不是 mock）。
+func makeQRTestImage(_ payload: String, withCaption caption: String?) -> CGImage? {
+    guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+    filter.setValue(Data(payload.utf8), forKey: "inputMessage")
+    filter.setValue("M", forKey: "inputCorrectionLevel")
+    guard let small = filter.outputImage else { return nil }
+    // QR 原始輸出很小（每模組 1px），放大到 Vision 辨得出來的尺寸。
+    let qr = small.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+    let ciCtx = CIContext()
+    guard let qrCG = ciCtx.createCGImage(qr, from: qr.extent) else { return nil }
+    guard let caption else { return qrCG }
+
+    // 把 QR 畫在上半、說明文字畫在下半——模擬「QR 底下印著說明文字」的真實情境，
+    // 用來驗證條碼優先於文字（若以文字為先，這種圖就永遠拿不到 QR 內容）。
+    let W = Int(qr.extent.width), H = Int(qr.extent.height) + 60
+    guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+          let ctx = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8,
+                              bytesPerRow: 0, space: space,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: W, height: H))
+    ctx.draw(qrCG, in: CGRect(x: 0, y: 60, width: qr.extent.width, height: qr.extent.height))
+    let attr = NSAttributedString(string: caption, attributes: [
+        .font: NSFont.systemFont(ofSize: 28, weight: .bold),
+        .foregroundColor: NSColor.black,
+    ])
+    ctx.textPosition = CGPoint(x: 8, y: 18)
+    CTLineDraw(CTLineCreateWithAttributedString(attr), ctx)
+    return ctx.makeImage()
+}
+
+checkEq("Recognition.joined：條碼多筆換行相接",
+        TextRecognizer.Recognition.barcode(["a", "b"]).joined, "a\nb")
+checkEq("Recognition.joined：文字走 joinedText",
+        TextRecognizer.Recognition.text(["x", "y"]).joined, "x\ny")
+checkEq("Recognition.joined：empty 是空字串",
+        TextRecognizer.Recognition.empty.joined, "")
+
+if let qrOnly = makeQRTestImage("https://example.com/anypaint", withCaption: nil) {
+    do {
+        let r = try TextRecognizer.recognizeContentSync(cgImage: qrOnly)
+        if case .barcode(let codes) = r {
+            checkTrue("QR e2e 辨識出 payload", codes.contains("https://example.com/anypaint"))
+        } else {
+            failures += 1
+            print("❌ QR e2e 期望 .barcode，實得 \(r)")
+        }
+    } catch {
+        failures += 1
+        print("❌ QR e2e throw: \(error)")
+    }
+} else {
+    failures += 1
+    print("❌ QR e2e 無法建測試圖")
+}
+
+// QR＋說明文字同在一張圖：必須回 .barcode（條碼優先，設計決定）
+if let qrWithText = makeQRTestImage("SCAN-ME-42", withCaption: "SCAN HERE") {
+    do {
+        let r = try TextRecognizer.recognizeContentSync(cgImage: qrWithText)
+        if case .barcode(let codes) = r {
+            checkTrue("QR＋文字同框時條碼優先", codes.contains("SCAN-ME-42"))
+        } else {
+            failures += 1
+            print("❌ 條碼優先 期望 .barcode，實得 \(r)")
+        }
+    } catch {
+        failures += 1
+        print("❌ 條碼優先 throw: \(error)")
+    }
+} else {
+    failures += 1
+    print("❌ 條碼優先 無法建測試圖")
+}
+
+// 純文字圖（無條碼）必須回 .text，不能被條碼路徑吃掉
+if let textOnly = makeOCRTestImage("HELLO 123") {
+    do {
+        let r = try TextRecognizer.recognizeContentSync(cgImage: textOnly)
+        if case .text(let lines) = r {
+            checkTrue("純文字圖回 .text", TextRecognizer.joinedText(lines).contains("HELLO"))
+        } else {
+            failures += 1
+            print("❌ 純文字圖 期望 .text，實得 \(r)")
+        }
+    } catch {
+        failures += 1
+        print("❌ 純文字圖 throw: \(error)")
+    }
+}
+
+// 空白圖：兩種都偵測不到 → .empty
+if let space = CGColorSpace(name: CGColorSpace.sRGB),
+   let blankCtx = CGContext(data: nil, width: 200, height: 120, bitsPerComponent: 8,
+                            bytesPerRow: 0, space: space,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+    blankCtx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    blankCtx.fill(CGRect(x: 0, y: 0, width: 200, height: 120))
+    if let blank = blankCtx.makeImage() {
+        do {
+            checkEq("空白圖回 .empty",
+                    try TextRecognizer.recognizeContentSync(cgImage: blank), .empty)
+        } catch {
+            failures += 1
+            print("❌ 空白圖 throw: \(error)")
+        }
+    }
 }
 
 // 34) OCR 結果窗定位：右側優先→左側→fallback，clamp 進螢幕

@@ -23,6 +23,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let scrollSession = ScrollCaptureSession()
     private var previewController: ScrollPreviewWindowController?
 
+    /// 框選 OCR 的結果窗（lazy、重用）與辨識中旗標（不疊請求，比照 PinWindowController）。
+    private var ocrController: OCRResultWindowController?
+    private var ocrInFlight = false
+
     private var settingsWindowController: SettingsWindowController?
 
     /// 三入口互斥（spec §9.1）：任一 capture mode active 時其他入口 guard-return。
@@ -105,6 +109,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                         self?.output.saveAndOpen(image: image, vars: vars)
                         self?.output.autoSaveIfEnabled(image: image, vars: vars)
                     },
+                    onRecognizeText: { [weak self] image, frame in
+                        self?.recognizeText(in: image, near: frame)
+                    },
                     onPin: { [weak self] image, frame in
                         self?.pinboard.copy(image: image)                    // 決策：貼＝同時複製
                         self?.pinController.pin(image: image, frame: frame)
@@ -117,6 +124,41 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 NSLog("anypaint: 擷取失敗 \(error)")
                 NSSound.beep()
+            }
+        }
+    }
+
+    // MARK: - 框選 OCR：辨識文字／QR → 複製 → 結果窗
+
+    /// 一步到位（Shottr 同款）：辨識完**直接進剪貼簿**，同時開結果窗讓使用者檢視、
+    /// 選取局部或重新複製。原本要 OCR 一段螢幕文字得走「截圖 → 貼成浮動圖 → ⇧右鍵」三步。
+    ///
+    /// 結果窗一個就好（重用）：overlay 已經 dismiss，不會有兩個框選同時在辨識。
+    /// `ocrInFlight` 仍要擋——上一次的辨識可能還沒回來就又按了一次（比照 PinWindowController）。
+    private func recognizeText(in image: NSImage, near anchor: CGRect) {
+        guard !ocrInFlight else { return }
+        let controller = ocrController ?? OCRResultWindowController()
+        ocrController = controller
+        controller.present(besideGlobalRect: anchor)
+        controller.showText("辨識中…")
+
+        var proposed = CGRect(origin: .zero, size: image.size)
+        guard let cg = image.cgImage(forProposedRect: &proposed, context: nil, hints: nil) else {
+            controller.showText("無法讀取影像")
+            return
+        }
+        ocrInFlight = true
+        TextRecognizer.recognizeContent(cgImage: cg) { [weak self] result in
+            self?.ocrInFlight = false
+            switch result {
+            case .success(.empty):
+                controller.showText("未偵測到文字或 QR 碼")
+            case .success(let recognition):
+                let text = recognition.joined
+                self?.pinboard.copy(text: text)
+                controller.showText(text)
+            case .failure(let error):
+                controller.showText("辨識失敗：\(error.localizedDescription)")
             }
         }
     }
