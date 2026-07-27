@@ -24,6 +24,27 @@ final class SelectionToolbar: NSView {
 
     private var toolButtons: [AnnotationTool: NSButton] = [:]
     private var colorButtons: [AnnotationColor: NSButton] = [:]
+    /// 控件 → 說明文字。hover 時查這張表填 hintLabel。
+    private var hints: [NSView: String] = [:]
+    /// 沒 hover 任何按鈕時的預設說明——說明列高度固定，空著也是空著，
+    /// 不如拿來當「接下來能做什麼」的指引。
+    private static let defaultHint = "選一個工具開始標註，或直接按「複製」（↩）"
+
+    /// hover 說明列：滑鼠移到哪顆鈕，就在工具列底部顯示它是做什麼的。
+    ///
+    /// **不靠系統 tooltip**：一來 overlay 是 `.screenSaver` level 的 nonactivating panel，
+    /// tooltip 自己也是視窗，會不會被蓋住我無法在這裡自證（搜尋也沒找到明確結論）；
+    /// 二來系統 tooltip 要停留一兩秒才浮出，對這種一整排的小圖示太慢。
+    /// 固定高度＝有沒有文字都不會讓工具列忽高忽低。
+    /// toolTip 仍照樣設——原生若有效就是附贈，不衝突。
+    private let hintLabel: NSTextField = {
+        let l = NSTextField(labelWithString: SelectionToolbar.defaultHint)
+        l.font = .systemFont(ofSize: 11)
+        l.textColor = NSColor(white: 1, alpha: 0.75)
+        l.lineBreakMode = .byTruncatingTail
+        l.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        return l
+    }()
     /// 粗細數值標籤（spec 2026-07-22 修訂：三檔按鈕改連續值，工具列只顯示目前 pt 數）。
     private let lineWidthLabel: NSTextField = {
         let l = NSTextField(labelWithString: "4 pt")
@@ -51,23 +72,29 @@ final class SelectionToolbar: NSView {
         let toolsRow = NSStackView()
         toolsRow.orientation = .horizontal
         toolsRow.spacing = 4
-        let symbols: [(AnnotationTool, String)] = [
-            (.select, "cursorarrow"),
-            (.rect, "rectangle"), (.ellipse, "circle"),
-            (.line, "line.diagonal"), (.arrow, "arrow.up.right"),
-            (.freehand, "pencil"), (.highlighter, "highlighter"), (.pixelate, "squareshape.split.3x3"),
-            (.text, "textformat"), (.counter, "1.circle")
+        let symbols: [(AnnotationTool, String, String)] = [
+            (.select, "cursorarrow", "選取：點已畫好的標註來搬移、改樣式或刪除"),
+            (.rect, "rectangle", "矩形"), (.ellipse, "circle", "橢圓"),
+            (.line, "line.diagonal", "直線"), (.arrow, "arrow.up.right", "箭頭"),
+            (.freehand, "pencil", "畫筆：手繪線條"),
+            (.highlighter, "highlighter", "螢光筆：半透明色塊"),
+            (.pixelate, "squareshape.split.3x3", "馬賽克：遮住敏感內容"),
+            (.text, "textformat", "文字：點一下開始輸入"),
+            (.counter, "1.circle", "序號：依序編號的圓圈")
         ]
-        for (tool, symbol) in symbols {
+        for (tool, symbol, help) in symbols {
             let b = NSButton()
             configureSymbolButton(b, symbol, #selector(toolTapped(_:)))
             b.identifier = NSUserInterfaceItemIdentifier(tool.rawValue)
+            setHelp(help, for: b)
             toolButtons[tool] = b
             toolsRow.addArrangedSubview(b)
         }
         toolsRow.addArrangedSubview(separator())
         configureSymbolButton(undoButton, "arrow.uturn.backward", #selector(undoTapped))
         configureSymbolButton(redoButton, "arrow.uturn.forward", #selector(redoTapped))
+        setHelp("復原上一步（⌘Z）", for: undoButton)
+        setHelp("重做（⇧⌘Z）", for: redoButton)
         undoButton.isEnabled = false
         redoButton.isEnabled = false
         toolsRow.addArrangedSubview(undoButton)
@@ -76,23 +103,24 @@ final class SelectionToolbar: NSView {
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
         cancel.bezelStyle = .rounded
         cancel.controlSize = .small
+        setHelp("放棄這次截圖（Esc）", for: cancel)
         let saveButton = NSButton()
         configureSymbolButton(saveButton, "square.and.arrow.down", #selector(saveAction))
-        saveButton.toolTip = "儲存到預設資料夾（⌘S）"
+        setHelp("儲存到預設資料夾（⌘S）", for: saveButton)
         let saveAsButton = NSButton()
         configureSymbolButton(saveAsButton, "square.and.arrow.down.on.square", #selector(saveAsAction))
-        saveAsButton.toolTip = "另存為…（⇧⌘S）"
+        setHelp("另存為…自選位置與檔名（⇧⌘S）", for: saveAsButton)
         // 緊鄰存/另存：三顆同屬「落成檔案」語意。symbol 名已實測可解析（macOS 14 最低）。
         let openButton = NSButton()
         configureSymbolButton(openButton, "arrow.up.forward.app", #selector(openAction))
-        openButton.toolTip = "存檔並用預設圖片程式開啟（⌘O）"
+        setHelp("存檔並用外部 App 開啟，在那裡繼續編輯（⌘O）", for: openButton)
         let pinButton = NSButton()
         configureSymbolButton(pinButton, "pin", #selector(pinAction))
-        pinButton.toolTip = "貼上為浮動圖（⇧↩）"
+        setHelp("貼成螢幕上的浮動圖（⇧↩）", for: pinButton)
         let confirm = NSButton(title: "複製", target: self, action: #selector(confirmAction))
         confirm.bezelStyle = .rounded
         confirm.controlSize = .small
-        confirm.toolTip = "複製到剪貼簿並結束（↩）"
+        setHelp("複製到剪貼簿並結束（↩）", for: confirm)
         confirm.keyEquivalent = "\r"   // Enter = 複製
         toolsRow.addArrangedSubview(cancel)
         toolsRow.addArrangedSubview(saveButton)
@@ -114,14 +142,18 @@ final class SelectionToolbar: NSView {
             b.identifier = NSUserInterfaceItemIdentifier(color.rawValue)
             b.widthAnchor.constraint(equalToConstant: 18).isActive = true
             b.heightAnchor.constraint(equalToConstant: 18).isActive = true
+            setHelp(Self.colorName(color), for: b)
             colorButtons[color] = b
             styleRow.addArrangedSubview(b)
         }
         styleRow.addArrangedSubview(separator())
+        // 滾輪調粗細是隱藏功能（SelectionView.scrollWheel，工具作用中每 5 單位 ±1pt），
+        // 不寫出來沒人會發現。
+        setHelp("線條粗細——工具作用中滾動滑鼠滾輪即可調整", for: lineWidthLabel)
         styleRow.addArrangedSubview(lineWidthLabel)
         styleRow.isHidden = true
 
-        let stack = NSStackView(views: [toolsRow, styleRow])
+        let stack = NSStackView(views: [toolsRow, styleRow, hintLabel])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 5
@@ -134,6 +166,24 @@ final class SelectionToolbar: NSView {
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
+    }
+
+    /// 說明文字設一次、兩處生效：系統 tooltip 與工具列自己的 hover 說明列。
+    private func setHelp(_ text: String, for view: NSView) {
+        view.toolTip = text
+        hints[view] = text
+    }
+
+    private static func colorName(_ c: AnnotationColor) -> String {
+        switch c {
+        case .red: return "紅色"
+        case .orange: return "橘色"
+        case .yellow: return "黃色"
+        case .green: return "綠色"
+        case .blue: return "藍色"
+        case .black: return "黑色"
+        case .white: return "白色"
+        }
     }
 
     private func configureSymbolButton(_ b: NSButton, _ name: String, _ action: Selector) {
@@ -220,8 +270,33 @@ final class SelectionToolbar: NSView {
             options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
             owner: self, userInfo: nil))
     }
-    override func mouseEntered(with event: NSEvent) { NSCursor.arrow.set() }
-    override func mouseMoved(with event: NSEvent) { NSCursor.arrow.set() }
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.arrow.set()
+        updateHint(with: event)
+    }
+    override func mouseMoved(with event: NSEvent) {
+        NSCursor.arrow.set()
+        updateHint(with: event)
+    }
+    /// 離開工具列就清空——否則說明會留在最後一顆鈕上，看起來像目前狀態。
+    override func mouseExited(with event: NSEvent) {
+        hintLabel.stringValue = Self.defaultHint
+    }
+
+    /// 找滑鼠底下註冊過說明的控件。
+    /// 不用 `hitTest(_:)`：它收的是 **superview** 座標系的點，在這裡很容易傳錯座標而靜默失效；
+    /// 直接對每個控件換算明確得多，而且控件只有二十來個，每次移動的成本可忽略。
+    private func updateHint(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        for (view, text) in hints {
+            guard !view.isHiddenOrHasHiddenAncestor else { continue }   // 樣式列收起時色塊不算數
+            if view.bounds.contains(view.convert(point, from: self)) {
+                hintLabel.stringValue = text
+                return
+            }
+        }
+        hintLabel.stringValue = Self.defaultHint
+    }
 
     @objc private func confirmAction() { onConfirm?() }
     @objc private func cancelAction() { onCancel?() }
