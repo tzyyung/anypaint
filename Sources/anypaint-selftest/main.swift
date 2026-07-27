@@ -900,6 +900,20 @@ checkEq("quickSave 遷移：空字串視同未設",
         AppSettings.resolvedQuickSaveTemplate(stored: "", legacyDirectory: "/d"),
         "/d/" + FilenameTemplate.defaultName)
 
+// 「存檔並開啟」的 App 解析：nil＝退回系統預設（不是失敗）
+let fakeApp = URL(fileURLWithPath: "/Applications/Fake.app")
+let resolver: (String) -> URL? = { $0 == "com.example.fake" ? fakeApp : nil }
+checkTrue("openWith 未指定 → 系統預設",
+      AppSettings.resolveOpenWithApp(stored: "", resolve: resolver) == nil)
+checkTrue("openWith 只有空白 → 系統預設",
+      AppSettings.resolveOpenWithApp(stored: "   ", resolve: resolver) == nil)
+checkTrue("openWith 指定且找得到 → 用該 App",
+      AppSettings.resolveOpenWithApp(stored: "com.example.fake", resolve: resolver) == fakeApp)
+checkTrue("openWith 前後空白會 trim",
+      AppSettings.resolveOpenWithApp(stored: " com.example.fake ", resolve: resolver) == fakeApp)
+checkTrue("openWith 指定但 App 已不存在 → 退回系統預設（不失敗）",
+      AppSettings.resolveOpenWithApp(stored: "com.example.deleted", resolve: resolver) == nil)
+
 let cvRaw: [[String: Any]] = [
     [kCGWindowLayer as String: 5, kCGWindowName as String: "置頂輔助"],   // 非 layer-0 → 跳過
     [kCGWindowLayer as String: 0, kCGWindowName as String: "文件A"],

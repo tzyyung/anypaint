@@ -154,41 +154,59 @@ public final class CaptureOutputService {
 
     // MARK: - 存檔並開啟（交給外部 App 繼續編輯）
 
-    /// 存到快速儲存路徑，再把檔案交給系統的預設 PNG 程式（多數機器＝預覽程式）。
+    /// 存到快速儲存路徑，再把檔案交給外部程式：設定頁指定的 App，未指定就用系統預設的
+    /// PNG 程式（多數機器＝預覽程式）。
     ///
     /// 刻意**不寫暫存檔**：使用者在外部程式標註完按 ⌘S 會存回這個檔，放系統暫存目錄的話
     /// 之後會被清掉——他以為存好了、檔案卻消失。存成正式檔則檔名樣板、碰撞遞增、儲存通知
     /// 全部沿用既有鏈路，外部程式的儲存也自然落在他自己的資料夾。
     ///
-    /// 也刻意**不指定 `com.apple.Preview`**：走使用者設定的預設程式，他若把 PNG 預設換成
-    /// 別的編輯器，那就是他要的。
-    @discardableResult
-    public func saveAndOpen(image: NSImage, vars: [String: String]) -> Bool {
+    /// 無回傳值：指定 App 的開啟 API 是**非同步**的（completionHandler），同步 Bool 表達
+    /// 不了結果；失敗一律在下面統一 beep + log。
+    public func saveAndOpen(image: NSImage, vars: [String: String]) {
         guard let url = saveExpanding(template: AppSettings.quickSavePathTemplate,
                                       image: image, vars: vars, quiet: false) else {
-            return false   // 寫檔失敗：saveExpanding 已 beep 過，不再重複
+            return   // 寫檔失敗：saveExpanding 已 beep 過，不再重複
         }
-        return openInDefaultApp(url)
+        openInExternalApp(url)
     }
 
     /// CGImage 版（長圖直寫路徑）；語意與 NSImage 版相同。
-    @discardableResult
-    public func saveAndOpen(cgImage: CGImage, vars: [String: String]) -> Bool {
+    public func saveAndOpen(cgImage: CGImage, vars: [String: String]) {
         guard let url = saveExpanding(template: AppSettings.quickSavePathTemplate,
                                       cgImage: cgImage, vars: vars, quiet: false) else {
-            return false
+            return
         }
-        return openInDefaultApp(url)
+        openInExternalApp(url)
     }
 
-    /// `NSWorkspace.open` 回的是 Bool 而不是拋錯（已查 SDK header；非 deprecated）——
-    /// 不處理的話「按了沒反應」完全無從查起，所以這裡一定要 beep + 留 log。
-    private func openInDefaultApp(_ url: URL) -> Bool {
-        let opened = NSWorkspace.shared.open(url)
-        if !opened {
-            NSLog("anypaint: 無法開啟 \(url.path)")
-            NSSound.beep()
+    /// 兩條路（都已查 SDK header，皆非 deprecated）：
+    /// - 未指定 App → `open(_:)`，走使用者的預設 PNG 程式。它回 Bool 而不拋錯，
+    ///   不處理的話「按了沒反應」完全無從查起。
+    /// - 指定了 App → `open(_:withApplicationAt:configuration:completionHandler:)`（10.15+），
+    ///   **非同步**。completionHandler 不保證在主執行緒，beep 要切回主執行緒。
+    ///
+    /// 指定的 App 解析不到（被刪／改了 bundle ID）時 `resolveOpenWithApp` 回 nil，
+    /// 這裡自然落到系統預設那條——檔案照樣開得起來，設定頁會顯示「找不到」讓使用者去修。
+    private func openInExternalApp(_ url: URL) {
+        let appURL = AppSettings.resolveOpenWithApp(
+            stored: AppSettings.openWithBundleIdentifier,
+            resolve: { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) })
+
+        guard let appURL else {
+            if !NSWorkspace.shared.open(url) {
+                NSLog("anypaint: 無法開啟 \(url.path)")
+                NSSound.beep()
+            }
+            return
         }
-        return opened
+
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true   // agent app：不 activate 的話外部程式在背景開起來、使用者看不到
+        NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: config) { _, error in
+            guard let error else { return }
+            NSLog("anypaint: 無法用 \(appURL.lastPathComponent) 開啟 \(url.path)：\(error)")
+            DispatchQueue.main.async { NSSound.beep() }
+        }
     }
 }

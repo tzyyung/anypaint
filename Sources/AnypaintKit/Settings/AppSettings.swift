@@ -103,11 +103,37 @@ public enum AppSettings {
         set { UserDefaults.standard.set(newValue, forKey: saveNotifyKey) }
     }
 
+    private static let openWithKey = "openWithBundleIdentifier"
+
+    /// 「存檔並開啟」要交給哪個 App 的 bundle ID。空／未設＝系統預設的 PNG 程式
+    /// （多數機器＝預覽程式）。
+    ///
+    /// 存 bundle ID 而不是路徑：App 在 /Applications ↔ ~/Applications 之間搬動、
+    /// 或改了顯示名稱，靠 bundle ID 仍找得到；存路徑就會失效。
+    public static var openWithBundleIdentifier: String {
+        get { UserDefaults.standard.string(forKey: openWithKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: openWithKey) }
+    }
+
+    /// 決定「存檔並開啟」實際要交給哪個 App（純函式，selftest 可測）。
+    ///
+    /// - Parameter resolve: bundle ID → App URL 的解析器（正式路徑傳
+    ///   `NSWorkspace.urlForApplication(withBundleIdentifier:)`）。
+    /// - Returns: 指定的 App URL；**未指定或解析不到都回 nil**，由呼叫端退回系統預設。
+    ///   解析不到＝使用者選過的 App 被刪了或改了 bundle ID——這時退回系統預設把檔案開起來，
+    ///   比整個動作失敗有用（設定頁會另外把這個狀態顯示出來，不靜默）。
+    public static func resolveOpenWithApp(stored: String,
+                                          resolve: (String) -> URL?) -> URL? {
+        let id = stored.trimmingCharacters(in: .whitespaces)
+        guard !id.isEmpty else { return nil }
+        return resolve(id)
+    }
+
     /// 輸出設定回出廠預設。連遷移來源 saveDirectoryPath 一併清——
     /// 否則清了新鍵後 quickSave 又從舊資料夾遷移，還原的不是「預設」。
     public static func resetOutputDefaults() {
         for key in [manualNameKey, quickSaveKey, autoSaveEnabledKey,
-                    autoSavePathKey, saveNotifyKey, saveDirKey] {
+                    autoSavePathKey, saveNotifyKey, saveDirKey, openWithKey] {
             UserDefaults.standard.removeObject(forKey: key)
         }
     }
