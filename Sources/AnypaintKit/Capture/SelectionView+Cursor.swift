@@ -106,17 +106,29 @@ extension SelectionView {
     /// 多螢幕用：滑鼠只有一個，這些東西**全域只該有一份**。由 controller 在每次互動時
     /// 統一保證，不依賴 mouseExited 的事件配對。
     ///
-    /// ⚠️ **未解問題（2026-07-28）**：實機回報「雙螢幕時兩個螢幕各自 focus 一個視窗」，
-    /// 加了這個機制後**仍可重現**——所以成因不是「其他螢幕的狀態沒被清掉」，我的假設錯了。
-    /// 這個機制本身概念上仍成立（候選全域唯一）故保留，但**別把它當成那個問題已解決**。
-    /// 往下追的方向：確認 onInteraction 在跨螢幕時真的有被呼叫、windows 是否真有兩個
-    /// view、以及回報的現象是否其實是「兩個螢幕各有一個選區」（那是既有設計，不是缺陷）。
+    /// 註（2026-07-28）：這個機制原本是為了修「雙螢幕各自 focus 一個視窗」而加的，
+    /// 但方向錯了、加了也沒解決——**真正的現象是「兩個螢幕各自產生一個選區」**
+    /// （先在左螢幕點選一個視窗，再到右螢幕點選另一個），那是選區不唯一的問題，
+    /// 已由 `SelectionOverlayController.grantExclusiveSelection` 處理。
+    /// 這裡保留是因為 hover 狀態全域唯一本身仍然成立（滑鼠只有一個）。
     func clearHoverState() {
         guard windowCandidate != nil || hoverPoint != nil else { return }
         windowCandidate = nil
         hoverPoint = nil
         // 候選框是大面積，直接全重繪——涵蓋十字線與放大鏡的清除，不必再算局部 dirty。
         // hoverPoint 歸 nil 後 activeLoupePoint 回 nil，draw 會順手清掉 lastDrawnCrosshair。
+        needsDisplay = true
+    }
+
+    /// 放棄本 view 的選區（另一個螢幕取得獨佔權時由 controller 呼叫）。
+    ///
+    /// 呼叫端已用 `frameLocked` 擋掉「有標註」的情況，所以這裡不會丟掉標註——
+    /// 也因此不需要清 annotations（此時它必為空）。
+    func relinquishSelection() {
+        guard selection != nil else { return }
+        selection = nil
+        windowCandidate = nil
+        toolbar.isHidden = true   // 選區沒了工具列不該留在畫面上
         needsDisplay = true
     }
 

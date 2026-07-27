@@ -97,6 +97,9 @@ final class SelectionOverlayController {
                     selection: sel, windowOrigin: window.frame.origin)
                 self?.finishPin(with: image, frame: globalFrame)
             }
+            window.selectionView?.onRequestExclusiveSelection = { [weak self, weak window] in
+                self?.grantExclusiveSelection(to: window) ?? true
+            }
             window.selectionView?.onCancel = { [weak self] in self?.cancel() }
             window.selectionView?.onInteraction = { [weak self, weak window] in
                 self?.armWatchdog()
@@ -188,6 +191,24 @@ final class SelectionOverlayController {
         // 逃生路 5：看門狗（免按鍵），互動即重置，秒數可在設定頁調
         armWatchdog()
         NSCursor.crosshair.set()
+    }
+
+    /// 把「選區獨佔權」給某個螢幕：清掉其他螢幕的選區，回傳是否允許。
+    ///
+    /// 一次截圖只該有一個選區。原本可以在左螢幕選一個視窗、移到右螢幕再選一個，兩個都亮著
+    /// （完成鏈用「最後互動的視窗」決定，行為確定但使用者看不出來會拿到哪一個）。
+    ///
+    /// 其他螢幕已經畫了標註 → **拒絕**並 beep：比照同螢幕的 `frameLocked`（有標註就鎖框、
+    /// 不能重畫），不讓已完成的標註被跨螢幕的一次點擊無聲丟掉。要換螢幕就按 Esc 重來。
+    private func grantExclusiveSelection(to active: SelectionOverlayWindow?) -> Bool {
+        let others = windows.filter { $0 !== active }.compactMap { $0.selectionView }
+        guard !others.isEmpty else { return true }   // 單螢幕：no-op
+        if others.contains(where: { $0.frameLocked }) {
+            NSSound.beep()
+            return false
+        }
+        others.forEach { $0.relinquishSelection() }
+        return true
     }
 
     /// 除了 active 那個螢幕，其他 overlay 的 hover 狀態一律清掉（單螢幕時是 no-op）。

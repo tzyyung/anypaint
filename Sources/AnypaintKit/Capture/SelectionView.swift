@@ -152,6 +152,15 @@ final class SelectionView: NSView {
     var onCancel: (() -> Void)?
     /// 任何互動 → 通知 controller 重置看門狗。
     var onInteraction: (() -> Void)?
+    /// 要開新框前向 controller 索取「選區獨佔權」，回傳是否允許。
+    ///
+    /// **選區全域唯一**：一次截圖只該有一個選區。原本多螢幕下可以在左螢幕選一個視窗、
+    /// 移到右螢幕再選一個，兩個都亮著——使用者無從得知 Enter 會複製哪一個
+    /// （controller 的完成鏈是用「最後互動的視窗」決定，行為確定但看不出來）。
+    /// controller 在允許時會順手清掉其他螢幕的選區；若其他螢幕已經畫了標註則拒絕，
+    /// 比照同螢幕的 frameLocked——不讓標註被無聲丟掉。
+    /// 單螢幕時永遠允許（沒有其他 view）。
+    var onRequestExclusiveSelection: (() -> Bool)?
 
     init(snapshot: DisplaySnapshot) {
         self.snapshot = snapshot

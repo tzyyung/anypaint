@@ -63,7 +63,9 @@ extension SelectionView {
                 return
             }
         }
-        // 空白處按下 → 開新框
+        // 空白處按下 → 開新框。拉框與「單擊套用視窗候選」都走這條（單擊在 mouseUp 才判定），
+        // 所以選區獨佔權只要在這裡要一次。被拒絕（其他螢幕已有標註）就什麼都不做。
+        guard onRequestExclusiveSelection?() ?? true else { return }
         annotations.clearRedo()
         drag = .creating(anchor: p)
         selection = CGRect(origin: p, size: .zero)
