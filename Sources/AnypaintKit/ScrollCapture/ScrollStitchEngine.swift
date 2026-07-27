@@ -2,11 +2,12 @@ import CoreGraphics
 import Foundation
 import Vision
 
-/// 一格影格經過三層匹配鏈後的結果。Session 只依此更新 HUD／決定收尾，不重複演算法邏輯。
+/// 一格影格的處理結果。Session 只依此更新 HUD／決定收尾，不重複演算法邏輯。
 public enum ScrollStitchOutcome: Equatable, Sendable {
     /// 第一格：當長圖基準。
     case baseCaptured(height: Int)
-    /// 累積捲動量還不足以產生可辨識位移——跳過本格，**不計失敗**（見 motionGate 說明）。
+    /// 畫面沒變（影像指紋相同），或軌跡累積的位移還不足以產生可信的接合——
+    /// 跳過本格、**不計失敗**。等待是安全的：匹配基準是固定的長圖尾端，位移會累積到下一次一併接上。
     case waitingForMotion
     /// 靜態帶鎖定成功（此格只用於鎖定，不拼接）。
     case bandsLocked(BandInsets)

@@ -17,8 +17,16 @@ public enum StepOutcome: Equatable, Sendable {
     case unknown
 }
 
-/// 金字塔 ZNCC band 匹配（spec §7.1）。關係式：new[r] == ref[r+dy]（dy>0=下捲）。
-/// 三層金字塔（1/4 全域 → 1/2 → 原解析度精修）；多 band 一致性；信心雙閘門；BPC 早停。
+/// 垂直位移估計。關係式：`new[r] == ref[r+dy]`（dy>0＝下捲、dy<0＝回捲）。
+///
+/// 兩個入口，解的是不同難度的問題：
+/// - `matchStep`：對**上一格**估位移。重疊 95% 以上、位移小，歧義幾乎為零。
+/// - `match`：對**長圖尾端**估位移。位移大、搜尋範圍大，等行距內容的週期解就落在範圍內；
+///   靠 `matchStep` 累積出的軌跡當 prior 把搜尋窗縮小（見 `ScrollTrajectory`）。
+///
+/// 計分一律是**整個重疊區的 ZNCC**（見 `overlapScore`——那裡記著為什麼不用 band 取樣）。
+/// 金字塔三層：L2 (1/4) 提名候選 → L1 (1/2) 篩選排序 → L0 原解析度裁決。
+/// **粗掃層只提名、不裁決**：它的分數常糊在一起，而原解析度是乾淨的。
 public enum ScrollMatcher {
     public struct Config {
         public var minDelta = 14              // 最小可信位移（px，原解析度）
@@ -26,7 +34,7 @@ public enum ScrollMatcher {
         public var minOverlapPx = 96
         public var ratioGateMin = 1.3         // 次佳/最佳 需 ≥ 此值（次佳排除 ±exclusion）
         public var exclusionRadius = 24       // 次佳排除窗（原解析度 px）
-        public var absoluteGateMax: Float = 0.35  // 最佳 band 平均分（1-ZNCC）絕對上限
+        public var absoluteGateMax: Float = 0.35  // 重疊區平均分（1−ZNCC）的絕對上限
         public var worstBandMax: Float = 0.60     // 重疊區四等分裡最差那份的上限（局部污染防線）
         public var priorWeight = 0.15         // 速度先驗軟懲罰權重
         /// 受信任 prior（軌跡預測）的搜尋半徑（原解析度 px）。要容納 f2f 幾格的累積誤差，
@@ -42,12 +50,16 @@ public enum ScrollMatcher {
         public init() {}
     }
 
-    /// - Parameter priorIsTrusted: prior 來自**獨立來源**（Vision 全圖對位／1-D 相位相關）時設 true：
-    ///   直接在原解析度於 prior 附近精修，**跳過 L2 全域粗掃**。
+    /// - Parameter priorIsTrusted: prior 來自**獨立的影像證據**時設 true——常態是
+    ///   `ScrollTrajectory` 的軌跡預測，救援時則是 Vision 全圖對位。此模式跳過 L2 全域粗掃，
+    ///   直接在 prior 附近由粗到細精修（見 `matchPositive` 的快路徑）。
+    ///
     ///   必要性（實機重現）：稀疏內容（大半空白、只有少數幾行字）在 1/4 金字塔層訊號幾乎消失，
-    ///   L2 粗掃必判 ambiguous 而提前返回——於是救援層即使算出正確位移也永遠救不回來
-    ///   （症狀：長圖等於單張影格）。此模式改由「絕對閘＋最差區塊閘」把關，
-    ///   而呼叫端本來就要求救援估計與 matcher 結果互相吻合，等於雙重獨立佐證。
+    ///   L2 粗掃必判 ambiguous 而提前返回——於是即使算出正確位移也永遠救不回來
+    ///   （症狀：長圖等於單張影格）。此模式改由「絕對閘＋最差區塊閘」把關。
+    ///
+    ///   **錯的 prior 不會把結果帶跑**：快路徑過不了閘就自動落到全域候選複評
+    ///   （實測餵行倍數錯解或荒謬值當 prior，仍找回正解）。
     public static func match(new: LumaPlane, reference: LumaPlane,
                              wheelDirection: Int, prior: Int?,
                              priorIsTrusted: Bool = false,
@@ -329,36 +341,29 @@ public enum ScrollMatcher {
     }
 
 
-    /// 挑選 band 原點：**固定不隨候選 dy 改變**，橫跨整格等分成 n 槽，每槽取「逐列動態範圍
-    /// 最大」的那一列（紋理最強）。
-    ///
-    /// 三個實測教訓都體現在這裡：
-    /// 1. 位置必須固定：原本按 overlap 等分 → 大 dy 的 overlap 小、band 落在空白被剔除，
-    ///    剩少數 band 更容易拿低分 → 系統性偏好過大位移（實測拼出 203% 的重複內容）。
-    /// 2. 要挑有紋理的列：整片留白的 band 不具鑑別力，會讓分數曲面被抹平 → 永久判 ambiguous
-    ///    （深色終端機／大片留白頁面的實機症狀）。
-    /// 3. 不可只取「最小重疊」那一小段（曾限制在 [0, minOverlap-bh]）：那段剛好空白時全滅，
-    ///    稀疏內容直接拼不動。橫跨整格取樣，再對「可用 band 較少」的候選加罰來維持公平。
-    /// 對**整個重疊區**算正規化相關（ZNCC），回傳 (mean, worst)：
-    /// - mean：全重疊區的 1−ZNCC。ZNCC 已正規化，因此不同大小的重疊可以公平比較，
-    ///   不需要 band 取樣，也就沒有「band 位置隨位移改變造成偏差」的問題。
+    /// 對**整個重疊區**算零均值正規化相關（ZNCC），回傳 (mean, worst)：
+    /// - mean：全重疊區的 1−ZNCC。ZNCC 已正規化，因此不同大小的重疊可以公平比較。
     /// - worst：把重疊區切四等分各算一次，取最差的一份——用來抓局部污染（影片區、動態元件）。
+    ///   只看有足夠訊號的區塊，否則低紋理區塊的相關性由雜訊主導、必然趨零，
+    ///   納入判定會把正常影格誤判成局部污染（實測 ±6 雜訊即誤殺）。
     ///
-    /// 為什麼放棄原本的多 band 取樣（三次實測教訓）：
+    /// 為什麼是整個重疊區，而不是取幾條 band（三次實測教訓，三個坑互相牽制）：
     /// ① 平坦 band 若當成「完美相關」會抹平分數曲面 → 大片留白／深色終端機永久判 ambiguous；
     /// ② 改成剔除平坦 band 後，band 位置隨位移改變 → 大位移剩少數 band 更容易得低分 →
     ///    系統性偏好過大位移（實測拼出 203% 的重複內容）；
     /// ③ 想用「固定 band 位置」兩全，卻在「窄（大位移才有效）vs 寬（稀疏內容才有料）」之間
     ///    無法同時滿足。整區 ZNCC 沒有這個取捨：去均值後平坦區對分子分母都貢獻趨零，
     ///    既不會冒充相關、也不會壓過真正有紋理的區域。
-    /// 取樣：列與欄各取 1/2 以控制成本（不影響相關性判斷的統計意義）。
+    ///
     /// public：selftest 需跨模組直接呼叫，驗證 L2 粗估的內部一致性。
+    ///
     /// - Parameter rowStep: 列取樣間隔。粗掃層用 2 省成本；**最終層必須用 1**——
     ///   隔列取樣會讓分數對 ±1px 不敏感甚至排名反轉（實測 dy=201 的分數比正解 dy=200 還低）。
+    /// - Parameter colStep: 欄取樣間隔。**與 rowStep 不對稱**：垂直位移的資訊在水平邊緣
+    ///   （文字行的上下緣、分隔線），加大 colStep 只是少看幾欄、不影響垂直鑑別力；
+    ///   加大 rowStep 則會跳過細橫線而失配。要省成本就動 colStep。
     /// - Note: 接受 `dy == 0`（步進估計要能判定「畫面在變但沒有一致平移」＝局部動畫）。
     ///   此時重疊區＝整格，`(r+dy)*w == r*w`，計分與四等分邏輯都自然成立。
-    /// - Parameter colStep: 欄取樣間隔。**與 rowStep 不對稱**：垂直位移的資訊在水平邊緣，
-    ///   加大 colStep 只是少看幾欄、不影響垂直鑑別力；加大 rowStep 則會跳過細橫線而失配。
     /// - Parameter needsWorst: 是否要算四等分的最差分。**四等分等於把重疊區再掃一遍**，
     ///   而所有「找最佳位移」的掃描迴圈都只看 `mean`——那些呼叫一律傳 false。
     ///   預設留 true 以維持既有語意：誤用時會拿到真實的 worst 而不是靜默放行的假值。

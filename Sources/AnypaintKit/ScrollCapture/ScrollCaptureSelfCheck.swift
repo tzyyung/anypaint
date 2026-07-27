@@ -11,7 +11,7 @@ import AppKit
 /// 結果：`/tmp/anypaint-selfcheck.log`，跑完自動結束行程。
 ///
 /// 與正式流程的唯一差異：`excludeSelf: false`（自檢要拍的正是自家測試視窗）。
-/// 其餘（filter/sourceRect 座標鏈/queueDepth/影格轉換/engine 三層匹配鏈）完全相同。
+/// 其餘（filter/sourceRect 座標鏈/queueDepth/影格轉換/engine 的軌跡與匹配鏈）完全相同。
 @MainActor
 public final class ScrollCaptureSelfCheck {
     private var window: NSWindow?
@@ -45,7 +45,11 @@ public final class ScrollCaptureSelfCheck {
         }
         return 520
     }()
-    /// 稀疏模式：只有底部 ~15% 有文字，其餘全空（模擬「終端機大半空白」的實機條件）。
+    /// 稀疏模式：加大文字行的間隔（每 9 行才 1 行有字），模擬「終端機大半空白」的實機條件。
+    ///
+    /// 注意這是**內容本身的屬性**，不是「視窗某區域不畫」——舊版寫成後者（上半永遠不畫字），
+    /// 文字捲到分界線就消失，物理上不是純平移，任何對位演算法都必然失敗。
+    /// 據此調演算法只會愈調愈錯（實際誤導了好幾輪，見 CLAUDE.md 核心教訓第 0 條）。
     static let sparseMode = CommandLine.arguments.contains("--selfcheck-sparse=1")
     private let totalSteps = 40
 
