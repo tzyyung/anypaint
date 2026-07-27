@@ -31,7 +31,8 @@ func runScrollCaptureTests() {
     scrollCoordsTests()
     staticBandTests()
     scrollMatcherTests()
-    phaseCorrelationTests()
+    stepEstimationTests()
+    displacementRegressionTests()
     scrollStitcherTests()
     scrollGuidanceTests()
 }
@@ -280,25 +281,125 @@ func scrollMatcherTests() {
     T.checkTrue("matcher: L2 粗估在 50±1", abs(bestL2.dy - 50) <= 1)
 }
 
-func phaseCorrelationTests() {
+/// frame-to-frame 步進估計（取代原本的 1-D 相位相關救援層）。
+///
+/// 為什麼換掉相位相關：四種內容類型各 10 組已知位移的實測顯示 PC 命中率只有 20%，
+/// 給錯值時連符號都錯（真 150→估 −30、真 90→估 −135），而同一批測資上 ZNCC 是 40/40
+/// 零判錯。關鍵在於**PC 被觸發的時機（ZNCC 已失敗時）正好是它最不可靠的時機**。
+func stepEstimationTests() {
     let page = SyntheticPage.make(width: 500, height: 4000, seed: 3)
-    let ref = LumaPlane(SyntheticPage.window(page, y: 500, height: 800))
-    let new = LumaPlane(SyntheticPage.window(page, y: 700, height: 800))
-    let r = PhaseCorrelation1D.estimateShift(new: new, reference: ref)
-    T.checkTrue("phasecorr: dy=200 誤差 ≤1", abs((r?.dy ?? -999) - 200) <= 1)
-    // 重複紋理 → 多峰 → nil
-    let stripes = LumaPlane(SyntheticPage.periodicStripes(width: 500, height: 800, period: 48))
-    T.checkTrue("phasecorr: 週期紋理 → nil", PhaseCorrelation1D.estimateShift(new: stripes, reference: stripes) == nil)
-    // 獨立性：特徵稀疏（大片純色+一條細線）讓 band matcher 失敗、相位相關仍中
+    func step(_ from: Int, _ delta: Int, prior: Int?, allowZero: Bool = true) -> StepOutcome {
+        ScrollMatcher.matchStep(new: LumaPlane(SyntheticPage.window(page, y: from + delta, height: 800)),
+                                prev: LumaPlane(SyntheticPage.window(page, y: from, height: 800)),
+                                priorStep: prior, allowZero: allowZero)
+    }
+    func dyOf(_ o: StepOutcome) -> Int? {
+        if case let .step(dy, _) = o { return dy }
+        return nil
+    }
+
+    // 小位移：30fps 下最常見的步進，也是主匹配的 minDelta=14 擋掉的區間。
+    // 這正是舊架構丟掉時間維度的代價——最容易估的題目反而被拒絕。
+    for d in [1, 2, 3, 5, 8, 13] {
+        T.checkEq("step: 小位移 \(d)px 精確命中", dyOf(step(600, d, prior: d)) ?? -999, d)
+    }
+    // 大位移與回捲
+    for d in [40, 90, 200, -8, -90] {
+        T.checkEq("step: 位移 \(d)px 精確命中", dyOf(step(900, d, prior: d)) ?? -999, d)
+    }
+    // 開場格：沒有 prior 也要能估（走 L2 全域粗掃再 L1 精修）
+    T.checkEq("step: 無 prior 開場 dy=60", dyOf(step(700, 60, prior: nil)) ?? -999, 60)
+    T.checkEq("step: 無 prior 開場回捲 dy=-60", dyOf(step(700, -60, prior: nil)) ?? -999, -60)
+
+    // 局部動畫：畫面在變但沒有一致平移 → 必須「有信心地」回報 dy=0，
+    // 這樣 engine 才能直接跳過而不進救援層。與 .unknown 混為一談會誤殺真實捲動的內容。
+    let base = SyntheticPage.window(page, y: 600, height: 800)
+    var animated = base
+    for r in 40..<120 { for c in 100..<300 {
+        let o = (r * base.width + c) * 4
+        animated.bytes[o] = 210; animated.bytes[o+1] = 60; animated.bytes[o+2] = 60 } }
+    T.checkEq("step: 局部動畫 → 有信心回報 dy=0",
+              dyOf(ScrollMatcher.matchStep(new: LumaPlane(animated), prev: LumaPlane(base),
+                                           priorStep: 5, allowZero: true)) ?? -999, 0)
+    T.checkTrue("step: allowZero=false 時不回報 0",
+                dyOf(ScrollMatcher.matchStep(new: LumaPlane(animated), prev: LumaPlane(base),
+                                             priorStep: 5, allowZero: false)) != 0)
+
+    // 特徵稀疏（大片純色＋一條細線）——原本是相位相關存在的理由，改由步進估計接手。
     var sparseA = SyntheticPage.solid(width: 500, height: 800, gray: 250)
     var sparseB = SyntheticPage.solid(width: 500, height: 800, gray: 250)
-    // 只有一條 3px 深色橫線：A 在 y=400、B 在 y=250（=下捲 150）
     for r0 in 400..<403 { for c in 0..<500 {
         let o = (r0 * 500 + c) * 4; sparseA.bytes[o] = 20; sparseA.bytes[o+1] = 20; sparseA.bytes[o+2] = 20 } }
     for r0 in 250..<253 { for c in 0..<500 {
         let o = (r0 * 500 + c) * 4; sparseB.bytes[o] = 20; sparseB.bytes[o+1] = 20; sparseB.bytes[o+2] = 20 } }
-    let sr = PhaseCorrelation1D.estimateShift(new: LumaPlane(sparseB), reference: LumaPlane(sparseA))
-    T.checkTrue("phasecorr: 特徵稀疏救援 dy=150±1", abs((sr?.dy ?? -999) - 150) <= 1)
+    T.checkEq("step: 特徵稀疏（純色＋單線）dy=150",
+              dyOf(ScrollMatcher.matchStep(new: LumaPlane(sparseB), prev: LumaPlane(sparseA),
+                                           priorStep: 150, allowZero: true)) ?? -999, 150)
+
+    // 純色（完全沒有可追蹤的特徵）→ 必須回 .unknown，不可硬給一個值。
+    let solidA = LumaPlane(SyntheticPage.solid(width: 500, height: 800, gray: 200))
+    T.checkEq("step: 純色自比 → unknown（不硬猜）",
+              ScrollMatcher.matchStep(new: solidA, prev: solidA, priorStep: 20, allowZero: false),
+              StepOutcome.unknown)
+}
+
+/// 位移估計的迴歸矩陣。這組是「移除相位相關、改用整區 ZNCC＋軌跡」這個決定的實測依據，
+/// 必須留成迴歸測試——先前正是因為拿**物理上不是純平移**的無效測資做結論，
+/// 才把演算法往錯的方向調了好幾輪。
+func displacementRegressionTests() {
+    func acceptedDy(_ o: MatchOutcome) -> Int? {
+        if case let .accepted(dy, _) = o { return dy }
+        return nil
+    }
+    // ① 稀疏度矩陣：行週期越大＝影格內字行越少。全部都是物理正確的純平移。
+    for period in [108, 200, 300] {
+        let page = SyntheticPage.linedPage(width: 700, height: 3000, period: period,
+                                          lineThickness: 22, identicalRows: false)
+        for trueDy in [48, 90, 150] {
+            let ref = LumaPlane(SyntheticPage.window(page, y: 600, height: 366))
+            let new = LumaPlane(SyntheticPage.window(page, y: 600 + trueDy, height: 366))
+            let got = acceptedDy(ScrollMatcher.match(new: new, reference: ref,
+                                                     wheelDirection: 1, prior: nil)) ?? -999
+            T.checkEq("regress: 稀疏週期\(period) dy=\(trueDy)", got, trueDy)
+        }
+    }
+    // ② 跨內容類型：密集文字／深色終端機風／照片類平滑紋理（無週期結構）
+    let contents: [(String, PixelBuffer)] = [
+        ("密集文字", SyntheticPage.linedPage(width: 700, height: 2200, period: 36,
+                                        lineThickness: 26, identicalRows: false)),
+        ("深色終端機", SyntheticPage.linedPage(width: 700, height: 2200, period: 54,
+                                         lineThickness: 16, identicalRows: false)),
+        ("照片類紋理", SyntheticPage.smoothTexture(width: 700, height: 2200, seed: 99)),
+    ]
+    for (label, page) in contents {
+        for trueDy in [34, 90, 210] {
+            let ref = LumaPlane(SyntheticPage.window(page, y: 700, height: 366))
+            let new = LumaPlane(SyntheticPage.window(page, y: 700 + trueDy, height: 366))
+            let got = acceptedDy(ScrollMatcher.match(new: new, reference: ref,
+                                                     wheelDirection: 1, prior: nil)) ?? -999
+            T.checkEq("regress: \(label) dy=\(trueDy)", got, trueDy)
+        }
+    }
+    // ③ 行內容完全相同＝數學上不可區分的病態內容：必須拒絕，不可挑一個週期倍數接上。
+    let pathological = SyntheticPage.linedPage(width: 700, height: 2200, period: 108,
+                                               lineThickness: 22, identicalRows: true)
+    let pRef = LumaPlane(SyntheticPage.window(pathological, y: 600, height: 366))
+    let pNew = LumaPlane(SyntheticPage.window(pathological, y: 600 + 48, height: 366))
+    T.checkTrue("regress: 行內容全同 → 拒絕（不猜週期倍數）",
+                acceptedDy(ScrollMatcher.match(new: pNew, reference: pRef,
+                                               wheelDirection: 1, prior: nil)) == nil)
+
+    // ④ 軌跡 prior 的抗誤導：即使 prior 是行倍數錯解或荒謬值，也必須 fallback 到全域找回正解。
+    //    這是新主路徑的安全前提——軌跡失準不可污染長圖。
+    let page = SyntheticPage.linedPage(width: 700, height: 2200, period: 108,
+                                       lineThickness: 22, identicalRows: false)
+    let ref = LumaPlane(SyntheticPage.window(page, y: 700, height: 366))
+    let new = LumaPlane(SyntheticPage.window(page, y: 790, height: 366))
+    for badPrior in [82, 60, 198, 250] {
+        let got = acceptedDy(ScrollMatcher.match(new: new, reference: ref, wheelDirection: 1,
+                                                 prior: badPrior, priorIsTrusted: true)) ?? -999
+        T.checkEq("regress: prior=\(badPrior) 仍找回正解 90", got, 90)
+    }
 }
 
 func scrollStitcherTests() {
@@ -423,46 +524,35 @@ func scrollStitchEngineTests() {
     let page = SyntheticPage.make(width: 400, height: 4000, seed: 31)
     let frameH = 420
 
-    // 慢捲：每格只前進 5px（< minDelta=14），滾輪每格 2.5 點。
-    // 舊邏輯：每格判失敗 → 10 格收工、長圖不增長。新邏輯：累積過閘後一次接上。
-    func runSlowScroll(motionGate: CGFloat) -> (height: Int, failures: Int, appended: Int) {
-        let engine = ScrollStitchEngine(maxHeightPx: 30000, motionGatePoints: motionGate)
+    // 慢捲：每格只前進 5px（< minDelta=14）。
+    // 舊邏輯：每格判失敗 → 10 格收工、長圖不增長。
+    // 新邏輯：步進估計逐格記下 5px（f2f 重疊 98%，這是最容易估的題目），
+    // 軌跡累積到超過 minDelta 後一次接上——完全不需要滾輪參與。
+    func runSlowScroll(stepPx: Int) -> (height: Int, failures: Int, appended: Int) {
+        let engine = ScrollStitchEngine(maxHeightPx: 30000)
         var y = 0
-        var accum: CGFloat = 0
         for _ in 0..<40 {
-            accum += 2.5
-            let out = engine.consume(frame: SyntheticPage.window(page, y: y, height: frameH),
-                                     wheelAccumulatedPoints: accum, wheelDirection: 1)
-            switch out {
-            case .appended, .trimmed, .bandsLocked: accum = 0
-            default: break
-            }
-            y += 5
+            _ = engine.consume(frame: SyntheticPage.window(page, y: y, height: frameH))
+            y += stepPx
         }
         return (engine.height, engine.consecutiveFailures, engine.appendedFrameCount)
     }
-    let slow = runSlowScroll(motionGate: ScrollStitchEngine.defaultMotionGatePoints)
+    let slow = runSlowScroll(stepPx: 5)
     T.checkTrue("engine: 慢捲 5px/格 長圖有增長（\(slow.height) > \(frameH)）", slow.height > frameH)
     T.checkTrue("engine: 慢捲不累積失敗（failures=\(slow.failures) < 10）", slow.failures < 10)
     T.checkTrue("engine: 慢捲有多次 append（\(slow.appended) 格）", slow.appended >= 3)
-    // gate 的作用是省掉「必然失敗」的匹配（30fps 下相鄰格位移常 <minDelta=14），不是拼接正確性的
-    // 前提：匹配基準是固定的長圖尾端，位移會累積（5→10→15px）到達標，所以 gate=0 也拼得出來，
-    // 只是白跑很多次昂貴的金字塔匹配、且接合點分段不同（故高度不必相同，只需同樣有增長）。
-    // 實機的真正瓶頸是「匹配放在主執行緒」——debug build 單格 1.3–1.7 秒，主執行緒被塞爆。
-    let noGate = runSlowScroll(motionGate: 0)
-    T.checkTrue("engine: gate=0 也能拼出來（\(noGate.height)）", noGate.height > frameH)
+    // 更慢：1px/格。舊架構的滾輪 gate 在此完全無用（不同裝置的 delta 尺度差很大），
+    // 新架構靠 f2f 逐格累積，1px 也追得到。
+    let crawl = runSlowScroll(stepPx: 1)
+    T.checkTrue("engine: 極慢 1px/格 也能拼出來（\(crawl.height)）", crawl.height > frameH)
 
-    // 正常速度：每格 40px、滾輪 20 點/格。
-    let engine = ScrollStitchEngine(maxHeightPx: 30000, motionGatePoints: ScrollStitchEngine.defaultMotionGatePoints)
+    // 正常速度：每格 40px。
+    let engine = ScrollStitchEngine(maxHeightPx: 30000)
     var y = 0
     var appendedTotal = 0
-    var accum2: CGFloat = 0
     for _ in 0..<16 {
-        accum2 += 20
-        let out = engine.consume(frame: SyntheticPage.window(page, y: y, height: frameH),
-                                 wheelAccumulatedPoints: accum2, wheelDirection: 1)
-        if case let .appended(dy, _) = out { appendedTotal += dy; accum2 = 0 }
-        if case .bandsLocked = out { accum2 = 0 }
+        let out = engine.consume(frame: SyntheticPage.window(page, y: y, height: frameH))
+        if case let .appended(dy, _) = out { appendedTotal += dy }
         y += 40
     }
     T.checkTrue("engine: 正常速度累積拼接（拼進 \(appendedTotal)px）", appendedTotal > 500)
@@ -480,27 +570,22 @@ func scrollStitchEngineTests() {
     // （畫面一直在動），全被 10 點門檻擋掉、一次匹配都沒跑，長圖等於單張影格。
     let gated = ScrollStitchEngine(maxHeightPx: 30000)
     let sameFrame = SyntheticPage.window(page, y: 0, height: frameH)
-    _ = gated.consume(frame: sameFrame, wheelAccumulatedPoints: 0, wheelDirection: 1)   // base
-    let still = gated.consume(frame: sameFrame, wheelAccumulatedPoints: 0, wheelDirection: 1)
+    _ = gated.consume(frame: sameFrame)   // base
+    let still = gated.consume(frame: sameFrame)
     T.checkEq("engine: 畫面沒變回 waitingForMotion", still, ScrollStitchOutcome.waitingForMotion)
     T.checkEq("engine: 畫面沒變不計失敗", gated.consecutiveFailures, 0)
     // 反面：畫面有變（且滾輪量為 0，模擬捲軸拖曳／鍵盤捲動）→ 必須真的跑匹配並拼接
-    let moved = gated.consume(frame: SyntheticPage.window(page, y: 60, height: frameH),
-                              wheelAccumulatedPoints: 0, wheelDirection: 0)
+    let moved = gated.consume(frame: SyntheticPage.window(page, y: 60, height: frameH))
     T.checkTrue("engine: 無滾輪事件但畫面有變 → 仍會處理（實得 \(moved)）",
                 moved != ScrollStitchOutcome.waitingForMotion)
 
     // 回捲：先下捲累積再上捲，長圖尾端要縮
-    let back = ScrollStitchEngine(maxHeightPx: 30000, motionGatePoints: 10)
-    _ = back.consume(frame: SyntheticPage.window(page, y: 0, height: frameH),
-                     wheelAccumulatedPoints: 0, wheelDirection: 1)
-    _ = back.consume(frame: SyntheticPage.window(page, y: 60, height: frameH),
-                     wheelAccumulatedPoints: 30, wheelDirection: 1)    // 鎖帶
-    _ = back.consume(frame: SyntheticPage.window(page, y: 120, height: frameH),
-                     wheelAccumulatedPoints: 30, wheelDirection: 1)    // append
+    let back = ScrollStitchEngine(maxHeightPx: 30000)
+    _ = back.consume(frame: SyntheticPage.window(page, y: 0, height: frameH))
+    _ = back.consume(frame: SyntheticPage.window(page, y: 60, height: frameH))    // 鎖帶
+    _ = back.consume(frame: SyntheticPage.window(page, y: 120, height: frameH))    // append
     let hBefore = back.height
-    let backOut = back.consume(frame: SyntheticPage.window(page, y: 60, height: frameH),
-                               wheelAccumulatedPoints: 30, wheelDirection: -1)
+    let backOut = back.consume(frame: SyntheticPage.window(page, y: 60, height: frameH))
     if case let .trimmed(amount, _) = backOut {
         T.checkTrue("engine: 回捲裁尾 \(amount)px、高度變小", back.height < hBefore)
     } else {
@@ -547,8 +632,7 @@ func sparseContentTests() {
     var appends = 0
     for _ in 0..<24 {
         accum += 20
-        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH),
-                                 wheelAccumulatedPoints: accum, wheelDirection: 1)
+        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH))
         switch out {
         case .appended: appends += 1; accum = 0
         case .bandsLocked, .trimmed: accum = 0
@@ -572,8 +656,7 @@ func wheelSignIndependenceTests() {
         var accum: CGFloat = 0
         for _ in 0..<16 {
             accum += 20
-            let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH),
-                                     wheelAccumulatedPoints: accum, wheelDirection: direction)
+            let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH))
             switch out {
             case .appended: appends += 1; accum = 0
             case .bandsLocked, .trimmed: accum = 0
@@ -604,8 +687,7 @@ func fastScrollRecoveryTests() {
     // 先正常拼幾格（建立 base＋鎖帶）
     for _ in 0..<6 {
         accum += 20
-        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH),
-                                 wheelAccumulatedPoints: accum, wheelDirection: 1)
+        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH))
         if case .appended = out { accum = 0 }
         if case .bandsLocked = out { accum = 0 }
         pos += 40
@@ -618,8 +700,7 @@ func fastScrollRecoveryTests() {
     for _ in 0..<8 {
         pos += 600                        // 先跳再擷：確保每一格都超出可匹配範圍
         accum += 300
-        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH),
-                                 wheelAccumulatedPoints: accum, wheelDirection: 1)
+        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH))
         if case .rejected = out { rejects += 1 }
     }
     T.checkTrue("fastscroll: 快捲確實造成匹配失敗（rejects=\(rejects)）", rejects >= 5)
@@ -630,8 +711,7 @@ func fastScrollRecoveryTests() {
     var recovered = 0
     for _ in 0..<8 {
         accum += 20
-        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH),
-                                 wheelAccumulatedPoints: accum, wheelDirection: 1)
+        let out = engine.consume(frame: SyntheticPage.window(page, y: pos, height: frameH))
         if case .appended = out { recovered += 1; accum = 0 }
         pos += 40
     }

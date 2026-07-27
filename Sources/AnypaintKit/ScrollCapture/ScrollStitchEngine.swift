@@ -18,102 +18,95 @@ public enum ScrollStitchOutcome: Equatable {
     case trimmed(amount: Int, totalHeight: Int)
     /// 回捲已到 session 起點，不再裁。
     case atOrigin
-    /// 匹配成功但位移為 0（畫面沒動）。
+    /// 匹配成功但位移為 0。也涵蓋「畫面在變但沒有一致平移」＝局部動畫／廣告／loading spinner
+    /// （步進估計**有信心地**確認沒有平移，見 `StepOutcome`）。
     case noMotion
-    /// 三層匹配鏈全敗，但依滾動量推算接上（接縫可能有數像素誤差，**但內容不會遺失**）。
+    /// 有位移但還無法安全接合，且軌跡顯示「再等一格是安全的」——內容可能正要進入重疊區。
+    /// **不是失敗**：快捲時重疊區可能暫時全是空白，此時猜位移只會拼錯，等一格才是對的。
+    case awaitingOverlap(pendingDy: Int)
+    /// 匹配鏈全敗，但軌跡累積已逼近「再等就會失去重疊」的界線，於是依**軌跡外推**接上
+    /// （接縫可能有數像素誤差，**但內容不會遺失**）。軌跡來自真實的 f2f 影像匹配，
+    /// 不是拿輸入事件推算。
     case appendedApproximate(dy: Int, totalHeight: Int)
-    /// 三層匹配鏈全敗且連推算都不可用（無校準值或推算量超出可接受範圍）。
+    /// 匹配鏈全敗且軌跡也失效（步進估不出＝連相鄰格都失去重疊）→ 真的無從得知位移。
     case rejected(consecutiveFailures: Int)
     /// 已達長度上限，該收工。
     case limitReached
 }
 
-/// 滾動截圖的影格消化引擎：擁有 stitcher／靜態帶鎖定／三層匹配鏈（金字塔 ZNCC → Vision 對帳
-/// → 1-D 相位相關救援）與 motion gate。**不碰 UI、不碰 SCStream**，因此可在 selftest 用合成
-/// 影格序列端到端驗證（spec §11 的整合覆蓋缺口就是靠這個補上）。
+/// 滾動截圖的影格消化引擎：擁有 stitcher／靜態帶鎖定／軌跡追蹤與匹配鏈。
+/// **不碰 UI、不碰 SCStream**，因此可在 selftest 用合成影格序列端到端驗證。
 ///
-/// ### motionGate 的必要性（實測結論）
-/// SCStream 以 30fps 供格，但使用者慢捲時「相鄰兩格」的位移常只有 2–8px。matcher 的
-/// `minDelta = 14px` 是防雜訊誤匹配的底線，因此這些格必然被判 ambiguous／noOverlap。
-/// 若把它們算成「失敗」，連續 10 次失敗只需 1/3 秒就會誤觸發收工——實機表現就是
-/// 「長圖完全不增長、剛開始捲就結束」。
+/// ### 為什麼要有軌跡（本次重新設計的核心）
+/// 舊版把 30fps 的影格序列當成一堆互不相關的單張影像：每格只跟長圖尾端做一次獨立匹配，
+/// 時間維度的資訊整個丟掉。問題是「對長圖尾端」的位移大、搜尋範圍大，等行距內容的
+/// 週期解就落在那個範圍內；而「對上一格」的位移小、重疊 95% 以上，歧義幾乎為零。
 ///
-/// 解法不是調低 minDelta（會讓純色／雜訊區誤匹配），而是**先累積再匹配**：匹配基準永遠是
-/// 長圖尾端（固定不動），所以只要使用者持續捲動，位移就會累積到超過門檻，屆時一次匹配成功
-/// 接上完整距離，不會漏內容。門檻用滾輪累積量當「閘」而非「量測」——即使某 app 的實際捲動量
-/// 與滾輪 delta 不成比例（spec §13 已知風險），保守跳過的格也會在下一格補上。
+/// 現在先用容易的題目（frame-to-frame）累積出預測位移，再用它把難題目的搜尋窗縮到 ±12px。
+/// 軌跡只縮小搜尋窗，**不把 drift 帶進長圖**——寫進長圖的位移永遠由對長圖尾端的
+/// 原解析度全列 ZNCC 裁決（見 `ScrollTrajectory`）。
+///
+/// ### 位移的唯一來源是影像
+/// 舊版有一條「用滾輪累積量×自我校準比例推算位移」的退路（dead reckoning），
+/// 那是拿輸入事件量測世界，已移除。滾輪事件仍有用，但只用於表達**使用者意圖**
+/// （啟動、以及「還在捲但畫面不動」的到底判定），那部分留在 session 層。
 public final class ScrollStitchEngine {
-    /// 累積滾輪位移（點）達此值才跑匹配鏈。約當 Retina 上 20px，略高於 minDelta=14px。
-    public static let defaultMotionGatePoints: CGFloat = 10
-
     public private(set) var appendedFrameCount = 1
     public private(set) var consecutiveFailures = 0
     /// 最近一次 matcher 主判的結果字串（診斷用：區分 ambiguous／lowConfidence／noOverlap）。
     public private(set) var lastMatchNote = ""
+    /// 診斷用：軌跡狀態快照（f2f 累積 vs 實際提交，兩者長期背離＝f2f 在撞假峰）。
+    public private(set) var trajectory = ScrollTrajectory()
+    /// 診斷用：最近一次步進估計的結果字串。
+    public private(set) var lastStepNote = ""
+    /// 最近一次步進估計的分數（nil＝估不出）。用來決定軌跡外推能不能突破
+    /// 「重疊需足夠以供驗證」的保守上限——見 `rescue`。
+    private var lastStepScore: Float?
+    /// 步進分數低於此值＝**高信心**（實測正確步進的分數在 0.0～0.0002 之間，
+    /// 而步進估計本身的放行閘是 0.15，所以這道門檻留了兩個數量級的餘裕）。
+    private let strongStepScore: Float = 0.05
+    /// 步進估不出時，最多連續用速度推測幾格。超過就判定真的失去重疊。
+    private let assumedStepLimit = 2
+    /// 本次 session 是否曾發生匹配失敗或近似接合＝長圖品質有疑慮。
+    /// session 層據此決定「到底」時是否要求使用者回捲確認（正常情況不打擾使用者）。
+    public private(set) var hasQualityDoubt = false
     public var height: Int { stitcher?.height ?? 0 }
     public var isLocked: Bool { insets != nil }
 
     private let maxHeightPx: Int
-    private let motionGatePoints: CGFloat
     private var stitcher: ScrollStitcher?
     private var insets: BandInsets?
     private var lastAcceptedFullFrame: PixelBuffer?
-    private var priorDy: Int?
     private var lockAttempts = 0
-    /// 滾輪符號 → 影像位移符號的對應（nil＝尚未學到）。AppKit 的 scrollingDeltaY 正負會隨裝置與
-    /// 系統「自然捲動」設定翻轉，賭錯會讓 matcher 只搜反向、永遠拼不出東西。做法：未學到前允許
-    /// 兩個方向都試，第一次成功匹配就把對應記下來，之後只搜推算出的方向——既與系統設定無關，
-    /// 也不會在「本來就無法匹配」的快捲格上因反向搜尋撿到假峰（實測會污染長圖）。
-    private var wheelToImageSign: Int?
-    /// 「1 點滾輪位移 ≈ 幾個影像像素」的自我校準值（nil＝尚未校準）。
-    /// 由每次成功匹配反推（dy ÷ 當時累積滾輪點數）並指數平滑。spec §13 原本把
-    /// 「滾輪量→像素換算因 app 而異」列為已接受風險而不敢用推算；從真實匹配自我校準
-    /// 就沒有這個問題——每個 app、每種輸入裝置都會校出自己的比例。
-    private var pxPerWheelPoint: Double?
-    /// 上次成功接受的位移（速度連續性推算用）。
-    private var lastAcceptedDy: Int?
-    // 已知限制（待改）：相位相關在「等行距的稀疏文字」上會對齊到錯誤的行倍數
-    // （自檢實測估出 64/72/96，真值 48 → 長圖過量約 47%，內容重複）。用真實匹配的平均速度
-    // 當上界試過但在真實匹配稀少時起不了作用，需要別的判準（見 ledger 待辦）。
-    /// 本次 consume 收到的累積滾輪點數（校準與推算共用）。
-    private var lastGatePoints: CGFloat = 0
-    /// 最近一格內容影格的高度（推算時算 maxDy 用）。
+    /// 最近一格內容影格的高度（算 maxDy 用）。
     private var lastFrameHeight = 0
     /// 上次「實際跑過匹配」的那格指紋（動作判定基準）。
     private var lastProcessedFingerprint: [UInt8]?
-    /// 初始估計（尚未校準時用）：Retina 上 1 點 ≈ 2 像素。
-    private let fallbackPxPerPoint: Double
+    /// 上一格的完整影格，步進估計的基準。
+    ///
+    /// 刻意存 **full frame** 而非 contentFrame：鎖帶前後 contentFrame 的尺寸會變，
+    /// 存 full 可讓步進估計的兩張圖尺寸永遠一致。靜態帶對 `dy=0` 的偏好不構成問題——
+    /// 靜態帶只佔全格一小部分，`dy=0` 時其餘內容不相關，分數過不了步進估計的 0.15 閘。
+    private var prevStepFrame: PixelBuffer?
 
-    public init(maxHeightPx: Int,
-                motionGatePoints: CGFloat = ScrollStitchEngine.defaultMotionGatePoints,
-                fallbackPxPerPoint: Double = 2) {
+    public init(maxHeightPx: Int) {
         self.maxHeightPx = maxHeightPx
-        self.motionGatePoints = motionGatePoints
-        self.fallbackPxPerPoint = fallbackPxPerPoint
     }
 
-    /// - Parameters:
-    ///   - wheelAccumulatedPoints: 呼叫端自上次「接受格」以來累積的滾輪位移（點）。engine 只把它
-    ///     當 motion gate 的閘（見型別註解），不當位移量測；歸零由呼叫端在收到 appended/trimmed 後做。
-    ///   - wheelDirection: +1 下捲／-1 上捲／0 無（決定 matcher 的方向閘門）。
-    /// - Note: engine 的可變狀態只在單一（背景）執行緒上被觸碰——滾輪累積刻意不放在 engine 內，
-    ///   否則主執行緒的滾輪事件會與背景的 consume 競態。
-    public func consume(frame full: PixelBuffer,
-                        wheelAccumulatedPoints: CGFloat,
-                        wheelDirection: Int) -> ScrollStitchOutcome {
+    /// 消化一格。位移的判定完全來自影像——不再接收任何滾輪參數。
+    /// - Note: engine 的可變狀態只在單一（背景）執行緒上被觸碰。
+    public func consume(frame full: PixelBuffer) -> ScrollStitchOutcome {
         guard let stitcher else {
             stitcher = ScrollStitcher(firstFrame: full, maxHeightPx: maxHeightPx)
             lastAcceptedFullFrame = full
             lastProcessedFingerprint = fingerprint(of: full)   // 基準格也要當動作判定的基準
+            prevStepFrame = full
             return .baseCaptured(height: full.height)
         }
         // 動作判定用**影像變化**，不可用滾輪事件量（實機證據：整場 session 累積滾輪只有 3 點，
         // 卻收到 116 格影格＝畫面確實一直在動，全部被 10 點的門檻擋掉，一次匹配都沒跑）。
-        // 滾輪事件量不可靠：不同裝置的 scrollingDeltaY 尺度差很大，而且使用者可能用捲軸拖曳、
-        // 鍵盤 Page Down、或頁面自己捲動——那些都沒有滾輪事件。
         // SCStream 只在畫面改變時供格，所以「這格與上次處理過的格不同」才是動作的唯一可靠證據。
         guard frameDiffers(from: full) else { return .waitingForMotion }
-        lastGatePoints = wheelAccumulatedPoints
 
         let contentFrame: PixelBuffer
         if let insets {
@@ -124,44 +117,87 @@ public final class ScrollStitchEngine {
 
         lastFrameHeight = contentFrame.height
         lastProcessedFingerprint = fingerprint(of: full)
+
+        // ① 步進估計：對「上一格」而非長圖尾端。位移小、重疊 95%+，歧義幾乎為零。
+        let step = prevStepFrame.map {
+            ScrollMatcher.matchStep(new: LumaPlane(full), prev: LumaPlane($0),
+                                    priorStep: trajectory.lastStep, allowZero: true)
+        } ?? .unknown
+        prevStepFrame = full
+        lastStepNote = "\(step)"
+        switch step {
+        case let .step(_, score): lastStepScore = score
+        case .unknown: lastStepScore = nil
+        }
+        switch step {
+        case let .step(dy, _) where dy == 0:
+            // **有信心地**確認畫面在變但沒有一致平移＝局部動畫／廣告／loading spinner。
+            // 直接跳過，不進救援層（省掉無謂嘗試，也消掉一類誤接）。
+            // 注意這與 `.unknown`（估不出）必須分開處理，混為一談會把真實捲動的內容
+            // 當成動畫丟掉，違反「完整性優先於接縫完美」。
+            consecutiveFailures = 0
+            return .noMotion
+        case let .step(dy, _):
+            trajectory.recordStep(dy)
+        case .unknown:
+            // 估不出。畫面確實在動（指紋 gate 已確認），只是這格的重疊區剛好沒有可辨識特徵
+            // ——稀疏內容下每隔幾格就會遇到一次。讓軌跡依速度連續性推進一格，否則那格的位移
+            // 會永久遺失（實測每 9 格一次、共丟 4 格 ×180px）。推測有連續次數上限，
+            // 且只進入軌跡不直接接上（見 recordAssumedStep 的說明）。
+            trajectory.recordAssumedStep(maxConsecutive: assumedStepLimit)
+        }
+
         let reference = stitcher.referenceTail(maxHeight: contentFrame.height)
         guard reference.height == contentFrame.height else { return .waitingForMotion }
 
-        // 方向**不信任滾輪符號**：AppKit 的 scrollingDeltaY 正負會隨裝置與系統「自然捲動」設定翻轉，
-        // 賭錯的話 matcher 只搜反向、真正的位移永遠找不到 → 零拼接（實機症狀：長圖＝單張影格）。
-        // 做法：先試滾輪暗示的方向，失敗再試反向。成功時只跑一次（無額外成本），
-        // 失敗時多跑一次換來對系統設定的完全免疫。
+        // ② 累積位移還不足以產生可信的接合 → 等下一格（匹配基準是固定的長圖尾端，不會漏內容）。
+        let pending = trajectory.pendingDy
+        if case .step = step, abs(pending) < ScrollMatcher.Config.default.minDelta {
+            return .waitingForMotion
+        }
+
+        // ③ 主匹配。方向與 prior 都由軌跡給——軌跡是影像證據，與輸入裝置及系統設定無關。
         let newLuma = LumaPlane(contentFrame)
         let refLuma = LumaPlane(reference)
-        let rawWheelSign = wheelDirection >= 0 ? 1 : -1
-        let primary = (wheelToImageSign ?? 1) * rawWheelSign
-        var outcome = ScrollMatcher.match(new: newLuma, reference: refLuma,
-                                          wheelDirection: primary, prior: priorDy)
-        if wheelToImageSign == nil, case .accepted = outcome {} else if wheelToImageSign == nil {
-            // 僅在對應未知時試反向（開場幾格），避免在無法匹配的快捲格上撿假峰
-            let alternate = ScrollMatcher.match(new: newLuma, reference: refLuma,
-                                                wheelDirection: -primary, prior: nil)
-            if case .accepted = alternate { outcome = alternate }
-        }
+        let outcome = runMainMatch(new: newLuma, ref: refLuma, pending: pending)
         lastMatchNote = "\(outcome)"
-        if wheelToImageSign == nil, case let .accepted(dy, _) = outcome, dy != 0 {
-            wheelToImageSign = (dy > 0 ? 1 : -1) * rawWheelSign
-        }
+
         switch outcome {
         case let .accepted(dy, _) where dy > 0:
             return accept(dy: dy, full: full, contentFrame: contentFrame)
         case let .accepted(dy, _) where dy < 0:
             consecutiveFailures = 0
-            priorDy = nil
             let trimmed = stitcher.cropTail(-dy)
-            return trimmed > 0 ? .trimmed(amount: trimmed, totalHeight: stitcher.height) : .atOrigin
+            if trimmed > 0 {
+                trajectory.commit(actualDy: -trimmed, minTrustworthy: ScrollMatcher.Config.default.minDelta)
+                return .trimmed(amount: trimmed, totalHeight: stitcher.height)
+            }
+            trajectory.resetToOrigin()
+            return .atOrigin
         case .accepted:
             consecutiveFailures = 0
             return .noMotion
         case .ambiguous, .lowConfidence, .noOverlap:
-            return rescue(contentFrame: contentFrame, reference: reference, full: full,
-                          wheelDirection: wheelDirection)
+            return rescue(contentFrame: contentFrame, reference: reference, full: full)
         }
+    }
+
+    /// 主匹配。軌跡有值時走「受信任 prior」快路徑（實測 4.6ms，比全域的 7.9ms 快）；
+    /// 該路徑在過不了閘時會自行 fallback 到全域候選複評，所以錯的 prior 不會把結果帶跑
+    /// （實測：即使餵行倍數錯解或荒謬值當 prior，仍找回正解）。
+    ///
+    /// 軌跡完全沒有資訊時（開場步進就估不出）方向未知，兩個方向各試一次全域。
+    private func runMainMatch(new: LumaPlane, ref: LumaPlane, pending: Int) -> MatchOutcome {
+        if pending != 0 {
+            return ScrollMatcher.match(new: new, reference: ref,
+                                       wheelDirection: pending >= 0 ? 1 : -1,
+                                       prior: pending, priorIsTrusted: true)
+        }
+        let positive = ScrollMatcher.match(new: new, reference: ref, wheelDirection: 1, prior: nil)
+        if case .accepted = positive { return positive }
+        let negative = ScrollMatcher.match(new: new, reference: ref, wheelDirection: -1, prior: nil)
+        if case .accepted = negative { return negative }
+        return positive
     }
 
     public func finalize() -> CGImage? { stitcher?.finalize() }
@@ -177,11 +213,10 @@ public final class ScrollStitchEngine {
             return attemptLock(dy: dy, full: full)
         }
         guard stitcher.append(contentFrame: contentFrame, dy: dy) else { return .limitReached }
-        priorDy = dy
         appendedFrameCount += 1
         lastAcceptedFullFrame = full
-        calibrate(dy: dy)
-        lastAcceptedDy = dy
+        // 用絕對匹配的結果把軌跡的預測歸零＝每次接合都清掉一次 f2f 的累積 drift。
+        trajectory.commit(actualDy: dy, minTrustworthy: ScrollMatcher.Config.default.minDelta)
         return .appended(dy: dy, totalHeight: stitcher.height)
     }
 
@@ -212,14 +247,6 @@ public final class ScrollStitchEngine {
         return out
     }
 
-    /// 從一次成功匹配反推「點→像素」比例並指數平滑（見 pxPerWheelPoint）。
-    private func calibrate(dy: Int) {
-        guard lastGatePoints > 0.5 else { return }
-        let sample = Double(dy) / Double(lastGatePoints)
-        guard sample.isFinite, sample > 0.2, sample < 20 else { return }
-        pxPerWheelPoint = pxPerWheelPoint.map { $0 * 0.7 + sample * 0.3 } ?? sample
-    }
-
     /// 靜態帶鎖定嘗試；連續 5 次失敗改用 zero insets 強制鎖定，避免永遠鎖不上卡死。
     private func attemptLock(dy: Int, full: PixelBuffer) -> ScrollStitchOutcome {
         defer { lastAcceptedFullFrame = full }
@@ -240,9 +267,15 @@ public final class ScrollStitchEngine {
         return .awaitingBandLock(attempts: lockAttempts)
     }
 
-    /// 第二層 Vision 對帳／引導重搜 → 第三層 1-D 相位相關救援（PC 不自帶 minDelta 閘，此處自套）。
-    private func rescue(contentFrame: PixelBuffer, reference: PixelBuffer, full: PixelBuffer,
-                        wheelDirection: Int) -> ScrollStitchOutcome {
+    /// 救援：Vision 全圖對位當**演算法完全獨立**的第二意見（不同失敗模式），仍必經 matcher 複核；
+    /// 全敗時依「軌跡是否已逼近失去重疊的界線」決定是等下一格還是外推接上。
+    ///
+    /// 這裡**沒有**相位相關了。移除的依據是四種內容類型各 10 組已知位移的實測：
+    /// 1-D 投影相位相關命中率只有 20%，給錯值時連符號都錯（真 150→估 −30、真 90→估 −135），
+    /// 而同一批測資上 ZNCC 是 40/40 零判錯。關鍵不只是命中率低，而是**它被觸發的時機
+    /// （ZNCC 已失敗時）正好是它最不可靠的時機**。
+    private func rescue(contentFrame: PixelBuffer, reference: PixelBuffer,
+                        full: PixelBuffer) -> ScrollStitchOutcome {
         if let visionDy = visionEstimate(new: contentFrame, reference: reference),
            visionDy > 0,
            case let .accepted(dy, _) = ScrollMatcher.match(
@@ -251,81 +284,69 @@ public final class ScrollStitchEngine {
            abs(dy - visionDy) <= max(18, visionDy / 3) {
             return accept(dy: dy, full: full, contentFrame: contentFrame)
         }
-        // PC 的 dy 來自 1-D 投影，實測常有 ±1px 誤差，且它自己沒有任何 ambiguity 閘門——
-        // 因此**不可直接採用**（實測：完全沒有重疊的快捲影格會被 PC 給出假 dy 而拼進長圖）。
-        // 一律交回 matcher 以它為 prior 複核：matcher 的 L0 精修會修掉 ±1px 誤差，
-        // 而它的絕對閘＋比值閘（真匹配分數 0.0 vs 無重疊 0.43 且次低幾乎同分）能擋掉假匹配。
-        if let (pcDy, _) = PhaseCorrelation1D.estimateShift(new: LumaPlane(contentFrame),
-                                                           reference: LumaPlane(reference)),
-           pcDy >= ScrollMatcher.Config.default.minDelta,
-           case let .accepted(dy, _) = ScrollMatcher.match(
-               new: LumaPlane(contentFrame), reference: LumaPlane(reference),
-               wheelDirection: 1, prior: pcDy, priorIsTrusted: true),
-           abs(dy - pcDy) <= max(18, pcDy / 3) {
-            return accept(dy: dy, full: full, contentFrame: contentFrame)
+
+        // 連相鄰格都估不出，而且速度推測的額度也用完了＝**真的失去重疊**（使用者捲太快）。
+        // 此時 pendingDy 全部來自推測、不可信，拿它外推只會把錯誤內容拼進長圖。
+        // 明確回報失敗，讓 HUD 提示使用者回捲——這與「等內容進入重疊區」是兩回事，
+        // 前者需要使用者介入，後者只要再等一格。
+        if lastStepScore == nil, trajectory.assumedRun >= assumedStepLimit {
+            consecutiveFailures += 1
+            hasQualityDoubt = true
+            return .rejected(consecutiveFailures: consecutiveFailures)
         }
-        // 三層全敗 → **不可直接丟格**：使用者確實捲動了，丟格會讓那段內容永久消失
-        // （實機症狀：長圖等於單張影格）。改用自我校準的「點→像素」比例推算位移接上；
-        // 接縫可能有數像素誤差，但完整性優先於接縫完美（使用者裁定）。
-        // 近似接合的位移估計，**優先用影像證據**（1-D 相位相關的原始結果）而不是猜速度：
-        // 曾用「上次成功位移」當速度推算，結果同一步內的多張影格被重複接上（實測過量 47%）。
-        let approxDy = rawPhaseEstimate(new: contentFrame, reference: reference) ?? deadReckonedDy()
-        if let dy = approxDy, let stitcher {
+
+        let verifiableMaxDy = maxAcceptableDy()
+        let pending = trajectory.pendingDy
+
+        // 外推上限有兩級（實機自檢抓到的錯）：
+        // ① 保守級 `verifiableMaxDy` = 內容格高 − minOverlap。minOverlap 的用途是「留足夠重疊
+        //    來**驗證**匹配」，在沒有其他證據時該遵守。
+        // ② 放行級 = 整個內容格高。當**步進估計高信心成立**時，位移已經在 full frame 上被
+        //    獨立驗證過了（實測：內容格 228px、步進 180px，f2f 在 372px 的 full frame 上有
+        //    192px 重疊、分數 0.0），此時再套 minOverlap 只會硬生生截掉內容——實測每格丟 48px、
+        //    累積成 44% 的內容遺失。上限仍不得超過內容格高，否則長圖會出現未填充的空洞。
+        let strongStep = (lastStepScore.map { $0 <= strongStepScore }) ?? false
+        let maxDy = strongStep ? max(verifiableMaxDy, lastFrameHeight) : verifiableMaxDy
+
+        // 軌跡還有餘裕 → **先等下一格，不猜**。快捲時重疊區可能暫時全是空白
+        // （實測：真解的重疊區兩邊皆平坦時 ZNCC 回「無資訊」），這時猜位移只會拼錯；
+        // 畫面還在捲，內容馬上就會進入重疊區。
+        if pending > 0, maxDy > 0, !trajectory.mustCommitNow(maxDy: maxDy) {
+            hasQualityDoubt = true
+            return .awaitingOverlap(pendingDy: pending)
+        }
+
+        // 再等就會失去重疊 → 用**軌跡外推**接上（軌跡來自真實的 f2f 影像匹配，不是輸入事件推算）。
+        // 內容完整性優先於接縫完美（使用者裁定）。
+        if pending >= ScrollMatcher.Config.default.minDelta, maxDy > 0, let stitcher {
+            let dy = min(pending, maxDy)
             // 仍要守 T7 契約：鎖帶必須在任何 append 之前。未鎖帶時本格先用於鎖定嘗試
             // （否則之後 lockBands 會因「已 append 過」被永久拒絕，靜態帶再也鎖不上）。
             guard insets != nil else { return attemptLock(dy: dy, full: full) }
             if stitcher.append(contentFrame: contentFrame, dy: dy) {
-                priorDy = nil                      // 推算值不當下一次的先驗（避免誤差累積）
                 appendedFrameCount += 1
                 lastAcceptedFullFrame = full
                 consecutiveFailures = 0
+                hasQualityDoubt = true
+                trajectory.commit(actualDy: dy, minTrustworthy: ScrollMatcher.Config.default.minDelta)
                 return .appendedApproximate(dy: dy, totalHeight: stitcher.height)
-            } else {
-                return .limitReached
             }
+            return .limitReached
         }
+
+        // 匹配失敗且軌跡也沒有可用資訊（連相鄰格都失去重疊）→ 真的無從得知位移。
         consecutiveFailures += 1
+        hasQualityDoubt = true
         return .rejected(consecutiveFailures: consecutiveFailures)
     }
 
-    /// 1-D 相位相關的**原始**估計（不要求 matcher 複核），僅用於「近似接合」：
-    /// 它是影像證據，與輸入裝置無關，遠優於用上次位移猜速度。仍夾在合法範圍內。
-    private func rawPhaseEstimate(new: PixelBuffer, reference: PixelBuffer) -> Int? {
-        guard let (dy, ratio) = PhaseCorrelation1D.estimateShift(new: LumaPlane(new),
-                                                                reference: LumaPlane(reference)),
-              ratio < 0.6, dy >= ScrollMatcher.Config.default.minDelta else { return nil }
-        let h = new.height
-        let minOverlap = max(ScrollMatcher.Config.default.minOverlapPx,
-                             Int(Double(h) * ScrollMatcher.Config.default.minOverlapFraction))
-        guard dy <= h - minOverlap else { return nil }
-        // 絕對品質閘：這個位移下的重疊區必須真的相關。實測分佈——真匹配 ≈0.0、
-        // 完全沒有重疊 ≈0.43（且次佳幾乎同分）——所以 0.35 能把「稀疏但有重疊」
-        // 與「快捲已無重疊」分開。少了這道閘，快捲影格會被接上假位移污染長圖。
-        let q = ScrollMatcher.overlapScore(new: LumaPlane(new), ref: LumaPlane(reference),
-                                          dy: dy, rowStep: 1)
-        guard q.mean <= ScrollMatcher.Config.default.absoluteGateMax else { return nil }
-        return dy
-    }
-
-    /// 依累積滾輪量推算位移（dead reckoning）。用校準值（無則用初始估計），
-    /// 並夾在 [minDelta, maxDy] 內——超出可接受範圍代表使用者捲太快、已無重疊可言，
-    /// 那時硬接會產生錯誤內容，寧可回 nil 交由 HUD 提示回捲。
-    private func deadReckonedDy() -> Int? {
-        guard let stitcher else { return nil }
-        // 優先用滾輪量×校準比例；滾輪不可靠或缺席時（捲軸拖曳／鍵盤／頁面自捲）改用
-        // 「上次成功位移」的速度連續性推算——捲動速度短時間內是連續的。
-        // 只用滾輪×校準比例。**不可**用「上次成功位移」猜速度——那會讓同一步內的多張影格
-        // 各自被接上一次，內容重複（實測過量 47%）。
-        let fromWheel = Double(lastGatePoints) * (pxPerWheelPoint ?? fallbackPxPerPoint)
-        guard fromWheel >= Double(ScrollMatcher.Config.default.minDelta) else { return nil }
-        let estimate = Int(fromWheel.rounded())
-        let h = stitcher.height >= 0 ? lastFrameHeight : 0
-        guard h > 0 else { return nil }
-        let minOverlap = max(ScrollMatcher.Config.default.minOverlapPx,
-                             Int(Double(h) * ScrollMatcher.Config.default.minOverlapFraction))
-        let maxDy = h - minOverlap
-        guard estimate >= ScrollMatcher.Config.default.minDelta, estimate <= maxDy else { return nil }
-        return estimate
+    /// 這格還能接受的最大位移（超過就沒有足夠重疊可驗證）。
+    private func maxAcceptableDy() -> Int {
+        let h = lastFrameHeight
+        guard h > 0 else { return 0 }
+        let cfg = ScrollMatcher.Config.default
+        let minOverlap = max(cfg.minOverlapPx, Int(Double(h) * cfg.minOverlapFraction))
+        return h - minOverlap
     }
 
     /// Vision 全圖位移估計。ty 正負依 Task 2 實測（scrollDownPixels = -ty，勿用 abs）。

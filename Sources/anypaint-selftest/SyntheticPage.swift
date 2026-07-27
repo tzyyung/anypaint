@@ -75,6 +75,68 @@ enum SyntheticPage {
         return PixelBuffer(width: width, height: height, bytes: bytes)
     }
 
+    /// 等行距的「文字行」頁面：每 `period` 像素一行字塊，深底亮字（模擬終端機／留白網頁）。
+    /// `period` 越大＝影格內字行越少＝越稀疏。
+    ///
+    /// **測資必須是物理上的純平移**：整頁的內容只由絕對 y 座標決定，開窗即得平移關係。
+    /// 先前自檢用的 sparse 模式是「視窗上半永遠不畫字」，文字捲到分界線就消失——
+    /// 那在物理上不是平移，任何對位演算法都必然失敗，據此調整演算法只會愈調愈錯。
+    ///
+    /// - Parameter identicalRows: true＝所有行 pattern 相同（病態對照組，數學上不可區分，
+    ///   matcher 必須拒絕而不是挑一個週期倍數）。
+    static func linedPage(width: Int, height: Int, period: Int, lineThickness: Int,
+                          identicalRows: Bool) -> PixelBuffer {
+        var bytes = [UInt8](repeating: 255, count: width * height * 4)
+        for i in 0..<(width * height) {
+            bytes[i*4] = 28; bytes[i*4+1] = 28; bytes[i*4+2] = 28
+        }
+        var lineIndex = 0
+        var y = 0
+        while y < height {
+            var lcg = LCG(seed: UInt64(bitPattern: Int64(identicalRows ? 7 : lineIndex)))
+            var x = 8 + lcg.int(40)
+            while x < width - 30 {
+                let w = min(30 + lcg.int(110), width - 10 - x)
+                let g = UInt8(150 + lcg.int(105))
+                for r in y..<min(y + lineThickness, height) {
+                    for c in x..<(x + w) {
+                        let o = (r * width + c) * 4
+                        bytes[o] = g; bytes[o+1] = g; bytes[o+2] = g
+                    }
+                }
+                x += w + 10 + lcg.int(24)
+            }
+            lineIndex += 1
+            y += period
+        }
+        return PixelBuffer(width: width, height: height, bytes: bytes)
+    }
+
+    /// 照片類平滑紋理：低頻控制點網格＋雙線性內插，**無任何週期結構**。
+    /// 用來確認結論不是只在「等行距文字」這一類內容上成立。
+    static func smoothTexture(width: Int, height: Int, seed: UInt64) -> PixelBuffer {
+        var bytes = [UInt8](repeating: 255, count: width * height * 4)
+        var lcg = LCG(seed: seed)
+        let gx = 24, gy = 40
+        var grid = [Double](repeating: 0, count: (gx + 1) * (gy + 1))
+        for i in 0..<grid.count { grid[i] = Double(lcg.int(1000)) / 1000.0 }
+        for r in 0..<height {
+            let fy = Double(r) / Double(height) * Double(gy)
+            let y0 = min(gy, Int(fy)), y1 = min(gy, y0 + 1), ty = fy - Double(y0)
+            for c in 0..<width {
+                let fx = Double(c) / Double(width) * Double(gx)
+                let x0 = min(gx, Int(fx)), x1 = min(gx, x0 + 1), tx = fx - Double(x0)
+                let a = grid[y0 * (gx + 1) + x0], b = grid[y0 * (gx + 1) + x1]
+                let d = grid[y1 * (gx + 1) + x0], e = grid[y1 * (gx + 1) + x1]
+                let v = (a * (1 - tx) + b * tx) * (1 - ty) + (d * (1 - tx) + e * tx) * ty
+                let g = UInt8(max(0, min(255, v * 230 + 12)))
+                let o = (r * width + c) * 4
+                bytes[o] = g; bytes[o+1] = g; bytes[o+2] = g
+            }
+        }
+        return PixelBuffer(width: width, height: height, bytes: bytes)
+    }
+
     /// 純色（低信心測資）。
     static func solid(width: Int, height: Int, gray: UInt8) -> PixelBuffer {
         var bytes = [UInt8](repeating: 255, count: width * height * 4)

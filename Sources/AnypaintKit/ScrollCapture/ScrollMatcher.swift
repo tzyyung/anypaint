@@ -7,6 +7,16 @@ public enum MatchOutcome: Equatable {
     case noOverlap
 }
 
+/// frame-to-frame 步進估計的結果。
+///
+/// **`.step(dy: 0)` 與 `.unknown` 的區別是安全關鍵**：前者是「有信心地確認畫面沒有一致平移」
+/// （＝局部動畫／廣告／loading spinner，可以安全跳過）；後者是「估不出來」，該格仍必須進
+/// 救援層。把兩者混為一談會讓真實捲動的內容被當成動畫丟掉，違反「完整性優先」的產品裁決。
+public enum StepOutcome: Equatable {
+    case step(dy: Int, score: Float)
+    case unknown
+}
+
 /// 金字塔 ZNCC band 匹配（spec §7.1）。關係式：new[r] == ref[r+dy]（dy>0=下捲）。
 /// 三層金字塔（1/4 全域 → 1/2 → 原解析度精修）；多 band 一致性；信心雙閘門；BPC 早停。
 public enum ScrollMatcher {
@@ -21,6 +31,14 @@ public enum ScrollMatcher {
         public var absoluteGateMax: Float = 0.35  // 最佳 band 平均分（1-ZNCC）絕對上限
         public var worstBandMax: Float = 0.60     // 最差 band 上限（局部污染防線）
         public var priorWeight = 0.15         // 速度先驗軟懲罰權重
+        /// 受信任 prior（軌跡預測）的搜尋半徑（原解析度 px）。要容納 f2f 幾格的累積誤差，
+        /// 又要小到讓等行距內容的週期解落在窗外。
+        public var trustedPriorRadius = 12
+        /// 候選集上限。固定 k=5 太邊緣（實測病態內容的真解在 L2 排名第 5），
+        /// 改為自適應收集後再以此為上限。
+        public var maxCandidates = 8
+        /// 候選集的分數放行倍數：L2 分數 < best×此值 者都進候選（自適應集合大小）。
+        public var candidateScoreFactor: Float = 3
         public static let `default` = Config()
 
         public init() {}
@@ -50,6 +68,115 @@ public enum ScrollMatcher {
                              priorIsTrusted: priorIsTrusted, config: config)
     }
 
+    // MARK: - frame-to-frame 步進估計
+
+    public struct StepConfig {
+        /// 步進的絕對品質閘，**比主匹配的 0.35 嚴**：f2f 的重疊有 95% 以上，
+        /// 真匹配的分數應該極低（實測合成內容為 0.0000）。過不了這關就是估不出，不可硬用。
+        public var absoluteGate: Float = 0.15
+        /// 搜尋窗最小半徑（原解析度 px）。背壓只留最新格，所以「上一格」可能不是真正的
+        /// 相鄰格（位移是好幾格的總和），窗要留餘裕。
+        public var minRadius = 12
+        /// 無 prior 時的全域搜尋上限（原解析度 px），只在開場那格用到。
+        public var globalMaxStep = 260
+        public static let `default` = StepConfig()
+
+        public init() {}
+    }
+
+    /// 對「上一格」估位移，而不是對長圖尾端。
+    ///
+    /// 這是整個重新設計的核心：相鄰兩格重疊 95% 以上、位移小，歧義幾乎為零；
+    /// 而「對長圖尾端」的大位移才是歧義的來源（等行距內容的週期解就落在那個大搜尋範圍裡）。
+    /// 用容易的題目累積出預測位移，再用它把難題目的搜尋窗縮小。
+    ///
+    /// 解析度選擇（實作時修正原設計）：**在 L1 (1/2) 做**。原訂 L2 (1/4) 是錯的——
+    /// L2 的 1px 等於原解析度 4px，慢捲時 2–8px 的位移會被量化成 0，軌跡系統性低估。
+    /// L1 單次 0.067ms，配拋物線次像素插值把精度提到約 ±1px（原解析度）。
+    ///
+    /// - Parameters:
+    ///   - prev: 上一格（同尺寸）。鎖帶後呼叫端應傳 contentFrame——靜態帶在 `dy=0` 時
+    ///     完美相關，會把估計拉向 0。
+    ///   - priorStep: 上次的步進值（速度連續性）。nil＝開場，改走 L2 全域粗掃。
+    ///   - allowZero: 是否允許回報 `dy=0`。鎖帶前用 full frame，靜態帶會讓 0 的分數偏低，
+    ///     此時應傳 false 把 0 排除在搜尋範圍外。
+    public static func matchStep(new: LumaPlane, prev: LumaPlane,
+                                 priorStep: Int?, allowZero: Bool,
+                                 config: StepConfig = .default) -> StepOutcome {
+        guard new.width == prev.width, new.height == prev.height, new.height >= 32 else {
+            return .unknown
+        }
+        let n1 = new.downsampled(), p1 = prev.downsampled()
+        guard n1.height >= 16 else { return .unknown }
+        let limit1 = min(config.globalMaxStep / 2, n1.height - 8)
+        guard limit1 >= 1 else { return .unknown }
+
+        /// L1 座標的分數。負位移＝交換兩圖跑正向（overlapScore 的關係式是 new[r]==ref[r+dy]，
+        /// 取負等價於把角色互換），一條路徑吃雙向。
+        func score1(_ dy: Int) -> Float {
+            if dy >= 0 { return overlapScore(new: n1, ref: p1, dy: dy, rowStep: 1).mean }
+            return overlapScore(new: p1, ref: n1, dy: -dy, rowStep: 1).mean
+        }
+
+        /// L2 全域粗掃找落點（65 候選 × 0.017ms ≈ 1.1ms），回傳 L1 座標的中心。
+        func globalCenter1() -> Int? {
+            let n2 = n1.downsampled(), p2 = p1.downsampled()
+            guard n2.height >= 12 else { return nil }
+            let limit2 = min(limit1 / 2, n2.height - 6)
+            guard limit2 >= 1 else { return nil }
+            var best2 = (dy: 0, s: Float.greatestFiniteMagnitude)
+            for dy in -limit2...limit2 {
+                if dy == 0, !allowZero { continue }
+                let s = dy >= 0 ? overlapScore(new: n2, ref: p2, dy: dy, rowStep: 1).mean
+                                : overlapScore(new: p2, ref: n2, dy: -dy, rowStep: 1).mean
+                if s.isFinite, s < best2.s { best2 = (dy, s) }
+            }
+            return best2.s.isFinite ? best2.dy * 2 : nil
+        }
+
+        /// 在 L1 的指定窗內找最佳位移。
+        func searchWindow(center: Int, radius: Int) -> (dy: Int, s: Float)? {
+            let lo = max(-limit1, center - radius), hi = min(limit1, center + radius)
+            guard lo <= hi else { return nil }
+            var best = (dy: 0, s: Float.greatestFiniteMagnitude)
+            for dy in lo...hi {
+                if dy == 0, !allowZero { continue }
+                let s = score1(dy)
+                if s.isFinite, s < best.s { best = (dy, s) }
+            }
+            return best.s.isFinite ? best : nil
+        }
+
+        var best: (dy: Int, s: Float)?
+        if let prior = priorStep {
+            best = searchWindow(center: prior / 2, radius: max(config.minRadius / 2, abs(prior) / 4))
+        }
+        // 窗內找不到夠好的解 → 退回全域掃。
+        //
+        // 這條 fallback 是必要的，不是保險（實機自檢抓到）：搜尋窗以**上次步進**為中心，
+        // 使用者一改變方向（下捲轉回捲）真解就落在窗外，於是回捲永遠估不出來。
+        // 背壓丟格時也一樣——「上一格」其實隔了好幾格，位移遠大於窗寬。
+        if best == nil || (best?.s ?? .greatestFiniteMagnitude) > config.absoluteGate {
+            if let c = globalCenter1(), let g = searchWindow(center: c, radius: 3) {
+                if best == nil || g.s < best!.s { best = g }
+            }
+        }
+        guard let best, best.s <= config.absoluteGate else { return .unknown }
+
+        // 拋物線次像素插值（三點擬合最小值）。分母同號檢查防止落在非凸處時外推到窗外。
+        var refined = Double(best.dy)
+        let sPrev = best.dy - 1 >= -limit1 ? score1(best.dy - 1) : Float.nan
+        let sNext = best.dy + 1 <= limit1 ? score1(best.dy + 1) : Float.nan
+        if sPrev.isFinite, sNext.isFinite {
+            let denom = sPrev - 2 * best.s + sNext
+            if denom > 1e-6 {
+                let offset = 0.5 * Double(sPrev - sNext) / Double(denom)
+                if abs(offset) <= 1 { refined += offset }
+            }
+        }
+        return .step(dy: Int((refined * 2).rounded()), score: best.s)
+    }
+
     // MARK: - 正向主流程
 
     static func matchPositive(new: LumaPlane, reference: LumaPlane,
@@ -60,65 +187,124 @@ public enum ScrollMatcher {
         let maxDy = h - minOverlap
         guard maxDy > config.minDelta else { return .noOverlap }
 
-        // 受信任的 prior：直接原解析度精修，跳過 L2 粗掃（見 match 的參數說明）。
-        if priorIsTrusted, let p = prior, p >= config.minDelta, p <= maxDy {
-            let dy = refine(new: new, ref: reference, center: p, radius: 8, rowStep: 1)
-            guard dy >= config.minDelta, dy <= maxDy else { return .noOverlap }
-            let q = overlapScore(new: new, ref: reference, dy: dy, rowStep: 1)
-            guard q.mean <= config.absoluteGateMax else { return .lowConfidence }
-            guard q.worst <= config.worstBandMax else { return .ambiguous }
-            return .accepted(dy: dy, confidence: Double(config.ratioGateMin))
-        }
-
         // 金字塔：L0=原、L1=1/2、L2=1/4
         let n1 = new.downsampled(), n2 = n1.downsampled()
         let r1 = reference.downsampled(), r2 = r1.downsampled()
 
-        // L2 全域掃（含先驗軟懲罰），保留 best 與排除窗外的 second 供 ambiguity 判定。
-        // I1 修正：BPC 早停只對「次佳候選」設門檻（不能對 best，否則 best2 逼近 0 時
-        // 門檻≈0，把所有真次佳候選提前殺光，second2 永遠登記不到、比值信心閘失效）。
-        // M1 修正：second2 追蹤用未加先驗懲罰的 raw 分數；best 排序仍用含懲罰的 s；
-        // 比值 = second2Raw / best2.raw，讓比值純反映影像證據、不被先驗污染。
+        // 受信任的 prior（軌跡預測）＝新架構的主路徑。**先在 L1 掃窗、再在 L0 只精修 ±2**。
+        // 為什麼不像原本那樣直接在 L0 精修 ±8：實測 L0 全列單次 0.631ms，17 個候選就要 10.7ms；
+        // 改成 L1 掃 ±6（0.067ms×13）再 L0 精修 ±2（0.631ms×5）約 4ms，比原本的全域路徑
+        // （實測 7.18ms）還快——軌跡 prior 讓我們不必再掃 L2 那 65 個全域候選。
+        // 失敗時**不直接返回**，落到底下的全域候選複評（prior 可能因背壓丟格而失準）。
+        if priorIsTrusted, let p = prior, p >= config.minDelta, p <= maxDy {
+            let r1Radius = max(3, config.trustedPriorRadius / 2)
+            let c1 = min(max(1, p / 2), max(1, r1.height - 2))
+            let dy1 = refine(new: n1, ref: r1, center: c1, radius: r1Radius, rowStep: 1)
+            let dy0 = refine(new: new, ref: reference, center: dy1 * 2, radius: 2, rowStep: 1)
+            if dy0 >= config.minDelta, dy0 <= maxDy {
+                let q = overlapScore(new: new, ref: reference, dy: dy0, rowStep: 1)
+                if q.mean <= config.absoluteGateMax, q.worst <= config.worstBandMax {
+                    // 信心：拿窗外的最佳分數當次佳（純影像證據）。軌跡 prior 本身已是獨立佐證，
+                    // 因此這裡用比值只為擋掉「窗內外一樣好」的多解情況。
+                    let outside = bestScoreOutsideWindow(new: n2, ref: r2, center: dy0 / 4,
+                                                         exclusion: max(1, config.exclusionRadius / 4),
+                                                         minDy: max(1, config.minDelta / 4),
+                                                         maxDy: max(1, maxDy / 4))
+                    let ratio = outside.isFinite ? Double(outside / max(q.mean, 1e-6)) : 1000
+                    if ratio >= Double(config.ratioGateMin) {
+                        return .accepted(dy: dy0, confidence: min(ratio, 1000))
+                    }
+                }
+            }
+        }
+
+        // 全域候選複評（取代原本「L2 自己判 ambiguous 就結束」）。
+        //
+        // 為什麼改：實測顯示 L2（1/4 降採樣）的分數常常糊在一起（top3 為 0.0460 / 0.0546，
+        // 比值 1.19 剛好擦過 1.1 的早判門檻），而**原解析度是乾淨的**（0.0000 / 0.0444）。
+        // 用糊掉的那層做生死裁決是設計錯誤：粗掃層訊號一弱就提前判 ambiguous，
+        // 之後再也回不到原解析度。改為粗掃層只**提名候選**，裁決一律在原解析度做——
+        // 這就是文獻上「掃描多個峰再用重疊區誤差複評」的思想（Optics Communications 2015）
+        // 移植到金字塔上。
         let l2Range = max(1, config.minDelta / 4)...max(1, maxDy / 4)
-        var best2 = (dy: -1, score: Float.greatestFiniteMagnitude, raw: Float.greatestFiniteMagnitude)
-        var second2Raw = Float.greatestFiniteMagnitude
-        let excl2 = max(1, config.exclusionRadius / 4)
+        var scored: [(dy2: Int, raw: Float, ranked: Float)] = []
         for dy in l2Range {
-            let raw = overlapScore(new: n2, ref: r2, dy: dy, earlyExit: second2Raw).mean
-            guard raw.isFinite else { continue }                 // 被早停殺掉＝進不了 top-2
+            let raw = overlapScore(new: n2, ref: r2, dy: dy).mean
+            guard raw.isFinite else { continue }
             var s = raw
             if let p = prior {
                 s += Float(config.priorWeight) * min(1, abs(Float(dy * 4 - p)) / Float(h))
             }
-            if s < best2.score {
-                if best2.dy >= 0, abs(best2.dy - dy) > excl2 {
-                    second2Raw = min(second2Raw, best2.raw)      // 舊 best 降級成次佳候選（raw）
-                }
-                best2 = (dy, s, raw)
-            } else if abs(dy - best2.dy) > excl2, raw < second2Raw {
-                second2Raw = raw
-            }
+            scored.append((dy, raw, s))
         }
-        guard best2.dy >= 0 else { return .noOverlap }
-        // L2 ambiguity 早判：排除窗外的次佳貼著最佳 → 多解
-        if second2Raw.isFinite, second2Raw / max(best2.raw, 1e-6) < 1.1 { return .ambiguous }
+        guard !scored.isEmpty else { return .noOverlap }
+        scored.sort { $0.ranked < $1.ranked }
 
-        // L1 → L0 逐層精修（±3）
-        // 精修半徑 6（原為 3）：每上一層放大 2 倍，前一層的 ±1~2 量化誤差會變成 ±2~4，
-        // ±3 只剩 1px 餘裕，實測會落在窗外導致 dy 差 1px（T5 審查已標記此風險）。
-        let dy1 = refine(new: n1, ref: r1, center: best2.dy * 2, radius: 6, rowStep: 2)
-        let dy0 = refine(new: new, ref: reference, center: dy1 * 2, radius: 6, rowStep: 1)
-        guard dy0 >= config.minDelta, dy0 <= maxDy else { return .noOverlap }
+        // 自適應候選集：分數 < best×factor 者都收，彼此間隔須大於排除窗（否則只是同一個峰的鄰居）。
+        let cutoff = max(scored[0].ranked, 1e-6) * config.candidateScoreFactor
+        let excl2 = max(1, config.exclusionRadius / 4)
+        var candidates: [Int] = []
+        for cand in scored {
+            guard cand.ranked <= cutoff || candidates.isEmpty else { break }
+            if candidates.contains(where: { abs($0 - cand.dy2) <= excl2 }) { continue }
+            candidates.append(cand.dy2)
+            if candidates.count >= config.maxCandidates { break }
+        }
 
-        // 原解析度品質閘（絕對閘＋最差 band 閘）
-        let q = overlapScore(new: new, ref: reference, dy: dy0, rowStep: 1)
-        guard q.mean <= config.absoluteGateMax else { return .lowConfidence }
-        guard q.worst <= config.worstBandMax else { return .ambiguous }   // 局部污染 → 不可信
+        // 兩段複評：先在 L1 便宜地精修＋排序（0.067ms/次），只有前 2 名進 L0 全列（0.631ms/次）。
+        // 精修半徑 6：每上一層放大 2 倍，前層 ±1~2 量化誤差會變成 ±2~4，±3 只剩 1px 餘裕，
+        // 實測會落在窗外導致 dy 差 1px。
+        var l1Ranked: [(dy1: Int, s: Float)] = []
+        for c in candidates {
+            let dy1 = refine(new: n1, ref: r1, center: c * 2, radius: 6, rowStep: 2)
+            l1Ranked.append((dy1, overlapScore(new: n1, ref: r1, dy: dy1, rowStep: 2).mean))
+        }
+        l1Ranked.sort { $0.s < $1.s }
 
-        // 比值閘（用 L2 的全域 raw second 換算；epsilon 防除零；上限 cap 防 inf 外洩下游，I1 修正）
-        let confidence = Double(min(second2Raw.isFinite ? second2Raw / max(best2.raw, 1e-6) : 1000, 1000))
-        guard confidence >= config.ratioGateMin else { return .lowConfidence }
-        return .accepted(dy: dy0, confidence: confidence)
+        var finals: [(dy: Int, mean: Float, worst: Float)] = []
+        for entry in l1Ranked.prefix(2) {
+            let dy0 = refine(new: new, ref: reference, center: entry.dy1 * 2, radius: 6, rowStep: 1)
+            guard dy0 >= config.minDelta, dy0 <= maxDy else { continue }
+            let q = overlapScore(new: new, ref: reference, dy: dy0, rowStep: 1)
+            guard q.mean.isFinite else { continue }
+            finals.append((dy0, q.mean, q.worst))
+        }
+        guard let winner = finals.min(by: { $0.mean < $1.mean }) else { return .noOverlap }
+
+        guard winner.mean <= config.absoluteGateMax else { return .lowConfidence }
+        guard winner.worst <= config.worstBandMax else { return .ambiguous }   // 局部污染 → 不可信
+
+        // 比值閘一律在**原解析度**判定（這是本次改動的重點）。次佳取兩處的較嚴者：
+        // ① 複評名單裡與 winner 相距超過排除窗的另一個解；② L2 全域裡窗外的最佳分數。
+        var second = Float.greatestFiniteMagnitude
+        for f in finals where abs(f.dy - winner.dy) > config.exclusionRadius {
+            second = min(second, f.mean)
+        }
+        let outside = bestScoreOutsideWindow(new: n2, ref: r2, center: winner.dy / 4,
+                                             exclusion: excl2,
+                                             minDy: max(1, config.minDelta / 4),
+                                             maxDy: max(1, maxDy / 4))
+        second = min(second, outside)
+        let confidence = Double(min(second.isFinite ? second / max(winner.mean, 1e-6) : 1000, 1000))
+        // 走到這裡 winner 已過絕對閘（解本身是好的），所以比值不足只可能是**存在旗鼓相當的
+        // 另一個解**＝多解，語意是 ambiguous 而非 lowConfidence。週期紋理（等寬條紋、
+        // 等行距文字）就是這條路徑：每個週期倍數都是完美匹配，必須拒絕而不是挑一個接上。
+        guard confidence >= Double(config.ratioGateMin) else { return .ambiguous }
+        return .accepted(dy: winner.dy, confidence: confidence)
+    }
+
+    /// L2 全域裡「排除窗外」的最佳（＝最小）分數，用來判定是否存在旗鼓相當的另一個解。
+    /// 回 `.greatestFiniteMagnitude` 代表窗外沒有任何有效候選（單解，信心高）。
+    static func bestScoreOutsideWindow(new n2: LumaPlane, ref r2: LumaPlane,
+                                       center: Int, exclusion: Int,
+                                       minDy: Int, maxDy: Int) -> Float {
+        guard minDy <= maxDy else { return .greatestFiniteMagnitude }
+        var best = Float.greatestFiniteMagnitude
+        for dy in minDy...maxDy where abs(dy - center) > exclusion {
+            let s = overlapScore(new: n2, ref: r2, dy: dy, earlyExit: best).mean
+            if s.isFinite, s < best { best = s }
+        }
+        return best
     }
 
     static func refine(new: LumaPlane, ref: LumaPlane, center: Int, radius: Int,
@@ -160,10 +346,12 @@ public enum ScrollMatcher {
     /// public：selftest 需跨模組直接呼叫，驗證 L2 粗估的內部一致性。
     /// - Parameter rowStep: 列取樣間隔。粗掃層用 2 省成本；**最終層必須用 1**——
     ///   隔列取樣會讓分數對 ±1px 不敏感甚至排名反轉（實測 dy=201 的分數比正解 dy=200 還低）。
+    /// - Note: 接受 `dy == 0`（步進估計要能判定「畫面在變但沒有一致平移」＝局部動畫）。
+    ///   此時重疊區＝整格，`(r+dy)*w == r*w`，計分與四等分邏輯都自然成立。
     public static func overlapScore(new: LumaPlane, ref: LumaPlane, dy: Int,
                                     rowStep: Int = 2,
                                     earlyExit: Float = .greatestFiniteMagnitude) -> (mean: Float, worst: Float) {
-        guard dy > 0, dy < ref.height else { return (.greatestFiniteMagnitude, .greatestFiniteMagnitude) }
+        guard dy >= 0, dy < ref.height else { return (.greatestFiniteMagnitude, .greatestFiniteMagnitude) }
         let overlap = new.height - dy
         guard overlap >= 16 else { return (.greatestFiniteMagnitude, .greatestFiniteMagnitude) }
         let w = new.width

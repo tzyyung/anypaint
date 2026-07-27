@@ -21,7 +21,6 @@ public final class ScrollCaptureSelfCheck {
     private var timer: Timer?
     private var step = 0
     private var frames = 0
-    private var wheelAccum: CGFloat = 0
     /// 與 Session 相同的架構：engine 跑背景序列佇列＋只保留最新格的背壓。
     private let engineQueue = DispatchQueue(label: "anypaint.selfcheck.engine", qos: .userInitiated)
     private var engineBusy = false
@@ -103,7 +102,6 @@ public final class ScrollCaptureSelfCheck {
         step += 1
         content?.scrollOffset += stepPoints          // 內容往上移＝模擬頁面下捲
         content?.needsDisplay = true
-        wheelAccum += stepPoints
     }
 
     /// 平均亮度（0-255）：用來抓「SCStream 供出黑格／半渲染格」的情況。
@@ -129,23 +127,22 @@ public final class ScrollCaptureSelfCheck {
         guard !engineBusy, let frame = pendingFrame, let engine else { return }
         pendingFrame = nil
         engineBusy = true
-        let accum = wheelAccum
         let n = frames
         engineQueue.async { [weak self] in
             let t0 = ProcessInfo.processInfo.systemUptime
-            let out = engine.consume(frame: frame, wheelAccumulatedPoints: accum, wheelDirection: 1)
+            let out = engine.consume(frame: frame)
             let ms = Int((ProcessInfo.processInfo.systemUptime - t0) * 1000)
             let h = engine.height
             Task { @MainActor in
                 guard let self else { return }
                 self.engineBusy = false
-                switch out {
-                case .appended, .appendedApproximate, .trimmed, .bandsLocked: self.wheelAccum = 0
-                default: break
-                }
                 // 記錄所有「非等待」結果，才看得到從成功轉為永久失敗的斷點
                 if case .waitingForMotion = out {} else {
-                    self.emit("frame#\(n) step=\(self.step) \(ms)ms → \(out) 高=\(h) matcher=\(engine.lastMatchNote)")
+                    let t = engine.trajectory
+                    self.emit("frame#\(n) step=\(self.step) \(ms)ms → \(out) 高=\(h)"
+                        + " f2f=\(engine.lastStepNote) 待接=\(t.pendingDy)"
+                        + " 累積=\(t.totalTracked)/提交=\(t.totalCommitted)"
+                        + " matcher=\(engine.lastMatchNote)")
                 }
                 self.pump()
             }
@@ -232,12 +229,15 @@ final class SelfCheckContentView: NSView {
             let y = absY - scrollOffset
             var seed = UInt64(bitPattern: Int64(i)) &* 6364136223846793005 &+ 1442695040888963407
             func rnd(_ n: Int) -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int(seed >> 33) % n }
-            // 每 3 行只有 1 行有字，模擬終端機輸出的空白間隔
-            guard i % 3 == 0 else { continue }
-            // 稀疏模式：只有畫面底部 15% 有字（模擬終端機大半空白的實機條件）
-            // 稀疏模式：文字只出現在**選區內的下半段**。注意不能用 bounds.height*0.85——
-            // 選區是視窗往內縮 40pt，那個位置落在選區外，擷取到的會是 100% 純空白（無效情境）。
-            if ScrollCaptureSelfCheck.sparseMode, y < bounds.height * 0.62 { continue }
+            // 稀疏度必須是**內容本身的屬性**（由絕對行號決定），這樣開窗即得純平移關係。
+            //
+            // 舊版寫成 `if sparseMode, y < bounds.height * 0.62 { continue }`——y 是**視窗相對**
+            // 座標，等於「視窗上半永遠不畫字」：文字捲到分界線就消失。那在物理上不是平移，
+            // 任何對位演算法都必然失敗。據此調演算法只會愈調愈錯（實際上誤導了好幾輪，
+            // 還讓「稀疏＋等行距會誤對齊到行倍數」被誤記成真實缺陷）。
+            // 現在改成加大行間隔：稀疏模式每 9 行才 1 行字（一屏約 1–2 行），純平移成立。
+            let lineGap = ScrollCaptureSelfCheck.sparseMode ? 9 : 3
+            guard i % lineGap == 0 else { continue }
             var x: CGFloat = CGFloat(8 + rnd(40))
             while x < bounds.width - 30 {
                 let w = CGFloat(30 + rnd(110))

@@ -113,7 +113,7 @@ public final class ScrollHUDController: NSObject {
 
     private func tone(for m: GuidanceMessage) -> NSColor {
         switch m {
-        case .slowDown, .hardToMatch, .selectionTooSmall: return .systemYellow
+        case .slowDown, .hardToMatch, .selectionTooSmall, .confirmBottomByBackscroll: return .systemYellow
         case .gapNotStitched: return .systemRed
         // mouseOutside 是「提醒」級（spec §10），與 backscroll/deadReckoning 同級＝中性白，非警告黃
         case .progress, .mouseOutside, .backscrollTrimming, .backscrollAtOrigin, .bottomProbing, .deadReckoning:
@@ -134,6 +134,7 @@ private func text(for m: GuidanceMessage) -> String {
     case .hardToMatch: return "這段內容不好辨識，慢慢捲"
     case .selectionTooSmall: return "選區高度不足，拉高一點才能開始"
     case .bottomProbing: return "已到底部，收尾中…"
-    case .deadReckoning: return "空白區段以捲動量推算"
+    case .deadReckoning: return "空白區段以軌跡推算，接縫可能略有誤差"
+    case .confirmBottomByBackscroll: return "有幾段不易辨識——往回捲一點再往下捲，確認沒有漏"
     }
 }

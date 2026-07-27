@@ -3,6 +3,9 @@ import Foundation
 public enum GuidanceMessage: Equatable {
     case progress(px: Int), slowDown, gapNotStitched, mouseOutside, selectionTooSmall
     case backscrollTrimming, backscrollAtOrigin, hardToMatch, bottomProbing, deadReckoning
+    /// 到底判定的**主動確認**：只在本次 session 曾發生匹配失敗或近似接合（長圖品質有疑慮）時
+    /// 才出現。正常到底維持無感自動收尾——不打擾使用者是設計裁決。
+    case confirmBottomByBackscroll
 }
 
 /// HUD 提示決策（spec §10 規則表）。純值型別：事件進、訊息出，Session 只轉發。
@@ -35,5 +38,6 @@ public struct ScrollGuidance {
     public mutating func mouseLeftSelection() -> GuidanceMessage { .mouseOutside }
     public mutating func backscrollAtOrigin() -> GuidanceMessage { .backscrollAtOrigin }
     public mutating func bottomProbing() -> GuidanceMessage { .bottomProbing }
+    public mutating func confirmBottom() -> GuidanceMessage { .confirmBottomByBackscroll }
     public mutating func deadReckoningUsed() -> GuidanceMessage { .deadReckoning }
 }

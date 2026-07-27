@@ -67,6 +67,7 @@ public final class ScrollCaptureSession {
 
     private func isWaiting(_ o: ScrollStitchOutcome) -> Bool {
         if case .waitingForMotion = o { return true }
+        if case .awaitingOverlap = o { return true }
         return false
     }
     /// 最近一次「有進展」（拼接／裁尾／鎖帶）的時刻。用於停滯收工判定——不可用「連續失敗次數」：
@@ -189,8 +190,7 @@ public final class ScrollCaptureSession {
         hud.show(near: overlay.selectionGlobal, on: screen, mode: .capturing)
         hud.onDone = { [weak self] in self?.finish() }
         guidance = ScrollGuidance(selectionHeight: Int(overlay.selectionGlobal.height))
-        engine = ScrollStitchEngine(maxHeightPx: AppSettings.scrollMaxHeightPx,
-                                   fallbackPxPerPoint: Double(screen.backingScaleFactor))
+        engine = ScrollStitchEngine(maxHeightPx: AppSettings.scrollMaxHeightPx)
         ScrollSessionLog.add("capturing 開始 選區=\(overlay.selectionGlobal)")
         lastProgressAt = ProcessInfo.processInfo.systemUptime
         startBottomWatch()
@@ -233,12 +233,10 @@ public final class ScrollCaptureSession {
               let frame = pendingFrame, let engine else { return }
         pendingFrame = nil
         engineBusy = true
-        let accumulated = wheelAccumulator
-        let direction = recentWheelDirection
         engineQueue.async { [weak self] in
-            let outcome = engine.consume(frame: frame,
-                                         wheelAccumulatedPoints: accumulated,
-                                         wheelDirection: direction)
+            // 位移判定完全來自影像：engine 不再收任何滾輪參數。滾輪事件仍在 session 層使用，
+            // 但只表達**使用者意圖**（啟動、以及「還在捲但畫面不動」的到底判定）。
+            let outcome = engine.consume(frame: frame)
             let height = engine.height
             let failures = engine.consecutiveFailures
             Task { @MainActor in
@@ -255,11 +253,34 @@ public final class ScrollCaptureSession {
         frameSeq += 1
         // 只記「非等待」與每 10 格一次，避免檔案爆量
         if !isWaiting(outcome) || frameSeq % 10 == 0 {
-            ScrollSessionLog.add("#\(frameSeq) \(outcome) 高=\(height) 累積滾輪=\(Int(wheelAccumulator))pt matcher=\(engine?.lastMatchNote ?? "-")")
+            // 軌跡欄位是新架構的關鍵診斷：`f2f累積` 與 `已提交` 長期背離代表步進估計在撞假峰
+            // （這是唯一能在事後看出「軌跡失準」的方式）。滾輪量仍記錄，但只作為交叉檢查
+            // 的參考值，不參與任何位移判定。
+            let traj = engine?.trajectory ?? ScrollTrajectory()
+            let stepNote: String = engine?.lastStepNote ?? "-"
+            let matchNote: String = engine?.lastMatchNote ?? "-"
+            let wheelPt: Int = Int(wheelAccumulator)
+            let fields: [String] = [
+                "#\(frameSeq)", "\(outcome)", "高=\(height)", "step=\(stepNote)",
+                "待接=\(traj.pendingDy)", "f2f累積=\(traj.totalTracked)",
+                "已提交=\(traj.totalCommitted)", "滾輪(僅參考)=\(wheelPt)pt",
+                "matcher=\(matchNote)",
+            ]
+            ScrollSessionLog.add(fields.joined(separator: " "))
         }
         switch outcome {
         case .baseCaptured, .waitingForMotion, .awaitingBandLock, .noMotion:
             break                                     // 皆非失敗，不需提示
+        case let .awaitingOverlap(pendingDy):
+            // 不是失敗：軌跡確認畫面在動，但內容還沒進入可驗證的重疊區（快捲時重疊區可能
+            // 暫時全是空白）。提示放慢即可——猜位移只會拼錯。
+            // 刻意**不**更新 lastProgressAt：真的一直卡著時，停滯門檻仍要能收工保留已拼內容。
+            if var guidance, pendingDy > 0 {
+                if let m = guidance.wheelAccumulated(sinceLastAccept: pendingDy) {
+                    hud.update(message: m)
+                }
+                self.guidance = guidance
+            }
         case .bandsLocked:
             wheelAccumulator = 0
             lastProgressAt = ProcessInfo.processInfo.systemUptime
@@ -325,6 +346,8 @@ public final class ScrollCaptureSession {
 
     /// 多久「完全沒有進展」就搶救收工（保留已拼）。要遠大於一次快捲＋回捲救回所需時間。
     private let stallSeconds: TimeInterval = 12
+    /// 已經請使用者做過一次「回捲確認到底」了嗎。只問一次，避免反覆打擾。
+    private var backscrollConfirmRequested = false
 
     private func bottomTick() {
         guard state == .capturing else { return }
@@ -345,7 +368,27 @@ public final class ScrollCaptureSession {
         } else {
             hud.update(message: .bottomProbing)
         }
-        if bottomProbeCount >= 3 { finish() }            // 約 1.5 秒「捲了但畫面不動」
+        guard bottomProbeCount >= 3 else { return }      // 約 1.5 秒「捲了但畫面不動」
+
+        // 兩條證據的交叉驗證：滾輪說使用者還在捲（意圖），影像說畫面沒變（世界狀態）。
+        // 一般情況這樣就足以判定到底，直接無感收尾。
+        //
+        // 但若本次 session 曾發生匹配失敗或近似接合（長圖品質有疑慮），就改成請使用者
+        // **回捲一點再往下捲**：回捲會產生影像變化（可被步進估計匹配、可裁回），
+        // 再下捲若又回到完全無變化，到底這件事就被雙向證實了；順便也驗證了軌跡是對的。
+        // 只做一次、且只在有疑慮時做——每次都要求只是浪費使用者時間（設計裁決）。
+        if engine?.hasQualityDoubt == true, !backscrollConfirmRequested {
+            backscrollConfirmRequested = true
+            bottomProbeCount = 0
+            if var guidance {
+                hud.update(message: guidance.confirmBottom())
+                self.guidance = guidance
+            } else {
+                hud.update(message: .confirmBottomByBackscroll)
+            }
+            return          // 使用者若不理會，stallSeconds 的停滯門檻仍會收工並保留已拼內容
+        }
+        finish()
     }
 
     // MARK: 收尾／取消／看門狗
@@ -357,7 +400,18 @@ public final class ScrollCaptureSession {
         state = .finishing
         let image: CGImage?
         if let engine, engine.appendedFrameCount >= 1 { image = engine.finalize() } else { image = nil }
-        ScrollSessionLog.add("=== 收尾 影格數=\(frameSeq) 長圖高=\(engine?.height ?? -1) append格數=\(engine?.appendedFrameCount ?? -1) 已鎖帶=\(engine?.isLocked ?? false) 輸出=\(image.map { "\($0.width)x\($0.height)" } ?? "nil") ===")
+        let outSize: String = image.map { "\($0.width)x\($0.height)" } ?? "nil"
+        let endTraj = engine?.trajectory ?? ScrollTrajectory()
+        let summary: [String] = [
+            "=== 收尾", "影格數=\(frameSeq)", "長圖高=\(engine?.height ?? -1)",
+            "append格數=\(engine?.appendedFrameCount ?? -1)",
+            "已鎖帶=\(engine?.isLocked ?? false)",
+            // f2f累積 vs 已提交：差值就是步進估計的累積 drift，用來事後判斷軌跡品質。
+            "f2f累積=\(endTraj.totalTracked)", "已提交=\(endTraj.totalCommitted)",
+            "品質有疑慮=\(engine?.hasQualityDoubt ?? false)",
+            "輸出=\(outSize)", "===",
+        ]
+        ScrollSessionLog.add(summary.joined(separator: " "))
         teardown()
         onFinished?(image)   // 呼叫端（AppDelegate）決定 0/1 格降級與 preview（spec §3）
     }
