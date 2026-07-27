@@ -101,6 +101,10 @@ final class SelectionOverlayController {
             window.selectionView?.onInteraction = { [weak self, weak window] in
                 self?.armWatchdog()
                 self?.lastInteractedWindow = window   // 搶救歸屬：記錄最後互動的視窗（Task 4）
+                // 滑鼠只有一個 → 視窗候選／十字線／放大鏡全域只該有一份。
+                // 不靠 mouseExited（實機出現過兩個螢幕各自 focus 一個視窗），
+                // 每次互動由這裡統一把其他螢幕的 hover 狀態清掉。
+                self?.clearHoverStateOnOtherScreens(except: window)
             }
             window.makeKeyAndOrderFront(nil)
             window.makeFirstResponder(window.contentView)   // 逃生路 1：keyDown/Esc 收得到
@@ -184,6 +188,14 @@ final class SelectionOverlayController {
         // 逃生路 5：看門狗（免按鍵），互動即重置，秒數可在設定頁調
         armWatchdog()
         NSCursor.crosshair.set()
+    }
+
+    /// 除了 active 那個螢幕，其他 overlay 的 hover 狀態一律清掉（單螢幕時是 no-op）。
+    private func clearHoverStateOnOtherScreens(except active: SelectionOverlayWindow?) {
+        guard windows.count > 1 else { return }
+        for window in windows where window !== active {
+            window.selectionView?.clearHoverState()
+        }
     }
 
     /// flagsChanged 用：前次 shift 是否按著（只在「無→有」轉變時切換取色顯示格式）。

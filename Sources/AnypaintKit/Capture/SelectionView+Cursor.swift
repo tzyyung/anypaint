@@ -63,6 +63,9 @@ extension SelectionView {
             owner: self, userInfo: nil))
     }
     override func mouseEntered(with event: NSEvent) {
+        // 進入 overlay 本身就是互動：重置看門狗，也讓 controller 立刻清掉**其他螢幕**的
+        // hover 狀態（否則要等到本螢幕第一次 mouseMoved，那期間兩個螢幕會同時亮候選）。
+        onInteraction?()
         let p = convert(event.locationInWindow, from: nil)
         cursor(at: p).set()
         hoverPoint = p
@@ -96,6 +99,25 @@ extension SelectionView {
         let prev = hoverPoint
         hoverPoint = nil
         if drag == nil, selection == nil { invalidateLoupe(around: prev, and: nil) }
+    }
+
+    /// 清掉本 view 的 hover 類狀態：視窗候選、十字線、放大鏡。
+    ///
+    /// 多螢幕用：滑鼠只有一個，這些東西**全域只該有一份**。由 controller 在每次互動時
+    /// 統一保證，不依賴 mouseExited 的事件配對。
+    ///
+    /// ⚠️ **未解問題（2026-07-28）**：實機回報「雙螢幕時兩個螢幕各自 focus 一個視窗」，
+    /// 加了這個機制後**仍可重現**——所以成因不是「其他螢幕的狀態沒被清掉」，我的假設錯了。
+    /// 這個機制本身概念上仍成立（候選全域唯一）故保留，但**別把它當成那個問題已解決**。
+    /// 往下追的方向：確認 onInteraction 在跨螢幕時真的有被呼叫、windows 是否真有兩個
+    /// view、以及回報的現象是否其實是「兩個螢幕各有一個選區」（那是既有設計，不是缺陷）。
+    func clearHoverState() {
+        guard windowCandidate != nil || hoverPoint != nil else { return }
+        windowCandidate = nil
+        hoverPoint = nil
+        // 候選框是大面積，直接全重繪——涵蓋十字線與放大鏡的清除，不必再算局部 dirty。
+        // hoverPoint 歸 nil 後 activeLoupePoint 回 nil，draw 會順手清掉 lastDrawnCrosshair。
+        needsDisplay = true
     }
 
     /// 視窗偵測候選計算（mouseMoved／mouseEntered／primeHoverState 共用）。
