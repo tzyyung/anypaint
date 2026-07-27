@@ -3,7 +3,7 @@ import Foundation
 
 /// RGBA8、row-major、左上原點的原始像素緩衝。滾動截圖核心的統一影像型別：
 /// 不用 NSImage/CGImage 做運算——拼接是 memcpy 等級的操作，包裝型別只會擋路。
-public struct PixelBuffer {
+public struct PixelBuffer: Sendable {
     public let width: Int
     public private(set) var height: Int
     public var bytes: [UInt8]          // count == width*height*4
@@ -55,7 +55,7 @@ public struct PixelBuffer {
 
 /// 灰階浮點面（luma = 0.299R+0.587G+0.114B）。matcher 全程在 luma 上運算：
 /// 單通道省 4 倍記憶體頻寬，ZNCC 對灰階已足夠鑑別。
-public struct LumaPlane {
+public struct LumaPlane: Sendable {
     public let width: Int
     public let height: Int
     public var v: [Float]
@@ -112,7 +112,7 @@ public struct LumaPlane {
 }
 
 /// 四向靜態帶內縮量。
-public struct BandInsets: Equatable {
+public struct BandInsets: Equatable, Sendable {
     public var top: Int; public var bottom: Int; public var left: Int; public var right: Int
     public init(top: Int = 0, bottom: Int = 0, left: Int = 0, right: Int = 0) {
         self.top = top; self.bottom = bottom; self.left = left; self.right = right

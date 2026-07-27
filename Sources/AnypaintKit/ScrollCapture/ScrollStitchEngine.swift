@@ -3,7 +3,7 @@ import Foundation
 import Vision
 
 /// 一格影格經過三層匹配鏈後的結果。Session 只依此更新 HUD／決定收尾，不重複演算法邏輯。
-public enum ScrollStitchOutcome: Equatable {
+public enum ScrollStitchOutcome: Equatable, Sendable {
     /// 第一格：當長圖基準。
     case baseCaptured(height: Int)
     /// 累積捲動量還不足以產生可辨識位移——跳過本格，**不計失敗**（見 motionGate 說明）。
@@ -50,7 +50,50 @@ public enum ScrollStitchOutcome: Equatable {
 /// 舊版有一條「用滾輪累積量×自我校準比例推算位移」的退路（dead reckoning），
 /// 那是拿輸入事件量測世界，已移除。滾輪事件仍有用，但只用於表達**使用者意圖**
 /// （啟動、以及「還在捲但畫面不動」的到底判定），那部分留在 session 層。
-public final class ScrollStitchEngine {
+///
+/// ### 執行緒約定（`@unchecked Sendable` 的成立條件）
+/// 這個類別的**所有**成員只能在呼叫端的單一序列佇列（session 的 `engineQueue`）上被觸碰，
+/// 包含唯讀屬性與 `finalize()`。呼叫端要的狀態一律透過 `Snapshot` 帶出去，
+/// 不可從其他執行緒直接讀屬性。
+///
+/// 這條約定原本只寫在註解裡而實際被違反：session 在 `@MainActor` 上讀 `trajectory` 寫診斷、
+/// 並同步呼叫 `finalize()`——而 `finalize()` 會讀 stitcher 的 buffer，若此時佇列上正在跑
+/// `consume` 寫入同一塊 buffer 就是真的資料競爭（快捲時按「完成」即可撞上）。
+/// 現在改由 `Snapshot` 把資料帶出佇列，讓約定真正成立而不只是宣稱成立。
+public final class ScrollStitchEngine: @unchecked Sendable {
+    /// 一格處理完的狀態快照。呼叫端（MainActor）需要的所有資訊都在這裡，
+    /// 這樣 engine 本身可以嚴格侷限在單一佇列上。
+    public struct Snapshot: Sendable {
+        public let outcome: ScrollStitchOutcome
+        public let height: Int
+        public let consecutiveFailures: Int
+        public let appendedFrameCount: Int
+        public let isLocked: Bool
+        public let hasQualityDoubt: Bool
+        public let trajectory: ScrollTrajectory
+        public let stepNote: String
+        public let matchNote: String
+    }
+
+    /// 消化一格並回傳狀態快照。**呼叫端只能用回傳值**，不要在別的執行緒讀 engine 屬性。
+    public func consumeSnapshot(frame full: PixelBuffer) -> Snapshot {
+        let outcome = consume(frame: full)
+        return snapshot(outcome: outcome)
+    }
+
+    /// 收尾：產出長圖並附上最終狀態。必須和 `consumeSnapshot` 在同一個佇列上呼叫，
+    /// 否則會與進行中的 `consume` 競爭 stitcher 的 buffer。
+    public func finalizeSnapshot() -> (image: CGImage?, state: Snapshot) {
+        let image = appendedFrameCount >= 1 ? finalize() : nil
+        return (image, snapshot(outcome: .limitReached))
+    }
+
+    private func snapshot(outcome: ScrollStitchOutcome) -> Snapshot {
+        Snapshot(outcome: outcome, height: height, consecutiveFailures: consecutiveFailures,
+                 appendedFrameCount: appendedFrameCount, isLocked: isLocked,
+                 hasQualityDoubt: hasQualityDoubt, trajectory: trajectory,
+                 stepNote: lastStepNote, matchNote: lastMatchNote)
+    }
     public private(set) var appendedFrameCount = 1
     public private(set) var consecutiveFailures = 0
     /// 最近一次 matcher 主判的結果字串（診斷用：區分 ambiguous／lowConfidence／noOverlap）。

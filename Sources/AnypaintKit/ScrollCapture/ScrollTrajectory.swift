@@ -16,7 +16,7 @@ import Foundation
 /// `commit(actualDy:)` 收到絕對匹配的結果後會把 `pendingDy` 歸零，
 /// 等於每次接合都把累積誤差清掉一次。這是文獻上 pairwise＋校正的組合——
 /// 只做 pairwise 串接才會 drift（Civera et al., IJCV 2009）。
-public struct ScrollTrajectory: Equatable {
+public struct ScrollTrajectory: Equatable, Sendable {
     /// 自上次接合（或 session 起點）以來的 f2f 累積步進＝**對長圖尾端的預測位移**。
     /// 正＝下捲、負＝回捲。
     public private(set) var pendingDy = 0

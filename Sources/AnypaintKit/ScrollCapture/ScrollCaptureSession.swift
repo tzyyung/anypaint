@@ -77,6 +77,10 @@ public final class ScrollCaptureSession {
     /// 30fps 下連續 10 次失敗只有 1/3 秒，使用者手一甩超出可匹配範圍就被強制收工（實機症狀：
     /// 預覽只有單張影格）。改成時間門檻後，使用者有時間依 HUD 提示回捲救回。
     private var lastProgressAt: TimeInterval = 0
+    /// 最近一格的 engine 狀態快照。MainActor 需要 engine 資訊時**只能讀這個**——
+    /// 直接讀 engine 屬性會與背景佇列上進行中的 `consume` 競爭
+    /// （見 `ScrollStitchEngine` 的「執行緒約定」）。
+    private var lastEngineState: ScrollStitchEngine.Snapshot?
 
     // MARK: 進入/取消
 
@@ -251,19 +255,22 @@ public final class ScrollCaptureSession {
         engineQueue.async { [weak self] in
             // 位移判定完全來自影像：engine 不再收任何滾輪參數。滾輪事件仍在 session 層使用，
             // 但只表達**使用者意圖**（啟動、以及「還在捲但畫面不動」的到底判定）。
-            let outcome = engine.consume(frame: frame)
-            let height = engine.height
-            let failures = engine.consecutiveFailures
+            //
+            // engine 的狀態一律透過 Snapshot 帶出佇列——MainActor 不可直接讀 engine 屬性
+            // （見 ScrollStitchEngine 的「執行緒約定」）。
+            let snap = engine.consumeSnapshot(frame: frame)
             Task { @MainActor in
                 guard let self else { return }
                 self.engineBusy = false
-                self.handle(outcome: outcome, height: height, failures: failures)
+                self.lastEngineState = snap
+                self.handle(snapshot: snap)
                 self.pumpEngine()                    // 消化下一格（若期間又收到）
             }
         }
     }
 
-    private func handle(outcome: ScrollStitchOutcome, height: Int, failures: Int) {
+    private func handle(snapshot snap: ScrollStitchEngine.Snapshot) {
+        let outcome = snap.outcome
         guard state == .capturing else { return }
         frameSeq += 1
         // 只記「非等待」與每 10 格一次，避免檔案爆量
@@ -271,15 +278,13 @@ public final class ScrollCaptureSession {
             // 軌跡欄位是新架構的關鍵診斷：`f2f累積` 與 `已提交` 長期背離代表步進估計在撞假峰
             // （這是唯一能在事後看出「軌跡失準」的方式）。滾輪量仍記錄，但只作為交叉檢查
             // 的參考值，不參與任何位移判定。
-            let traj = engine?.trajectory ?? ScrollTrajectory()
-            let stepNote: String = engine?.lastStepNote ?? "-"
-            let matchNote: String = engine?.lastMatchNote ?? "-"
+            let traj = snap.trajectory
             let wheelPt: Int = Int(wheelAccumulator)
             let fields: [String] = [
-                "#\(frameSeq)", "\(outcome)", "高=\(height)", "step=\(stepNote)",
+                "#\(frameSeq)", "\(outcome)", "高=\(snap.height)", "step=\(snap.stepNote)",
                 "待接=\(traj.pendingDy)", "f2f累積=\(traj.totalTracked)",
                 "已提交=\(traj.totalCommitted)", "滾輪(僅參考)=\(wheelPt)pt",
-                "matcher=\(matchNote)",
+                "matcher=\(snap.matchNote)",
             ]
             ScrollSessionLog.add(fields.joined(separator: " "))
         }
@@ -338,11 +343,9 @@ public final class ScrollCaptureSession {
             }
             // 不在此立即收工：連續失敗次數在 30fps 下太敏感（10 次＝1/3 秒）。
             // 停滯收工改由 bottomTick 依「多久沒有任何進展」判定（見 stallSeconds）。
-            _ = failures
         case .limitReached:
             finish()
         }
-        _ = height
     }
 
     // MARK: 到底判定（自我重排的週期檢查，spec §5.3）
@@ -392,7 +395,7 @@ public final class ScrollCaptureSession {
         // **回捲一點再往下捲**：回捲會產生影像變化（可被步進估計匹配、可裁回），
         // 再下捲若又回到完全無變化，到底這件事就被雙向證實了；順便也驗證了軌跡是對的。
         // 只做一次、且只在有疑慮時做——每次都要求只是浪費使用者時間（設計裁決）。
-        if engine?.hasQualityDoubt == true, !backscrollConfirmRequested {
+        if lastEngineState?.hasQualityDoubt == true, !backscrollConfirmRequested {
             backscrollConfirmRequested = true
             bottomProbeCount = 0
             if var guidance {
@@ -410,23 +413,43 @@ public final class ScrollCaptureSession {
 
     public func requestDone() { if state == .capturing { finish() } }
 
+    /// 收尾。`finalize()` **必須排到 engineQueue 上**：它會讀 stitcher 的 buffer，
+    /// 而佇列上可能正有一格 `consume` 在寫同一塊 buffer（快捲時按「完成」就會撞上）。
+    /// 排進同一個序列佇列即可保證它接在最後一格之後執行。
     private func finish() {
         guard state == .capturing || state == .armed else { return }
         state = .finishing
-        let image: CGImage?
-        if let engine, engine.appendedFrameCount >= 1 { image = engine.finalize() } else { image = nil }
+        guard let engine else { completeFinish(image: nil, state: nil); return }
+        let seq = frameSeq
+        engineQueue.async { [weak self] in
+            let (image, endState) = engine.finalizeSnapshot()
+            Task { @MainActor in
+                guard let self else { return }
+                self.logFinishSummary(seq: seq, image: image, state: endState)
+                self.completeFinish(image: image, state: endState)
+            }
+        }
+    }
+
+    private func logFinishSummary(seq: Int, image: CGImage?, state s: ScrollStitchEngine.Snapshot) {
         let outSize: String = image.map { "\($0.width)x\($0.height)" } ?? "nil"
-        let endTraj = engine?.trajectory ?? ScrollTrajectory()
         let summary: [String] = [
-            "=== 收尾", "影格數=\(frameSeq)", "長圖高=\(engine?.height ?? -1)",
-            "append格數=\(engine?.appendedFrameCount ?? -1)",
-            "已鎖帶=\(engine?.isLocked ?? false)",
+            "=== 收尾", "影格數=\(seq)", "長圖高=\(s.height)",
+            "append格數=\(s.appendedFrameCount)", "已鎖帶=\(s.isLocked)",
             // f2f累積 vs 已提交：差值就是步進估計的累積 drift，用來事後判斷軌跡品質。
-            "f2f累積=\(endTraj.totalTracked)", "已提交=\(endTraj.totalCommitted)",
-            "品質有疑慮=\(engine?.hasQualityDoubt ?? false)",
+            "f2f累積=\(s.trajectory.totalTracked)", "已提交=\(s.trajectory.totalCommitted)",
+            "品質有疑慮=\(s.hasQualityDoubt)",
             "輸出=\(outSize)", "===",
         ]
         ScrollSessionLog.add(summary.joined(separator: " "))
+    }
+
+    /// finalize 是非同步的，期間使用者仍可能按 Esc／⌘⇧X 觸發 `cancel()`——那條路徑會 teardown
+    /// 並把 state 設回 idle、也已經發過 `onFinished(nil)`。所以這裡要再確認一次狀態，
+    /// 否則會發出**第二次** onFinished（預覽視窗開兩個）。
+    private func completeFinish(image: CGImage?, state finalState: ScrollStitchEngine.Snapshot?) {
+        guard state == .finishing else { return }
+        _ = finalState
         teardown()
         onFinished?(image, screen?.backingScaleFactor ?? 2)   // 呼叫端（AppDelegate）決定 0/1 格降級與 preview（spec §3）
     }

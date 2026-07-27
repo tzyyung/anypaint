@@ -1,6 +1,6 @@
 import Foundation
 
-public enum MatchOutcome: Equatable {
+public enum MatchOutcome: Equatable, Sendable {
     case accepted(dy: Int, confidence: Double)
     case ambiguous
     case lowConfidence
@@ -12,7 +12,7 @@ public enum MatchOutcome: Equatable {
 /// **`.step(dy: 0)` 與 `.unknown` 的區別是安全關鍵**：前者是「有信心地確認畫面沒有一致平移」
 /// （＝局部動畫／廣告／loading spinner，可以安全跳過）；後者是「估不出來」，該格仍必須進
 /// 救援層。把兩者混為一談會讓真實捲動的內容被當成動畫丟掉，違反「完整性優先」的產品裁決。
-public enum StepOutcome: Equatable {
+public enum StepOutcome: Equatable, Sendable {
     case step(dy: Int, score: Float)
     case unknown
 }
