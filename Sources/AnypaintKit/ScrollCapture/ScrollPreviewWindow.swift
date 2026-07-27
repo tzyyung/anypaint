@@ -5,6 +5,14 @@ import AppKit
 /// 標準 `NSWindow`（titled/closable/resizable）——**不是** panel：擷取 session 在呼叫這裡之前已經
 /// 結束，這只是一般檢視器，不該像框選/貼圖那樣佔用互斥的「擷取模式」。
 final class ScrollPreviewWindow: NSWindow {
+    /// 內容區最小寬度：底部按鈕排放得下的下限。
+    /// 實測（一次性量測）五顆鈕排寬 321pt，加左右邊距 12×2 = 345，取 360 留字型／語系裕度。
+    /// 沒有這個下限，窄長圖（Retina 上圖寬 < 610px）算出的視窗會比按鈕排還窄——按鈕排只釘
+    /// trailing、不釘 leading，會直接往左溢出視窗邊界，「複製」鈕看不到。
+    static let minContentWidth: CGFloat = 360
+    /// 高度下限：按鈕排 + 一點圖，避免縮到只剩標題列。
+    static let minContentHeight: CGFloat = 200
+
     private let cgImage: CGImage
     private let vars: [String: String]
     private let output: CaptureOutputService
@@ -29,6 +37,8 @@ final class ScrollPreviewWindow: NSWindow {
         )
         title = "滾動截圖 \(cgImage.width)×\(cgImage.height)"
         isReleasedWhenClosed = false   // 由 controller 明確持有與釋放（forget，同 PinWindow 慣例）
+        // 視窗可 resize：使用者手動拖窄也不能讓按鈕排溢出（與初始寬度同一個下限）。
+        contentMinSize = NSSize(width: Self.minContentWidth, height: Self.minContentHeight)
         buildUI()
     }
 
@@ -58,14 +68,29 @@ final class ScrollPreviewWindow: NSWindow {
         scroll.documentView = imageView
 
         let copyButton = NSButton(title: "複製", target: self, action: #selector(copyAction))
+        copyButton.toolTip = "複製到剪貼簿（⌘C）"
         let saveButton = NSButton(title: "存檔", target: self, action: #selector(saveAction))
+        saveButton.toolTip = "儲存到預設資料夾（⌘S）"
         let saveAsButton = NSButton(title: "另存", target: self, action: #selector(saveAsAction))
+        saveAsButton.toolTip = "另存為…自選位置與檔名（⇧⌘S）"
         let openButton = NSButton(title: "存檔並開啟", target: self, action: #selector(openAction))
-        openButton.toolTip = "存到預設資料夾，並用系統預設的圖片程式開啟（可在那裡繼續標註）"
+        openButton.toolTip = "存檔並用外部 App 開啟，在那裡繼續編輯（⌘O）"
         let discardButton = NSButton(title: "丟棄", target: self, action: #selector(discardAction))
+        discardButton.toolTip = "丟掉這張長圖並關窗（需確認）"
         for b in [copyButton, saveButton, saveAsButton, openButton, discardButton] {
             b.bezelStyle = .rounded
             b.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        // 快捷鍵：與框選工具列同一套（⌘S／⇧⌘S／⌘O），複製用標準的 ⌘C。
+        // 已查 NSButton.h：keyEquivalentModifierMask **只有 Control/Option/Command 有意義**，
+        // Shift 無效 → ⇧⌘S 靠大寫 "S" 表達，不是往 mask 裡加 .shift。
+        // ⌘ 組合鍵會先走 performKeyEquivalent 遞迴 view 階層（NSButton 有預設實作），
+        // 早於 responder chain，所以不會被 NSImageView 搶走（它 editable 預設也是 false）。
+        // 「丟棄」刻意不給快捷鍵：破壞性動作，且紅鈕／⌘W 已能關窗。
+        for (button, key) in [(copyButton, "c"), (saveButton, "s"), (saveAsButton, "S"), (openButton, "o")] {
+            button.keyEquivalent = key
+            button.keyEquivalentModifierMask = .command
         }
 
         let buttonRow = NSStackView(views: [copyButton, saveButton, saveAsButton, openButton, discardButton])
@@ -169,8 +194,10 @@ public final class ScrollPreviewWindowController {
         let screen = ScrollCaptureSession.screenUnderMouse()
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let scale = captureScale > 0 ? captureScale : 2.0
-        let width = min(CGFloat(image.width) / scale + 40, visible.width * 0.6)
-        let height = visible.height * 0.8
+        // 下限優先於「貼合圖寬」：窄長圖也要放得下底部按鈕排；再夾回螢幕寬以防超出。
+        let ideal = min(CGFloat(image.width) / scale + 40, visible.width * 0.6)
+        let width = min(max(ideal, ScrollPreviewWindow.minContentWidth), visible.width)
+        let height = max(visible.height * 0.8, ScrollPreviewWindow.minContentHeight)
         let contentRect = NSRect(x: 0, y: 0, width: width, height: height)
 
         let window = ScrollPreviewWindow(cgImage: image, vars: vars,
