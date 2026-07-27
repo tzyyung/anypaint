@@ -39,6 +39,7 @@ final class SelectionOverlayController {
     private var onSelect: ((NSImage) -> Void)?
     private var onSave: ((NSImage) -> Void)?
     private var onSaveAs: ((NSImage) -> Void)?
+    private var onOpen: ((NSImage) -> Void)?
     private var onPin: ((NSImage, CGRect) -> Void)?
     private var onCancel: (() -> Void)?
     private var keyMonitor: Any?
@@ -59,6 +60,7 @@ final class SelectionOverlayController {
                  onSelect: @escaping (NSImage) -> Void,
                  onSave: @escaping (NSImage) -> Void,
                  onSaveAs: @escaping (NSImage) -> Void,
+                 onOpen: @escaping (NSImage) -> Void,
                  onPin: @escaping (NSImage, CGRect) -> Void,
                  onCancel: @escaping () -> Void) {
         guard !isActive else { return }
@@ -66,6 +68,7 @@ final class SelectionOverlayController {
         self.onSelect = onSelect
         self.onSave = onSave
         self.onSaveAs = onSaveAs
+        self.onOpen = onOpen
         self.onPin = onPin
         self.onCancel = onCancel
         // 反向互斥（spec §9.1）：凍結框選中擋 ⌘⇧X。AppDelegate.beginScrollCapture 的
@@ -78,6 +81,7 @@ final class SelectionOverlayController {
             window.selectionView?.onConfirm = { [weak self] image in self?.finish(with: image) }
             window.selectionView?.onSave = { [weak self] image in self?.finishSave(with: image) }
             window.selectionView?.onSaveAs = { [weak self] image in self?.finishSaveAs(with: image) }
+            window.selectionView?.onOpen = { [weak self] image in self?.finishOpen(with: image) }
             window.selectionView?.onPin = { [weak self, weak window] image, sel in
                 guard let window else { return }
                 let globalFrame = CoordinateUtils.globalRect(
@@ -117,20 +121,23 @@ final class SelectionOverlayController {
                 hovered.copyLoupeColor()
                 return nil
             }
-            // ⌘S：存到預設資料夾；⌘⇧S：另存為（Save As 慣例）。有有效框才作用。
-            // 走監聽器不走 view keyDown——nonactivating panel 被點擊前收不到 responder
-            // 事件（取色 Shift 的同一教訓）。文字編輯中也攔：saveConfirm 會先落字再存
-            // （與複製同紀律）。
+            // ⌘S：存到預設資料夾；⌘⇧S：另存為（Save As 慣例）；⌘O：存檔並用外部程式開啟。
+            // 有有效框才作用。走監聽器不走 view keyDown——nonactivating panel 被點擊前收不到
+            // responder 事件（取色 Shift 的同一教訓）。文字編輯中也攔：三條路徑都會先落字再存
+            // （與複製同紀律）。⇧⌘O 未定義 → 不攔，讓事件過去。
             if event.modifierFlags.contains(.command),
                !event.modifierFlags.contains(.control),
                !event.modifierFlags.contains(.option),
-               event.charactersIgnoringModifiers?.lowercased() == "s",
+               let key = event.charactersIgnoringModifiers?.lowercased(),
+               key == "s" || (key == "o" && !event.modifierFlags.contains(.shift)),
                let views = self?.windows.compactMap({ $0.selectionView }),
                !views.contains(where: { $0.isComposingText }),   // 組字中讓位 IME（比照 Esc）
                // 多螢幕兩邊都有框：優先「使用者最後互動的視窗」（比照看門狗搶救歸屬）
                let target = (self?.lastInteractedWindow?.selectionView.flatMap { $0.hasValidSelection ? $0 : nil })
                             ?? views.first(where: { $0.hasValidSelection }) {
-                if event.modifierFlags.contains(.shift) {
+                if key == "o" {
+                    target.openConfirm()
+                } else if event.modifierFlags.contains(.shift) {
                     target.saveAsConfirm()
                 } else {
                     target.saveConfirm()
@@ -279,6 +286,14 @@ final class SelectionOverlayController {
         handler?(image)
     }
 
+    /// 「存檔並開啟」：同樣先 dismiss 再交付——overlay 收掉後才把焦點讓給外部 App，
+    /// 否則 overlay 還蓋在畫面上、外部程式在它底下開起來。
+    private func finishOpen(with image: NSImage) {
+        let handler = onOpen
+        dismiss()
+        handler?(image)
+    }
+
     private func finishPin(with image: NSImage, frame: CGRect) {
         let handler = onPin
         dismiss()
@@ -302,6 +317,7 @@ final class SelectionOverlayController {
         onSelect = nil
         onSave = nil
         onSaveAs = nil
+        onOpen = nil
         onPin = nil
         onCancel = nil
         isActive = false

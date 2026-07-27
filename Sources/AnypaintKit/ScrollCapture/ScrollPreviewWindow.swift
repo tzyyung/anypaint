@@ -60,13 +60,15 @@ final class ScrollPreviewWindow: NSWindow {
         let copyButton = NSButton(title: "複製", target: self, action: #selector(copyAction))
         let saveButton = NSButton(title: "存檔", target: self, action: #selector(saveAction))
         let saveAsButton = NSButton(title: "另存", target: self, action: #selector(saveAsAction))
+        let openButton = NSButton(title: "存檔並開啟", target: self, action: #selector(openAction))
+        openButton.toolTip = "存到預設資料夾，並用系統預設的圖片程式開啟（可在那裡繼續標註）"
         let discardButton = NSButton(title: "丟棄", target: self, action: #selector(discardAction))
-        for b in [copyButton, saveButton, saveAsButton, discardButton] {
+        for b in [copyButton, saveButton, saveAsButton, openButton, discardButton] {
             b.bezelStyle = .rounded
             b.translatesAutoresizingMaskIntoConstraints = false
         }
 
-        let buttonRow = NSStackView(views: [copyButton, saveButton, saveAsButton, discardButton])
+        let buttonRow = NSStackView(views: [copyButton, saveButton, saveAsButton, openButton, discardButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
         buttonRow.translatesAutoresizingMaskIntoConstraints = false
@@ -114,6 +116,14 @@ final class ScrollPreviewWindow: NSWindow {
     /// 另存：彈 NSSavePanel 自選位置＋掛自動儲存；不關窗。
     @objc private func saveAsAction() {
         output.saveWithPanel(cgImage: cgImage, vars: vars)
+        output.autoSaveIfEnabled(cgImage: cgImage, vars: vars)
+    }
+
+    /// 存檔並開啟：存到快速儲存路徑後交給系統預設的圖片程式（多數機器＝預覽程式）繼續標註；
+    /// 掛自動儲存（與存檔鈕同紀律）。**不關窗**——外部程式接手後使用者仍可能想回來複製或另存
+    /// （比照複製/存檔的既有語意，只有丟棄與紅鈕才關）。
+    @objc private func openAction() {
+        output.saveAndOpen(cgImage: cgImage, vars: vars)
         output.autoSaveIfEnabled(cgImage: cgImage, vars: vars)
     }
 

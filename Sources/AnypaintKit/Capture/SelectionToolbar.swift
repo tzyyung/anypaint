@@ -14,6 +14,8 @@ final class SelectionToolbar: NSView {
     var onSave: (() -> Void)?
     /// 按「另存為」＝彈 NSSavePanel 自選位置與檔名（spec 修訂：Save As 慣例）。
     var onSaveAs: (() -> Void)?
+    /// 按「存檔並開啟」＝存到預設資料夾後交給系統預設圖片程式（在那裡繼續標註）。
+    var onOpen: (() -> Void)?
     /// 點工具按鈕；再點一次作用中的工具＝取消作用（回傳 nil）。
     var onToolSelected: ((AnnotationTool?) -> Void)?
     var onUndo: (() -> Void)?
@@ -80,6 +82,10 @@ final class SelectionToolbar: NSView {
         let saveAsButton = NSButton()
         configureSymbolButton(saveAsButton, "square.and.arrow.down.on.square", #selector(saveAsAction))
         saveAsButton.toolTip = "另存為…（⇧⌘S）"
+        // 緊鄰存/另存：三顆同屬「落成檔案」語意。symbol 名已實測可解析（macOS 14 最低）。
+        let openButton = NSButton()
+        configureSymbolButton(openButton, "arrow.up.forward.app", #selector(openAction))
+        openButton.toolTip = "存檔並用預設圖片程式開啟（⌘O）"
         let pinButton = NSButton()
         configureSymbolButton(pinButton, "pin", #selector(pinAction))
         pinButton.toolTip = "貼上為浮動圖（⇧↩）"
@@ -91,6 +97,7 @@ final class SelectionToolbar: NSView {
         toolsRow.addArrangedSubview(cancel)
         toolsRow.addArrangedSubview(saveButton)
         toolsRow.addArrangedSubview(saveAsButton)
+        toolsRow.addArrangedSubview(openButton)
         toolsRow.addArrangedSubview(pinButton)
         toolsRow.addArrangedSubview(confirm)
 
@@ -221,5 +228,6 @@ final class SelectionToolbar: NSView {
     @objc private func pinAction() { onPin?() }
     @objc private func saveAction() { onSave?() }
     @objc private func saveAsAction() { onSaveAs?() }
+    @objc private func openAction() { onOpen?() }
 }
 

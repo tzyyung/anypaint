@@ -28,17 +28,24 @@ public final class CaptureOutputService {
 
     /// 展開路徑樣板 → 補 .png → 檔名 fallback → 相對路徑補家目錄 → 碰撞遞增 → 寫檔 → 通知。
     /// quiet：自動儲存失敗不 beep（背景行為不打擾，spec）。
+    ///
+    /// - Returns: **實際寫成功**的檔案 URL；寫檔失敗回 nil。「存檔並開啟」靠這個回傳值決定
+    ///   要不要交給外部 app——不可改用 `resolveURL` 的結果，那只是預定路徑，寫失敗時去開
+    ///   一個不存在的檔會得到系統的錯誤對話框（而不是這裡已經發過的 beep）。
+    @discardableResult
     public func saveExpanding(template: String, image: NSImage,
-                               vars: [String: String], quiet: Bool) {
+                               vars: [String: String], quiet: Bool) -> URL? {
         let url = resolveURL(template: template, vars: vars)
         do {
             try CaptureSaver.writePNG(image: image, to: url)
             if AppSettings.saveNotificationEnabled {
                 SaveNotifier.shared.notifySaved(filename: url.lastPathComponent)
             }
+            return url
         } catch {
             NSLog("anypaint: 存檔失敗 \(error)")
             if !quiet { NSSound.beep() }
+            return nil
         }
     }
 
@@ -86,17 +93,22 @@ public final class CaptureOutputService {
 
     /// 展開路徑樣板 → 補 .png → 檔名 fallback → 相對路徑補家目錄 → 碰撞遞增 → 寫檔 → 通知。
     /// quiet：自動儲存失敗不 beep（背景行為不打擾，spec）。
+    ///
+    /// - Returns: **實際寫成功**的檔案 URL；寫檔失敗回 nil（理由同 NSImage 版）。
+    @discardableResult
     public func saveExpanding(template: String, cgImage: CGImage,
-                               vars: [String: String], quiet: Bool) {
+                               vars: [String: String], quiet: Bool) -> URL? {
         let url = resolveURL(template: template, vars: vars)
         do {
             try CaptureSaver.writePNG(cgImage: cgImage, to: url)
             if AppSettings.saveNotificationEnabled {
                 SaveNotifier.shared.notifySaved(filename: url.lastPathComponent)
             }
+            return url
         } catch {
             NSLog("anypaint: 存檔失敗 \(error)")
             if !quiet { NSSound.beep() }
+            return nil
         }
     }
 
@@ -138,5 +150,45 @@ public final class CaptureOutputService {
             NSLog("anypaint: 另存失敗 \(error)")
             NSSound.beep()
         }
+    }
+
+    // MARK: - 存檔並開啟（交給外部 App 繼續編輯）
+
+    /// 存到快速儲存路徑，再把檔案交給系統的預設 PNG 程式（多數機器＝預覽程式）。
+    ///
+    /// 刻意**不寫暫存檔**：使用者在外部程式標註完按 ⌘S 會存回這個檔，放系統暫存目錄的話
+    /// 之後會被清掉——他以為存好了、檔案卻消失。存成正式檔則檔名樣板、碰撞遞增、儲存通知
+    /// 全部沿用既有鏈路，外部程式的儲存也自然落在他自己的資料夾。
+    ///
+    /// 也刻意**不指定 `com.apple.Preview`**：走使用者設定的預設程式，他若把 PNG 預設換成
+    /// 別的編輯器，那就是他要的。
+    @discardableResult
+    public func saveAndOpen(image: NSImage, vars: [String: String]) -> Bool {
+        guard let url = saveExpanding(template: AppSettings.quickSavePathTemplate,
+                                      image: image, vars: vars, quiet: false) else {
+            return false   // 寫檔失敗：saveExpanding 已 beep 過，不再重複
+        }
+        return openInDefaultApp(url)
+    }
+
+    /// CGImage 版（長圖直寫路徑）；語意與 NSImage 版相同。
+    @discardableResult
+    public func saveAndOpen(cgImage: CGImage, vars: [String: String]) -> Bool {
+        guard let url = saveExpanding(template: AppSettings.quickSavePathTemplate,
+                                      cgImage: cgImage, vars: vars, quiet: false) else {
+            return false
+        }
+        return openInDefaultApp(url)
+    }
+
+    /// `NSWorkspace.open` 回的是 Bool 而不是拋錯（已查 SDK header；非 deprecated）——
+    /// 不處理的話「按了沒反應」完全無從查起，所以這裡一定要 beep + 留 log。
+    private func openInDefaultApp(_ url: URL) -> Bool {
+        let opened = NSWorkspace.shared.open(url)
+        if !opened {
+            NSLog("anypaint: 無法開啟 \(url.path)")
+            NSSound.beep()
+        }
+        return opened
     }
 }

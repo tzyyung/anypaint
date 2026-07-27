@@ -100,6 +100,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                         self?.output.saveWithPanel(image: image, vars: vars)
                         self?.output.autoSaveIfEnabled(image: image, vars: vars)
                     },
+                    onOpen: { [weak self] image in
+                        self?.pinboard.copy(image: image)   // 剪貼簿先有——寫檔或開啟失敗也不白截
+                        self?.output.saveAndOpen(image: image, vars: vars)
+                        self?.output.autoSaveIfEnabled(image: image, vars: vars)
+                    },
                     onPin: { [weak self] image, frame in
                         self?.pinboard.copy(image: image)                    // 決策：貼＝同時複製
                         self?.pinController.pin(image: image, frame: frame)

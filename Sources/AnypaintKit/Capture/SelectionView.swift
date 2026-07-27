@@ -137,6 +137,8 @@ final class SelectionView: NSView {
     var onSave: ((NSImage) -> Void)?
     /// 按下「另存為」→ 回傳裁切影像（AppDelegate 負責彈對話框＋寫檔）。
     var onSaveAs: ((NSImage) -> Void)?
+    /// 按下「存檔並開啟」→ 回傳裁切影像（AppDelegate 負責寫檔＋交給外部 App）。
+    var onOpen: ((NSImage) -> Void)?
     /// 取消（Esc / 右鍵 / 工具列取消）。
     var onCancel: (() -> Void)?
     /// 任何互動 → 通知 controller 重置看門狗。
@@ -152,6 +154,7 @@ final class SelectionView: NSView {
         toolbar.onPin = { [weak self] in self?.pinConfirm() }
         toolbar.onSave = { [weak self] in self?.saveConfirm() }
         toolbar.onSaveAs = { [weak self] in self?.saveAsConfirm() }
+        toolbar.onOpen = { [weak self] in self?.openConfirm() }
         toolbar.onCancel = { [weak self] in self?.onCancel?() }
         toolbar.onToolSelected = { [weak self] tool in
             guard let self else { return }
@@ -318,7 +321,18 @@ final class SelectionView: NSView {
         onSaveAs?(image)
     }
 
-    /// 有效框（controller 監聽器的 ⌘S 路由依賴）。
+    /// 「存檔並開啟」的完成路徑：與 saveConfirm() 同紀律，差別只在交給 onOpen。
+    func openConfirm() {
+        commitTextEditing()
+        guard hasValidSelection else { return }
+        guard let image = currentCroppedImage() else {
+            onCancel?()   // 有框但裁切失敗 → 維持與 confirm() 一致：取消
+            return
+        }
+        onOpen?(image)
+    }
+
+    /// 有效框（controller 監聽器的 ⌘S／⌘O 路由依賴）。
     var hasValidSelection: Bool {
         guard let sel = selection else { return false }
         return sel.width > minSize && sel.height > minSize
