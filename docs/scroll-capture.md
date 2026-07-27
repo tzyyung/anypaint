@@ -147,6 +147,8 @@ pairwise＋校正組合；只做 pairwise 串接才會 drift。
 取樣的兩個方向**不對稱**：垂直位移的資訊在**水平邊緣**（文字行的上下緣、分隔線），
 所以加大 `colStep` 只是少看幾欄、不損失垂直鑑別力；加大 `rowStep` 則會跳過細橫線而失配
 （實測 rowStep=2 讓「大片純色＋一條 3px 細線」直接失配）。要省成本就動 colStep。
+但 colStep 要**隨影格寬度自適應**：選區寬度沒有下限（只有高度有 320px 門檻），
+細長框上固定 colStep=4 會讓每列只剩十幾個取樣點。
 
 去均值後平坦區對分子分母貢獻都趨零——既不冒充相關，也不壓過有紋理處。
 兩邊皆平坦回 nil（無資訊），**不可**回「完美相關」。
@@ -201,22 +203,28 @@ pairwise＋校正組合；只做 pairwise 串接才會 drift。
   寫診斷、同步呼叫 `finalize()`），而 `finalize()` 會讀 stitcher 的 buffer——快捲時按「完成」
   就會與進行中的 `consume` 競爭同一塊記憶體。
 - **`finish()` 是非同步的**：`finalize()` 排進 engineQueue 才能保證接在最後一格之後。
-  期間使用者仍可能觸發 `cancel()`，所以完成時要再確認狀態，否則會發出第二次 `onFinished`。
+  這開了一個「收尾中」的新窗口（舊版同步 finish 沒有），要一併處理三件事：
+  ① `finish()` 一開始就停看門狗——否則逾時會走 `cancel()`，使用者拿到 nil 而**丟掉已拼好的長圖**；
+  ② `cancel()` 在 `.finishing` 狀態 no-op——長圖已經拼好、只差純計算的 finalize；
+  ③ 完成時再確認狀態，否則會發出第二次 `onFinished`（預覽視窗開兩個）。
+- **收尾判定是 `appendedFrameCount > 1`**：初始值就是 1（基準格），寫成 `>= 1` 會恆真——
+  「一格都沒拼到就靜默」的規則失效，拉框後什麼都沒捲就按完成會開一個只有單張影格的預覽視窗。
 
 ---
 
 ## 7. 驗證
 
 ```bash
-swift run -c release anypaint-selftest        # 純邏輯，目前 346 項
+swift run -c release anypaint-selftest        # 純邏輯，目前 362 項
 ./scripts/build_app.sh release
 open -n -a "$PWD/build.noindex/anypaint.app" --args --scroll-selfcheck
 ```
 
 **三層驗證缺一不可**：
 
-1. **selftest**（346 項）：純邏輯。含位移估計的迴歸矩陣——稀疏度矩陣、跨內容類型
-   （密集文字／深色終端機風／照片類平滑紋理）、病態內容必須拒絕、prior 抗誤導。
+1. **selftest**（362 項）：純邏輯。含位移估計的迴歸矩陣——稀疏度矩陣、跨內容類型
+   （密集文字／深色終端機風／照片類平滑紋理）、病態內容必須拒絕、prior 抗誤導；
+   以及 Snapshot 與 engine 屬性的一致性、0 格靜默、窄選區（寬度**沒有下限**）的步進準確度。
 2. **app 內自檢**：真實 SCStream 擷取＋完整匹配鏈，驗證拼接量落在預期 ±10%。
    `--selfcheck-sparse=1 --selfcheck-height=186 --selfcheck-step=90` 是極端壓力情境。
    **必須 `open -n`**——既有實例會吃掉 `--args`。

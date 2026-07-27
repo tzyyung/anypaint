@@ -154,8 +154,15 @@ public final class ScrollCaptureSelfCheck {
         timer?.invalidate(); timer = nil
         Task { @MainActor in
             await source.stop()
-            let e = engine
-            let finalCG = e?.finalize()
+            guard let engine else { finishNow(); return }
+            // 與 session 同樣的執行緒約定：`finalize()` 會讀 stitcher 的 buffer，必須排到
+            // engineQueue 上才不會與進行中的 `consume` 競爭同一塊記憶體；狀態也一律走 Snapshot。
+            // （這裡原本直接在 MainActor 上呼叫 finalize——修 session 時漏掉了同一個問題。）
+            let (finalCG, state) = await withCheckedContinuation { cont in
+                engineQueue.async {
+                    cont.resume(returning: engine.finalizeSnapshot())
+                }
+            }
             let finalH = finalCG.map { "\($0.width)x\($0.height)" } ?? "nil"
             if let cg = finalCG {
                 try? CaptureSaver.writePNG(cgImage: cg, to: URL(fileURLWithPath: "/tmp/anypaint-selfcheck.png"))
@@ -178,7 +185,7 @@ public final class ScrollCaptureSelfCheck {
             }
             emit("---- 結果 ----")
             emit("收到影格數=\(frames) 背壓丟格=\(dropped) 步數=\(step)")
-            emit("engine 長圖高=\(e?.height ?? -1) appended格數=\(e?.appendedFrameCount ?? -1) 連續失敗=\(e?.consecutiveFailures ?? -1) 已鎖帶=\(e?.isLocked ?? false)")
+            emit("engine 長圖高=\(state.height) appended格數=\(state.appendedFrameCount) 連續失敗=\(state.consecutiveFailures) 已鎖帶=\(state.isLocked)")
             emit("finalize=\(finalH)")
             // 正確性判準（不只「有增長」）：內容每步位移 stepPoints×scale 像素，總共 totalSteps 步，
             // 所以長圖高應該 ≈ 基準格高 + 總位移。只檢查「有增長」會漏掉「拼了但缺內容」
@@ -186,11 +193,11 @@ public final class ScrollCaptureSelfCheck {
             let scale = NSScreen.main?.backingScaleFactor ?? 2
             let baseH = Double(firstFrameHeight)
             let expected = baseH + Double(totalSteps) * Double(stepPoints) * Double(scale)
-            let actual = Double((e?.height ?? 0) + bottomBandCompensation)
+            let actual = Double(state.height + bottomBandCompensation)
             let ratio = expected > 0 ? actual / expected : 0
             emit("預期高≈\(Int(expected)) 實得=\(Int(actual)) 達成率=\(Int(ratio * 100))%")
             // 上下都要卡：只設下限的話「拼太多」（重複內容）也會 PASS——實測曾出現 203% 卻報 PASS。
-            let ok = (e?.appendedFrameCount ?? 0) > 1 && ratio >= 0.9 && ratio <= 1.1
+            let ok = state.appendedFrameCount > 1 && ratio >= 0.9 && ratio <= 1.1
             emit(ok ? "PASS 長圖拼接量正確" : "FAIL 拼接量不足（預期 \(Int(expected))、實得 \(Int(actual))）")
             finishNow()
         }

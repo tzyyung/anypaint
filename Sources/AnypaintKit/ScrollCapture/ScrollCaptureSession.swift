@@ -418,6 +418,10 @@ public final class ScrollCaptureSession {
     private func finish() {
         guard state == .capturing || state == .armed else { return }
         state = .finishing
+        // finalize 是非同步的（排在 engineQueue 上），這段期間看門狗若逾時會走 cancel()，
+        // 使用者就會拿到 nil 而**丟掉已經拼好的長圖**。已經在收尾了，看門狗沒有存在意義。
+        watchdog?.cancel()
+        watchdog = nil
         guard let engine else { completeFinish(image: nil); return }
         let seq = frameSeq
         engineQueue.async { [weak self] in
@@ -454,6 +458,9 @@ public final class ScrollCaptureSession {
 
     private func cancel() {
         guard state != .idle else { return }   // 冪等：teardown 已把 state 設回 idle，擋二次 onFinished（防未來新增呼叫源回歸）
+        // 收尾中不接受取消：長圖已經拼好、只差 finalize（純計算，幾十毫秒），
+        // 此時取消會把使用者要的結果丟掉。舊版 finish 是同步的沒有這個窗口。
+        guard state != .finishing else { return }
         teardown()
         onFinished?(nil, screen?.backingScaleFactor ?? 2)
     }

@@ -110,7 +110,9 @@ public enum ScrollMatcher {
         let n1 = new.downsampled(), p1 = prev.downsampled()
         guard n1.height >= 16 else { return .unknown }
         let limit1 = min(config.globalMaxStep / 2, n1.height - 8)
-        let stepColStep = config.colStep
+        // 欄取樣要對窄影格自適應：選區**寬度沒有下限**（只有高度有 320px 的門檻），
+        // 使用者可以拉細長框。固定 colStep=4 在窄圖上每列只剩十幾個取樣點，訊號不足。
+        let stepColStep = max(1, min(config.colStep, n1.width / 64))
         guard limit1 >= 1 else { return .unknown }
 
         /// L1 座標的分數。負位移＝交換兩圖跑正向（overlapScore 的關係式是 new[r]==ref[r+dy]，

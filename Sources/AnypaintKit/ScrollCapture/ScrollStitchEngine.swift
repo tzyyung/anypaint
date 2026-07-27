@@ -135,8 +135,12 @@ public final class ScrollStitchEngine: @unchecked Sendable {
 
     /// 收尾：產出長圖並附上最終狀態。必須和 `consumeSnapshot` 在同一個佇列上呼叫，
     /// 否則會與進行中的 `consume` 競爭 stitcher 的 buffer。
+    ///
+    /// 判準是 `> 1` 而不是 `>= 1`：`appendedFrameCount` **初始值就是 1**（基準格），
+    /// 所以 `>= 1` 恆真——「一格都沒拼到就靜默」的規則從來沒生效過，
+    /// 拉框後什麼都沒捲就按完成會開一個只有單張影格的預覽視窗。
     public func finalizeSnapshot() -> (image: CGImage?, state: Snapshot) {
-        let image = appendedFrameCount >= 1 ? finalize() : nil
+        let image = appendedFrameCount > 1 ? finalize() : nil
         return (image, snapshot())
     }
 

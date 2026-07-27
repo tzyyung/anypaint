@@ -32,6 +32,8 @@ func runScrollCaptureTests() {
     staticBandTests()
     scrollMatcherTests()
     stepEstimationTests()
+    engineSnapshotTests()
+    narrowSelectionTests()
     displacementRegressionTests()
     scrollStitcherTests()
     scrollGuidanceTests()
@@ -368,6 +370,63 @@ func stepEstimationTests() {
               StepOutcome.unknown)
 }
 
+/// engine 的對外介面（Snapshot）與收尾判定。
+func engineSnapshotTests() {
+    let page = SyntheticPage.make(width: 400, height: 3000, seed: 77)
+    let frameH = 420
+
+    // ① Snapshot 必須與 engine 當下的屬性一致——MainActor 只讀 Snapshot，
+    //    若兩者不同步，診斷與 UI 就會顯示過期資訊。
+    let engine = ScrollStitchEngine(maxHeightPx: 30000)
+    var y = 0
+    var lastState: ScrollStitchEngine.Snapshot?
+    for _ in 0..<8 {
+        let (_, state) = engine.consumeSnapshot(frame: SyntheticPage.window(page, y: y, height: frameH))
+        lastState = state
+        y += 40
+    }
+    if let s = lastState {
+        T.checkEq("snapshot: height 與 engine 一致", s.height, engine.height)
+        T.checkEq("snapshot: appendedFrameCount 一致", s.appendedFrameCount, engine.appendedFrameCount)
+        T.checkEq("snapshot: isLocked 一致", s.isLocked, engine.isLocked)
+        T.checkEq("snapshot: trajectory 一致", s.trajectory, engine.trajectory)
+        T.checkTrue("snapshot: 有拼接進度（高=\(s.height)）", s.height > frameH)
+    } else {
+        T.checkTrue("snapshot: 取得狀態", false)
+    }
+
+    // ② 一格都沒拼到就收尾 → 影像必須是 nil（spec：0 格靜默）。
+    //    `appendedFrameCount` 初始值就是 1（基準格），所以判準必須是 > 1；
+    //    寫成 >= 1 會恆真——拉框後什麼都沒捲就按完成，會開一個只有單張影格的預覽視窗。
+    let idle = ScrollStitchEngine(maxHeightPx: 30000)
+    _ = idle.consumeSnapshot(frame: SyntheticPage.window(page, y: 0, height: frameH))
+    let sameFrame = SyntheticPage.window(page, y: 0, height: frameH)
+    _ = idle.consumeSnapshot(frame: sameFrame)          // 畫面沒變
+    T.checkTrue("snapshot: 0 格拼接 → finalize 回 nil（靜默）", idle.finalizeSnapshot().image == nil)
+
+    // ③ 有拼接時 finalize 要真的產圖
+    T.checkTrue("snapshot: 有拼接 → finalize 產圖", engine.finalizeSnapshot().image != nil)
+}
+
+/// 窄選區：選區**寬度沒有下限**（只有高度有 320px 門檻），使用者可以拉細長框。
+/// 步進估計的欄取樣必須跟著自適應，否則每列只剩十幾個取樣點、訊號不足。
+func narrowSelectionTests() {
+    for width in [120, 200, 400] {
+        let page = SyntheticPage.linedPage(width: width, height: 2000, period: 60,
+                                          lineThickness: 14, identicalRows: false)
+        for d in [3, 24, 90] {
+            let prev = LumaPlane(SyntheticPage.window(page, y: 600, height: 400))
+            let new = LumaPlane(SyntheticPage.window(page, y: 600 + d, height: 400))
+            var got = -999
+            if case let .step(dy, _) = ScrollMatcher.matchStep(new: new, prev: prev,
+                                                               priorStep: d, allowZero: true) {
+                got = dy
+            }
+            T.checkEq("narrow: 寬\(width) 步進\(d) 精確命中", got, d)
+        }
+    }
+}
+
 /// 位移估計的迴歸矩陣。這組是「移除相位相關、改用整區 ZNCC＋軌跡」這個決定的實測依據，
 /// 必須留成迴歸測試——先前正是因為拿**物理上不是純平移**的無效測資做結論，
 /// 才把演算法往錯的方向調了好幾輪。
@@ -432,7 +491,7 @@ func scrollStitcherTests() {
     let h = 600
 
     // 端到端：位移序列 [180, 250, 90]，拼完應逐像素等於 page[0, 600+520)
-    var st = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
+    let st = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
     st.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h))
     var pos = 0
     for dy in [180, 250, 90] {
@@ -448,7 +507,7 @@ func scrollStitcherTests() {
     } else { T.checkTrue("stitcher: finalize", false) }
 
     // 回捲組（裁尾是不可逆操作——此組是防線非裝飾，spec §11）
-    var st2 = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
+    let st2 = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
     st2.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h))
     _ = st2.append(contentFrame: SyntheticPage.window(page, y: 300, height: h), dy: 300)
     T.checkEq("stitcher: 裁尾 120 → 實裁 120", st2.cropTail(120), 120)
@@ -467,7 +526,7 @@ func scrollStitcherTests() {
     } else { T.checkTrue("stitcher: finalize 2", false) }
 
     // 上限＋額度退還：max=1300，600+300=900 → append 500 拒；裁 200 後 append 500 收（1200≤1300）
-    var st3 = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 1300)
+    let st3 = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 1300)
     st3.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h))
     _ = st3.append(contentFrame: SyntheticPage.window(page, y: 300, height: h), dy: 300)
     T.checkTrue("stitcher: 超上限拒收", !st3.append(contentFrame: SyntheticPage.window(page, y: 800, height: h), dy: 500))
@@ -478,7 +537,7 @@ func scrollStitcherTests() {
     // 底帶回裁＋finalize 補回：帶 bottom=50 的影格流
     var f0 = SyntheticPage.window(page, y: 0, height: h)
     SyntheticPage.stamp(&f0, bottom: 50, seed: 88)
-    var st4 = ScrollStitcher(firstFrame: f0, maxHeightPx: 30000)
+    let st4 = ScrollStitcher(firstFrame: f0, maxHeightPx: 30000)
     st4.lockBands(BandInsets(bottom: 50), bottomBandFrom: f0)
     T.checkEq("stitcher: 鎖帶後 base 高 550", st4.height, 550)
     // 內容影格（已扣 bottom）
@@ -497,19 +556,19 @@ func scrollStitcherTests() {
     T.checkEq("stitcher: referenceTail 高度", st.referenceTail(maxHeight: 600).height, 600)
 
     // lockBands 契約組（審查 I1/I2/M4——契約做成可測拒絕）
-    var stc = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
+    let stc = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
     _ = stc.append(contentFrame: SyntheticPage.window(page, y: 300, height: h), dy: 300)
     let hBefore = stc.height
     T.checkTrue("stitcher: 先拼後鎖 → 拒絕", !stc.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h)))
     T.checkEq("stitcher: 拒絕後 buffer 不動", stc.height, hBefore)
-    var std = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: 300), maxHeightPx: 30000)
+    let std = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: 300), maxHeightPx: 30000)
     T.checkTrue("stitcher: 底帶≥高 → 拒絕", !std.lockBands(BandInsets(bottom: 300), bottomBandFrom: SyntheticPage.window(page, y: 0, height: 300)))
-    var ste = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
+    let ste = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 30000)
     let narrow = SyntheticPage.window(page, y: 0, height: h).cropped(x: 0, y: 0, width: 200, height: h)
     T.checkTrue("stitcher: 鎖帶影格寬不符 → 拒絕", !ste.lockBands(.zero, bottomBandFrom: narrow))
     T.checkTrue("stitcher: 合法鎖帶仍成功", ste.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h)))
     // appendedFrameCount 語意（審查 M3）：dy≤0 no-op 不計、超限不計、成功計
-    var stf = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 700)
+    let stf = ScrollStitcher(firstFrame: SyntheticPage.window(page, y: 0, height: h), maxHeightPx: 700)
     stf.lockBands(.zero, bottomBandFrom: SyntheticPage.window(page, y: 0, height: h))
     T.checkEq("stitcher: 初始 frameCount=1", stf.appendedFrameCount, 1)
     _ = stf.append(contentFrame: SyntheticPage.window(page, y: 0, height: h), dy: 0)
