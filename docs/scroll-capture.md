@@ -34,7 +34,8 @@
 ⌘⇧X
  └─ ScrollCaptureSession（@MainActor，狀態機協調者，不做演算法）
      ├─ ScrollSelectionOverlay   拉框選區
-     ├─ ScrollHUD                進度與引導訊息
+     ├─ ScrollHUD                進度與引導訊息（文案）
+     ├─ ScrollGuidance           該說什麼話的決策（純邏輯）
      ├─ ScrollFrameSource        SCStream 供格（30fps，只在畫面變動時供）
      └─ engineQueue（序列佇列，背景）
          └─ ScrollStitchEngine   影格消化：軌跡＋匹配＋拼接
@@ -43,10 +44,14 @@
              ├─ StaticBandDetector 靜態帶偵測（純邏輯）
              └─ ScrollStitcher     長圖 buffer（純邏輯）
  └─ ScrollPreviewWindow          結束後的預覽
+
+PixelBuffer.swift  共用型別：PixelBuffer / LumaPlane / BandInsets / ScrollCoords（座標鏈）
+ScrollCaptureSelfCheck.swift  自檢工具（見 §7），不參與正式流程
 ```
 
-**分層原則**：`ScrollMatcher` / `ScrollTrajectory` / `StaticBandDetector` / `ScrollStitcher`
-不碰 AppKit 也不碰 SCStream，所以能在 `anypaint-selftest` 用合成影格端到端驗證。
+**分層原則**：`ScrollMatcher` / `ScrollTrajectory` / `StaticBandDetector` / `ScrollStitcher` /
+`ScrollGuidance` 與 `PixelBuffer.swift` 裡的型別都不碰 AppKit 也不碰 SCStream，
+所以能在 `anypaint-selftest` 用合成影格端到端驗證。
 engine 也不碰 UI；session 只負責「誰在什麼時候呼叫誰」。
 
 ---
@@ -70,11 +75,13 @@ consume(frame)
  │     ├─ dy < 0 → cropTail（回捲撤回）
  │     └─ 失敗   → ⑤
  │
- └─ ⑤ 救援
-       ├─ Vision 全圖對位（獨立第二意見，必經 matcher 複核）
-       ├─ 軌跡還有餘裕 → awaitingOverlap（等下一格，不猜）
-       ├─ 再等會失去重疊 → 依軌跡外推接上，標記 appendedApproximate
-       └─ 步進也估不出且推測額度用盡 → rejected（HUD 提示回捲）
+ └─ ⑤ 救援（**順序有意義，不可對調**）
+       ├─ a. Vision 全圖對位（獨立第二意見，必經 matcher 複核）
+       ├─ b. 步進估不出**且**速度推測額度已用盡 → rejected（HUD 提示回捲）
+       │     這一關必須排在 c/d 前面：此時 pendingDy 全部來自推測、不可信，
+       │     拿它去等待或外推只會把錯誤內容拼進長圖。
+       ├─ c. 軌跡還有餘裕 → awaitingOverlap（等下一格，不猜）
+       └─ d. 再等會失去重疊 → 依軌跡外推接上，標記 appendedApproximate
 ```
 
 ---
@@ -157,14 +164,16 @@ pairwise＋校正組合；只做 pairwise 串接才會 drift。
 
 ```
 有軌跡 prior（常態）
-  → L1 掃 ±6（0.067ms/次）→ L0 精修 ±2（0.631ms/次）→ 全列 ZNCC 複評
-  → 過閘則接受（實測 4.6ms）；不過閘則落到下面
+  → L1 掃 ±6 → L0 精修 ±2 → 全列 ZNCC 複評
+  → 過閘則接受；不過閘則落到下面
 
 全域候選複評
   → L2 全域掃，收自適應候選集（分數 < best×3、間隔 > 排除窗、上限 8）
   → 每個候選在 L1 精修排序 → 只有前 2 名進 L0 全列
   → 比值閘一律在**原解析度**判定
 ```
+
+兩條路徑的成本見 §7 的基準表。
 
 粗掃層（L2）只**提名候選**，不做生死裁決——它的分數常糊在一起，而原解析度是乾淨的。
 
@@ -232,10 +241,22 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --scroll-selfcheck
 
 合成測試通過 ≠ 實機可用。軌跡架構的三個 bug 全是在 selftest 全綠時由實機自檢抓出來的。
 
-**效能基準**（1957×736，release）：engine 端到端每格約 21ms，實機自檢最慢單格 27ms，
-30fps 的預算是 33ms。改動熱路徑後要重量——先用一次性 probe 量出成分再改，
-不要憑推理優化（實測推翻過「fingerprint 重複計算」「診斷字串」這兩個看似浪費的假設，
-它們分別只有 0.001ms 與 0.008ms）。
+**效能基準**（release，2026-07-27 量測）。成本與影格面積成正比，**不標尺寸的數字沒有意義**——
+專案裡的效能數字以這張表為準，其他文件不要各自記一份：
+
+| | 1957×736（實機） | 1485×366 |
+|---|---|---|
+| `matchStep`（有 prior） | 4.0 ms | 1.5 ms |
+| `matchStep`（開場，無 prior） | 5.8 ms | 1.8 ms |
+| `match`（軌跡 prior 快路徑） | 12.0 ms | 3.6 ms |
+| `match`（全域候選複評） | 20.6 ms | 5.9 ms |
+| **engine 端到端每格** | **21 ms** | 6.7 ms |
+
+30fps 的預算是 33 ms/格；實機自檢最慢單格 27 ms。
+
+改動熱路徑後要重量——**先用一次性 probe 量出成分再改，不要憑推理優化**。
+實測推翻過「fingerprint 重複計算」「診斷字串」這兩個看似浪費的假設
+（分別只有 0.001ms 與 0.008ms），真正的熱點是 `matchStep`。
 
 診斷欄位怎麼讀：
 

@@ -7,14 +7,14 @@ macOS / Swift / AppKit / ScreenCaptureKit 的實測經驗。**每一條都是實
 
 ```bash
 swift build                                  # 編譯錯誤迭代
-swift run -c release anypaint-selftest       # 純邏輯測試（release 才快；目前 302 項）
+swift run -c release anypaint-selftest       # 純邏輯測試（release 才快；目前 362 項）
 ./scripts/build_app.sh release               # 組 .app（滾動截圖務必用 release，見下）
 bash scripts/menu.sh                         # 互動選單（選 8＝滾動截圖自檢）
 ```
 
 - **測試基線是硬約束**：`swift run -c release anypaint-selftest 2>&1 | grep -c "^✅"`，
   任何改動後不得低於基線且 `grep -c "^❌"` 必須是 0。
-- **debug build 的影像匹配慢約 50 倍**（實測單格 1.3–1.7 秒 vs release 30–46ms）。
+- **debug build 的影像匹配慢約 50 倍**（實測單格 1.3–1.7 秒 vs release 21ms）。
   滾動截圖在 debug 下**不可用**：主執行緒被塞爆 → 計時器／HUD／事件監聽全部餓死。
   `menu.sh` 的 dev app 因此改用 release。
 - commit **一律不加 Claude 落款**（無 Co-Authored-By），訊息用繁中。
@@ -90,12 +90,13 @@ Vision 全圖對位在**完全沒有重疊**的影格上仍會給出看似合理
 **最容易估的題目反而被 `minDelta=14` 拒絕掉**。
 
 現在的兩層結構（文獻上 video mosaicing 的 pairwise＋校正）：
-1. `matchStep` 對上一格估位移（L1 做＋拋物線次像素插值，實測四類內容 44/44 誤差 0，2.7ms）
+1. `matchStep` 對上一格估位移（L1 做＋拋物線次像素插值，實測四類內容 44/44 誤差 0）
 2. 軌跡累積成預測位移，當主匹配的強 prior，搜尋窗縮到 ±12px（週期解進不了窗）
 3. 寫進長圖的位移**永遠**由對長圖尾端的原解析度全列 ZNCC 裁決 → drift 不進長圖
 
-實測主路徑 4.6ms（舊的全域路徑 7.9ms），而且抗誤導：餵行倍數錯解或荒謬值當 prior，
-仍會 fallback 到全域候選複評找回正解。
+軌跡 prior 還讓主匹配抗誤導：餵行倍數錯解或荒謬值當 prior，仍會 fallback 到全域候選複評
+找回正解。**效能數字一律以 `docs/scroll-capture.md` 為準**（那裡標了量測條件；
+成本與影格面積成正比，不標尺寸的數字沒有意義）。
 
 ### 8. 1-D 投影相位相關已移除（實測是淨負面）
 四種內容類型（密集文字／照片類平滑紋理／稀疏等行距／深色終端機風）各 10 組已知位移實測：
@@ -200,7 +201,7 @@ spec 寫「最小選區 320px」，程式若拿 `selection.height`（**點**）�
     而且測資必須是物理上的純平移（見核心教訓第 0 條——這條讓好幾輪的結論全部作廢）。
   - 自檢的每格 log 含 `f2f=` / `待接=` / `累積=x/提交=y` 欄位。
     `累積` 與 `提交` 長期背離就是軌跡在撞假峰，這是唯一能事後看出軌跡失準的方式。
-  - **基準數據**（供日後比對）：正常密度 40 步 → 達成率 99%、每格 25–42ms、零失敗；
+  - **基準數據**（供日後比對）：正常密度 40 步 → 達成率 99%、最慢單格 27ms、零失敗；
     極端稀疏（`--selfcheck-sparse=1 --selfcheck-height=186 --selfcheck-step=90`）→ 96%、零 rejected。
 - **實機基準**（2026-07-27，Chrome 長網頁、**深色主題黑底：第一格平均亮度 22**、
   選區 978×368 點、Retina）：`appended=127`、`appendedApproximate=0`、`rejected=0`、
