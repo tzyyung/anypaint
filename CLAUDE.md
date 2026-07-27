@@ -96,6 +96,26 @@ anypaint 是選單列 app（LSUIElement/.accessory），平時**不是前景**�
 `collectionBehavior=[.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]`（fullscreen app 上才顯示）
 + level 高於其他 overlay 且保證後 orderFront。缺一有坑。
 
+### 局部重繪的前提會被「貫穿全畫面的元素」打破（2026-07-27 實機）
+`setNeedsDisplay(rect)` 這類局部重繪的優化，前提是「要更新的東西都在游標附近」。
+加一條貫穿全螢幕的十字參考線就直接違反它——線在那塊之外的舊像素沒被清 → 殘影。
+三個各自獨立的坑，全部由實機回報抓出（selftest 測不到繪製）：
+
+1. **dirty 範圍要含線的整條帶**，且各點的帶要**分開 `setNeedsDisplay`、不要 union**
+   （兩條交叉線的外接矩形就是整個畫面，union 等於放棄局部重繪）。
+2. **清除不能依賴「前一個事件的座標」**：不同路徑用不同 invalidate 方式（prime 走全重繪、
+   hover 走局部），加上 AppKit 合併重繪、macOS 合併 mouseMoved，那個值隨時與畫面脫鉤。
+   要記錄**上次真的畫出去的位置**（`SelectionView.lastDrawnCrosshair`），清除就與事件配對無關。
+3. **`draw` 裡畫整個 `bounds` 而不是 `dirtyRect`**：低頻時看不出來，一旦每次滑鼠移動都重繪
+   （全螢幕背景圖 2880×1864）就跟不上快速移動。畫 `dirtyRect` 並用 `.copy`（最底層不需混合）。
+
+### 疊色描邊在「主線與背景同色」時會掏空中心（2026-07-27 實機）
+要讓參考線在任何背景上都看得見，**別用「粗黑線 ＋ 細白線疊正中央」的描邊**：
+白背景上白線融進背景消失，黑框的中心被它掏空 → **看起來是兩條平行線**。
+正解是**同寬兩層、黑白交錯成單一條線**（白色實線 ＋ 同寬黑色 dash 疊同位置，
+同 Photoshop 選取框／Figma 參考線）：任一背景下消失掉一半，剩下的仍在同一條線上。
+（也試過「黑實線＋白虛線疊同位置」指望間隙露出黑線提供對比——亮背景下不明顯。）
+
 ### 單位：點 vs 像素
 spec 寫「最小選區 320px」，程式若拿 `selection.height`（**點**）直接比 320，Retina 上等於
 640px、比設計嚴格一倍（實測 600px 的合格選區被誤擋；已修，見 `ScrollCaptureSession.enterArmed`）。

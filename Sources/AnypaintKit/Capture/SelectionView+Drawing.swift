@@ -6,9 +6,13 @@ extension SelectionView {
     // MARK: 繪製
 
     override func draw(_ dirtyRect: NSRect) {
-        backgroundImage.draw(in: bounds)
+        // 只畫 dirty 範圍而不是整個 bounds：十字線的重繪帶是「幾點寬 × 全高」的細長條，
+        // 每次滑鼠移動若都重畫整張 2880×1864 的背景圖，會跟不上快速移動（實機回報：
+        // overlay 剛出現、背景變暗那一刻快速移動會看到殘影）。
+        // .copy 而非預設的 .sourceOver——這是最底層，不需要混合。
+        backgroundImage.draw(in: dirtyRect, from: dirtyRect, operation: .copy, fraction: 1.0)
         NSColor.black.withAlphaComponent(0.35).setFill()
-        bounds.fill()
+        dirtyRect.fill()
 
         // 視窗偵測候選框（未框選＋無工具）：提亮候選區＋accent 邊框（spec）。
         // 按下滑鼠（selection 已設為零尺寸框）到放開之間不畫——單擊瞬間的短暫消失可接受。
@@ -98,12 +102,66 @@ extension SelectionView {
             }
         }
 
-        // 放大鏡準星：hover（未框選）或拖曳時顯示，方便像素級對齊
+        // 對齊輔助：十字參考線在下、放大鏡在上（否則線會穿過放大鏡）。
+        // 兩者共用 activeLoupePoint 的時機判斷——都是「正在決定位置」的時候。
         if let lp = activeLoupePoint() {
+            drawCrosshairGuides(at: lp)
             drawLoupe(at: lp)
+        } else {
+            // 這一幀不畫十字線（進入標註階段等）：清掉記錄，否則之後的 invalidate 會一直
+            // 多標一條早已不存在的線。
+            lastDrawnCrosshair = nil
         }
 
         if let secs = watchdogWarningSeconds { drawWatchdogBanner(seconds: secs) }
+    }
+
+    /// 貫穿全螢幕的十字參考線：跟著游標，方便把選區邊緣對齊到畫面上的其他元素。
+    ///
+    /// **黑白交錯的單一條線**（同 Photoshop 選取框／Figma 參考線的做法）：先畫 1 點寬的
+    /// 白色實線，再用同寬的黑色 dash 疊在同一位置蓋掉一半 → 白段與黑段輪流。
+    /// 白背景上黑段可見、暗背景上白段可見，而且**永遠只在一個位置、只有一條線**。
+    ///
+    /// 走到這個做法前錯了兩次，都記在這裡免得再繞回去：
+    /// 1. 黑實線＋白虛線疊同位置，指望 dash 間隙露出黑線提供對比 → 亮背景下不明顯：
+    ///    黑線只有 0.55 alpha 又只露一半，視覺上只剩白線在跟白底競爭。
+    /// 2. 改描邊（3 點黑框 ＋ 1 點白線疊正中央）→ **白背景上看起來是兩條平行線**：
+    ///    白線融進白底消失，黑框的中心被它掏空，剩兩側各 1 點的黑邊。
+    ///    描邊在這裡本質上行不通——主線一旦與背景同色就會掏空外框中心。
+    ///
+    /// 座標對齊到像素格再畫——1 點的細線落在半像素上會被反鋸齒糊成兩條淡線，
+    /// 那就失去「精確對齊」的意義了（同 ScreenCaptureKit sourceRect 的像素格對齊考量）。
+    private func drawCrosshairGuides(at p: CGPoint) {
+        let scale = snapshot.scale
+        let x = (p.x * scale).rounded() / scale
+        let y = (p.y * scale).rounded() / scale
+
+        func makeLines() -> [NSBezierPath] {
+            let vertical = NSBezierPath()
+            vertical.move(to: CGPoint(x: x, y: 0))
+            vertical.line(to: CGPoint(x: x, y: bounds.height))
+            let horizontal = NSBezierPath()
+            horizontal.move(to: CGPoint(x: 0, y: y))
+            horizontal.line(to: CGPoint(x: bounds.width, y: y))
+            return [vertical, horizontal]
+        }
+
+        // 白色實線鋪底（暗背景靠它）
+        for path in makeLines() {
+            path.lineWidth = 1
+            NSColor.white.setStroke()
+            path.stroke()
+        }
+        // 黑色 dash 蓋掉一半（亮背景靠它）。兩層**同寬**才會是一條線而不是描邊。
+        // 已查 NSBezierPath.h:110：setLineDash 收 const CGFloat* + count + phase。
+        let dash: [CGFloat] = [4, 4]
+        for path in makeLines() {
+            path.lineWidth = 1
+            path.setLineDash(dash, count: dash.count, phase: 0)
+            NSColor.black.withAlphaComponent(0.9).setStroke()
+            path.stroke()
+        }
+        lastDrawnCrosshair = CGPoint(x: x, y: y)   // 記已對齊的座標——清除時要標的正是這個位置
     }
 
     private func loupeRect(at p: CGPoint) -> CGRect {
@@ -139,6 +197,30 @@ extension SelectionView {
             dirty = dirty.union(loupeRect(at: p).insetBy(dx: -60, dy: -70))
         }
         if !dirty.isNull { setNeedsDisplay(dirty) }
+
+        // 十字線**貫穿全螢幕**，只重繪放大鏡附近會讓舊線留在畫面上（實機回報的殘影）。
+        // 各點的細帶**各自標記、不 union**——兩條交叉線的外接矩形就是整個畫面，
+        // union 起來等於放棄這裡的局部重繪優化（它存在的理由是避免每次滑鼠移動都重畫
+        // 整張全螢幕背景圖）。
+        // AppKit 若保留多矩形 dirty region 就只重繪這幾條細帶；若合併成外接矩形則退化成
+        // 全重繪——**兩種情況都正確**，差別只在成本。
+        //
+        // 一定要含 lastDrawnCrosshair：a/b 來自 hover 事件，而畫面上那條線可能是別的路徑
+        // （primeHoverState 的全重繪）畫的、或事件被合併而錯過——漏標它就是殘影。
+        for p in [a, b, lastDrawnCrosshair].compactMap({ $0 }) {
+            setNeedsDisplay(crosshairBandVertical(atX: p.x))
+            setNeedsDisplay(crosshairBandHorizontal(atY: p.y))
+        }
+    }
+
+    /// 十字線的重繪帶：兩層都是 1 點寬，±2 點涵蓋反鋸齒與像素格對齊的位移。
+    /// 這個數字必須跟 drawCrosshairGuides 的最大 lineWidth 連動——標得不夠寬就會留殘影。
+    private func crosshairBandVertical(atX x: CGFloat) -> CGRect {
+        CGRect(x: x - 2, y: 0, width: 4, height: bounds.height)
+    }
+
+    private func crosshairBandHorizontal(atY y: CGFloat) -> CGRect {
+        CGRect(x: 0, y: y - 2, width: bounds.width, height: 4)
     }
 
     /// 放大鏡：裁游標周圍一小塊原始像素、最近鄰放大畫在游標旁，中央十字準星 + 座標。

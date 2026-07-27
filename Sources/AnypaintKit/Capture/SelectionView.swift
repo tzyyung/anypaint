@@ -23,6 +23,13 @@ final class SelectionView: NSView {
     var drag: DragKind?
     var dragPoint: CGPoint?   // 拖曳中的游標位置（放大鏡用）
     var hoverPoint: CGPoint?  // 尚未框選時的 hover 位置（放大鏡用）
+    /// **上次真的畫出去**的十字線位置（已對齊像素格）。
+    ///
+    /// invalidate 不能只靠「hoverPoint 的前一個值」：hover 與 prime 兩條路徑用不同的
+    /// invalidate 方式（局部 vs 全重繪），加上 AppKit 會合併重繪、macOS 會合併 mouseMoved
+    /// 事件——這些都會讓「前一個 hoverPoint」跟畫面上實際存在的那條線脫鉤，漏標就留殘影。
+    /// 記錄實際畫出的位置，清除就與事件配對完全無關。
+    var lastDrawnCrosshair: CGPoint?
     let loupeSide: CGFloat = 110
     let loupeSrcPixels: CGFloat = 22
 
