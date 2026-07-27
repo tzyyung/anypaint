@@ -196,6 +196,16 @@ spec 寫「最小選區 320px」，程式若拿 `selection.height`（**點**）�
     `累積` 與 `提交` 長期背離就是軌跡在撞假峰，這是唯一能事後看出軌跡失準的方式。
   - **基準數據**（供日後比對）：正常密度 40 步 → 達成率 99%、每格 25–42ms、零失敗；
     極端稀疏（`--selfcheck-sparse=1 --selfcheck-height=186 --selfcheck-step=90`）→ 96%、零 rejected。
+- **實機基準**（2026-07-27，Chrome 長網頁、選區 978×368 點、Retina）：
+  `appended=127`、`appendedApproximate=0`、`rejected=0`、`品質有疑慮=false`，
+  `f2f累積=2880` vs `已提交=2874`（drift 0.2%）。
+  同一台機器上的舊架構（相位相關還在）是 `appended=2 / appendedApproximate=88 / rejected=185`，
+  使用者回報症狀為「容易重疊」——近似接合每次錯估都在長圖留一段重複內容。
+  **回歸判準**：`appendedApproximate` 與 `rejected` 應該接近 0；
+  `f2f累積` 與 `已提交` 背離超過幾個百分點就是步進估計在撞假峰。
+- **驗收前務必確認測的是新版**：常駐 app 是啟動時載入映像，重建 binary 不會影響已在跑的實例。
+  實測踩過——使用者拿凌晨啟動的舊實例測當天中午的改動，數據完全誤導。
+  新版 log 每行都有 `step=` 與 `f2f累積=`；沒有這兩個欄位就是舊版在跑。
 - **NSLog 在未公證自簽 app 撈不到**（`log show` 也查不到、從終端跑 stderr 被系統接管）→
   診斷一律直接寫檔案。
 
