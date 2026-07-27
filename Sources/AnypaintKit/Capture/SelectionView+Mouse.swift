@@ -37,7 +37,7 @@ extension SelectionView {
                 } else {
                     handleTextClick(at: p)
                 }
-            case .rect, .ellipse, .line, .arrow, .pixelate:
+            case .rect, .ellipse, .line, .arrow, .pixelate, .measure:
                 shapeAnchor = p
                 provisionalShape = makeShape(tool: tool, from: p, to: p)
                 needsDisplay = true

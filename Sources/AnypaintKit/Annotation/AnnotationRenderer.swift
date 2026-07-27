@@ -87,7 +87,72 @@ public enum AnnotationRenderer {
 
         case .pixelate(let rect):
             drawPixelate(rect: rect, blockSize: a.pixelateBlockSize, in: ctx, sourceProvider: sourceProvider)
+
+        case .measure(let from, let to, let pixelScale):
+            let box = CGRect(x: min(from.x, to.x), y: min(from.y, to.y),
+                             width: abs(to.x - from.x), height: abs(to.y - from.y))
+            let lines = AnnotationGeometry.measurementLines(from: from, to: to,
+                                                            pixelScale: pixelScale)
+            ctx.saveGState()
+            // 虛線框：與矩形工具在視覺上分得開，也暗示這是「量」不是「圈」。
+            ctx.setLineDash(phase: 0, lengths: [max(4, lw * 2), max(3, lw * 1.5)])
+            ctx.stroke(box)
+            // 對角線＝使用者實際拖的那條線。只在有對角線讀數時畫（單軸或極小框都不畫），
+            // 用更細更淡的線，不跟框線搶注意力。
+            if lines.count > 1 {
+                ctx.setLineWidth(max(1, lw * 0.6))
+                ctx.setAlpha(0.7)
+                ctx.move(to: from)
+                ctx.addLine(to: to)
+                ctx.strokePath()
+            }
+            ctx.restoreGState()
+            drawMeasurementLabel(lines, in: box, fill: color,
+                                 textColor: a.style.color.contrastingTextCGColor,
+                                 fontSize: a.textFontSize, in: ctx)
         }
+    }
+
+    /// 測量讀數標籤：色塊底＋對比色字，畫在**框中央**。
+    ///
+    /// 中央而不是框外上方：renderer 不知道畫布邊界（context 可能是任意大小），畫在框外就可能
+    /// 被裁掉；而量間距時細長條的中央本來就是視覺焦點，這也是測量標註的慣例。
+    /// 底色沿用 counter 的做法（色塊＋contrastingTextCGColor），淺色字在淺背景上才看得見。
+    private static func drawMeasurementLabel(_ texts: [String], in rect: CGRect,
+                                             fill: CGColor, textColor: CGColor,
+                                             fontSize: CGFloat, in ctx: CGContext) {
+        guard !texts.isEmpty else { return }
+        let font = CTFontCreateUIFontForLanguage(.system, fontSize, nil)
+            ?? CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
+        let lines: [(line: CTLine, width: CGFloat, ascent: CGFloat, descent: CGFloat)] =
+            texts.map { text in
+                let attr = NSAttributedString(string: text, attributes: [
+                    NSAttributedString.Key(kCTFontAttributeName as String): font,
+                    NSAttributedString.Key(kCTForegroundColorAttributeName as String): textColor
+                ])
+                let ctLine = CTLineCreateWithAttributedString(attr)
+                var ascent: CGFloat = 0, descent: CGFloat = 0
+                let w = CGFloat(CTLineGetTypographicBounds(ctLine, &ascent, &descent, nil))
+                return (ctLine, w, ascent, descent)
+            }
+        let pad = max(3, fontSize * 0.25)
+        let lineHeight = lines.map { $0.ascent + $0.descent }.max() ?? fontSize
+        let boxWidth = (lines.map(\.width).max() ?? 0) + pad * 2
+        let boxHeight = lineHeight * CGFloat(lines.count) + pad * 2
+        let box = CGRect(x: rect.midX - boxWidth / 2, y: rect.midY - boxHeight / 2,
+                         width: boxWidth, height: boxHeight)
+        ctx.saveGState()
+        ctx.setFillColor(fill)
+        ctx.addPath(CGPath(roundedRect: box, cornerWidth: 3, cornerHeight: 3, transform: nil))
+        ctx.fillPath()
+        // 由上往下排：第一行貼 box 頂緣。基線算法比照 drawLine 的 text 案例（+descent），
+        // 兩種 context（畫面預覽與最終合成）的翻轉都已由既有 text 標註驗證過。
+        for (index, item) in lines.enumerated() {
+            let baselineY = box.maxY - pad - lineHeight * CGFloat(index + 1) + item.descent
+            ctx.textPosition = CGPoint(x: box.minX + pad, y: baselineY)
+            CTLineDraw(item.line, ctx)
+        }
+        ctx.restoreGState()
     }
 
     /// 單行文字畫進 context（CoreText）。baselineAt 依 ascent/descent 回傳「錨點」：

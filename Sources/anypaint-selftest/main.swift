@@ -576,6 +576,68 @@ if case .freehand(let pts) = scPen.shape {
     checkEq("scaled：freehand 全點平移（同尺寸映射）", pts[0], CGPoint(x: 10, y: 0))
 } else { failures += 1; print("❌ scaled freehand：型別跑掉") }
 
+// 20b) 測量工具：讀數選擇（純函式）＋對角線＋pixelScale 隨標註走
+// 座標系是 view 座標（左下原點、y 向上）——dy > 0 是往上，決定對角線箭頭方向。
+// 讀數一律像素。非 Retina（scale 1）：點＝像素。
+func mLines(_ fx: CGFloat, _ fy: CGFloat, _ tx: CGFloat, _ ty: CGFloat,
+            scale: CGFloat = 1) -> [String] {
+    AnnotationGeometry.measurementLines(from: CGPoint(x: fx, y: fy),
+                                        to: CGPoint(x: tx, y: ty), pixelScale: scale)
+}
+
+checkEq("測量：兩維都夠大 → 尺寸＋對角線兩行",
+        mLines(0, 0, 248, 96), ["248 × 96 px", "↗ 266 px"])
+checkEq("測量：細長橫條 → 只給水平長度（單行）",
+        mLines(0, 0, 160, 2), ["160 px"])
+checkEq("測量：細長直條 → 只給垂直長度（單行）",
+        mLines(0, 0, 3, 96), ["96 px"])
+checkEq("測量：兩維都小（剛開始拖）→ 只給尺寸，對角線無意義",
+        mLines(0, 0, 3, 5), ["3 × 5 px"])
+// Retina：點 × 2 = 像素。這是整個測量功能的核心換算（單位錯了數字就全錯）。
+checkEq("測量：Retina 點→像素 ×2（含對角線）",
+        mLines(0, 0, 124, 48, scale: 2), ["248 × 96 px", "↗ 266 px"])
+// 細長判定用像素：3 點高在 Retina 上是 6px（< 8）→ 仍算細長；scale 1 時 3px 也算細長。
+checkEq("測量：細長門檻按像素判定（Retina 3 點 = 6px 仍算細長）",
+        mLines(0, 0, 80, 3, scale: 2), ["160 px"])
+// 5 點高在 Retina 上是 10px（≥ 8）→ 不算細長，給兩維＋對角線
+checkEq("測量：Retina 5 點 = 10px 不算細長",
+        mLines(0, 0, 80, 5, scale: 2), ["160 × 10 px", "↗ 160 px"])
+// 3-4-5 直角三角形：對角線必須正好 5 倍（驗算術而非只驗格式）
+checkEq("測量：對角線＝hypot（3-4-5 驗算）",
+        mLines(0, 0, 30, 40), ["30 × 40 px", "↗ 50 px"])
+
+// 四個方向的箭頭符號（y 向上：dy>0＝往上）
+checkEq("測量：右上＝↗", mLines(0, 0, 30, 40)[1], "↗ 50 px")
+checkEq("測量：右下＝↘", mLines(0, 40, 30, 0)[1], "↘ 50 px")
+checkEq("測量：左上＝↖", mLines(30, 0, 0, 40)[1], "↖ 50 px")
+checkEq("測量：左下＝↙", mLines(30, 40, 0, 0)[1], "↙ 50 px")
+// 反向拖曳的尺寸讀數不受方向影響（只有箭頭方向不同）
+checkEq("測量：反向拖曳尺寸相同", mLines(30, 40, 0, 0)[0], mLines(0, 0, 30, 40)[0])
+
+// pixelScale 綁在 shape 上：平移與縮放都不能改動它，否則讀數會在操作後失真。
+var mAnn = Annotation(shape: .measure(from: CGPoint(x: 10, y: 10),
+                                      to: CGPoint(x: 110, y: 50), pixelScale: 2),
+                      style: AnnotationStyle(color: .red, lineWidth: 4))
+checkEq("測量：bounds＝端點正規化矩形", mAnn.bounds, CGRect(x: 10, y: 10, width: 100, height: 40))
+checkTrue("測量：可用四角 handle 縮放", mAnn.isCornerResizable)
+checkTrue("測量：面積類命中測試", mAnn.hitTest(CGPoint(x: 60, y: 30)))
+mAnn.move(by: CGVector(dx: 5, dy: -5))
+if case .measure(let a, let b, let sc) = mAnn.shape {
+    checkEq("測量：平移後起點位移", a, CGPoint(x: 15, y: 5))
+    checkEq("測量：平移後終點位移", b, CGPoint(x: 115, y: 45))
+    checkEq("測量：平移不改 pixelScale", sc, 2)
+} else { failures += 1; print("❌ 測量 move：型別跑掉") }
+let mBefore = mAnn.bounds
+mAnn.scaled(from: mBefore, to: CGRect(x: mBefore.minX, y: mBefore.minY,
+                                      width: mBefore.width * 2, height: mBefore.height))
+if case .measure(let a, let b, let sc) = mAnn.shape {
+    checkEq("測量：縮放後寬變兩倍", abs(b.x - a.x), 200)
+    checkEq("測量：縮放不改 pixelScale", sc, 2)
+    checkEq("測量：縮放後讀數＝新尺寸",
+            AnnotationGeometry.measurementLines(from: a, to: b, pixelScale: sc)[0],
+            "400 × 80 px")
+} else { failures += 1; print("❌ 測量 scaled：型別跑掉") }
+
 // 21) clearRedo
 let rdoc = AnnotationDocument()
 rdoc.add(Annotation(shape: .rect(CGRect(x: 0, y: 0, width: 5, height: 5)),

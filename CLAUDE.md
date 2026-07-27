@@ -98,8 +98,25 @@ anypaint 是選單列 app（LSUIElement/.accessory），平時**不是前景**�
 
 ### 單位：點 vs 像素
 spec 寫「最小選區 320px」，程式若拿 `selection.height`（**點**）直接比 320，Retina 上等於
-640px、比設計嚴格一倍（實測 600px 的合格選區被誤擋）。**跨層傳遞尺寸時一律在型別或參數名
-標明單位**。
+640px、比設計嚴格一倍（實測 600px 的合格選區被誤擋；已修，見 `ScrollCaptureSession.enterArmed`）。
+**跨層傳遞尺寸時一律在型別或參數名標明單位**。
+
+換算比值要問對人（2026-07-27 實測釐清）：
+
+| 來源 | 回什麼 | 備註 |
+|---|---|---|
+| `SCContentFilter.pointPixelScale` | 像素/點 | **擷取影像尺寸就是用它算的**（`ScreenCapturer` config.width/height）→ 要與影像對齊就用它 |
+| `NSScreen.backingScaleFactor` | 像素/點 | 本機兩螢幕實測與上者皆為 2.0，但「總是相等」沒在非整數縮放配置下驗過 |
+| `CGDisplayMode.pixelWidth/pixelHeight` | 真像素 | 內建 1440×932 點 → 2880×1864 像素 |
+| `CGDisplayPixelsWide/High` | **點，不是像素** | 名字騙人（實測回 1440×932）。專案沒用到，別誤用 |
+
+**未驗證的假設（兩處，動到座標換算前先想到它）**：
+1. `ScreenCapturer` 的擷取尺寸用 `filter.contentRect`（點），`frameGlobal` 卻用 `screen.frame`（點）——
+   測量讀數、即時尺寸標籤、裁切座標全都依賴兩者的點尺寸相同，但程式裡沒有任何地方確認。
+   命令列驗不了（`SCContentFilter` 要螢幕錄製權限，終端直跑權限歸終端機、-3801）。
+   間接證據：滾動截圖實機基準影格 1957×736 像素 ≈ 選區 978×368 點的兩倍；尺寸標籤長期無誤。
+2. `ScrollCaptureSession.enterArmed` 拿 `backingScaleFactor` 當 `pointPixelScale` 用（註解自稱
+   「同一顆螢幕上等同」）——本機一致，非整數縮放未驗。
 
 ## ScreenCaptureKit
 
