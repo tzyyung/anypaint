@@ -132,18 +132,18 @@ public final class ScrollCaptureSelfCheck {
             let t0 = ProcessInfo.processInfo.systemUptime
             // 與 session 同樣的約定：engine 狀態一律透過 Snapshot 帶出佇列，
             // 不在 MainActor 上直接讀屬性（見 ScrollStitchEngine 的「執行緒約定」）。
-            let snap = engine.consumeSnapshot(frame: frame)
+            let (outcome, state) = engine.consumeSnapshot(frame: frame)
             let ms = Int((ProcessInfo.processInfo.systemUptime - t0) * 1000)
             Task { @MainActor in
                 guard let self else { return }
                 self.engineBusy = false
                 // 記錄所有「非等待」結果，才看得到從成功轉為永久失敗的斷點
-                if case .waitingForMotion = snap.outcome {} else {
-                    let t = snap.trajectory
-                    self.emit("frame#\(n) step=\(self.step) \(ms)ms → \(snap.outcome) 高=\(snap.height)"
-                        + " f2f=\(snap.stepNote) 待接=\(t.pendingDy)"
+                if case .waitingForMotion = outcome {} else {
+                    let t = state.trajectory
+                    self.emit("frame#\(n) step=\(self.step) \(ms)ms → \(outcome) 高=\(state.height)"
+                        + " f2f=\(state.stepNote) 待接=\(t.pendingDy)"
                         + " 累積=\(t.totalTracked)/提交=\(t.totalCommitted)"
-                        + " matcher=\(snap.matchNote)")
+                        + " matcher=\(state.matchNote)")
                 }
                 self.pump()
             }

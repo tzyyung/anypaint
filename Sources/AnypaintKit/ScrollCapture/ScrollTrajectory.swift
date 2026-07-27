@@ -28,8 +28,6 @@ public struct ScrollTrajectory: Equatable, Sendable {
     /// 診斷用：實際寫進長圖的總量。與 `totalTracked` 的差就是 f2f 的累積 drift，
     /// 兩者長期背離代表 f2f 在撞假峰（寫進 session 診斷）。
     public private(set) var totalCommitted = 0
-    /// 診斷用：連續多少格沒能提交（無資訊／匹配失敗都會累積）。
-    public private(set) var pendingSteps = 0
 
     public init() {}
 
@@ -41,7 +39,6 @@ public struct ScrollTrajectory: Equatable, Sendable {
         pendingDy += dy
         totalTracked += dy
         lastStep = dy
-        pendingSteps += 1
         assumedRun = 0
     }
 
@@ -61,7 +58,6 @@ public struct ScrollTrajectory: Equatable, Sendable {
         guard let last = lastStep, last != 0, assumedRun < maxConsecutive else { return false }
         pendingDy += last
         totalTracked += last
-        pendingSteps += 1
         assumedRun += 1
         return true
     }
@@ -82,14 +78,12 @@ public struct ScrollTrajectory: Equatable, Sendable {
     public mutating func commit(actualDy: Int, minTrustworthy: Int = 14) {
         let remainder = pendingDy - actualDy
         pendingDy = abs(remainder) >= minTrustworthy ? remainder : 0
-        pendingSteps = 0
         totalCommitted += actualDy
     }
 
     /// 回捲已到 session 起點：長圖無法再裁，預測量沒有意義了。
     public mutating func resetToOrigin() {
         pendingDy = 0
-        pendingSteps = 0
         lastStep = nil
     }
 

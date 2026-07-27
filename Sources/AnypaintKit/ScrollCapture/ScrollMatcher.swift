@@ -24,12 +24,10 @@ public enum ScrollMatcher {
         public var minDelta = 14              // 最小可信位移（px，原解析度）
         public var minOverlapFraction = 0.16  // 最小重疊 = max(96, H×此值)
         public var minOverlapPx = 96
-        public var bandCount = 8
-        public var bandHeight = 24            // 原解析度 band 高
         public var ratioGateMin = 1.3         // 次佳/最佳 需 ≥ 此值（次佳排除 ±exclusion）
         public var exclusionRadius = 24       // 次佳排除窗（原解析度 px）
         public var absoluteGateMax: Float = 0.35  // 最佳 band 平均分（1-ZNCC）絕對上限
-        public var worstBandMax: Float = 0.60     // 最差 band 上限（局部污染防線）
+        public var worstBandMax: Float = 0.60     // 重疊區四等分裡最差那份的上限（局部污染防線）
         public var priorWeight = 0.15         // 速度先驗軟懲罰權重
         /// 受信任 prior（軌跡預測）的搜尋半徑（原解析度 px）。要容納 f2f 幾格的累積誤差，
         /// 又要小到讓等行距內容的週期解落在窗外。
@@ -79,6 +77,9 @@ public enum ScrollMatcher {
         public var minRadius = 12
         /// 無 prior 時的全域搜尋上限（原解析度 px），只在開場那格用到。
         public var globalMaxStep = 260
+        /// 欄取樣間隔（比主匹配的 2 疏）。見 `score1` 的說明：垂直位移的資訊在水平邊緣，
+        /// 疏化欄取樣不損失垂直鑑別力，而 f2f 的重疊區極大、是每格最貴的一段計分。
+        public var colStep = 4
         public static let `default` = StepConfig()
 
         public init() {}
@@ -109,13 +110,19 @@ public enum ScrollMatcher {
         let n1 = new.downsampled(), p1 = prev.downsampled()
         guard n1.height >= 16 else { return .unknown }
         let limit1 = min(config.globalMaxStep / 2, n1.height - 8)
+        let stepColStep = config.colStep
         guard limit1 >= 1 else { return .unknown }
 
         /// L1 座標的分數。負位移＝交換兩圖跑正向（overlapScore 的關係式是 new[r]==ref[r+dy]，
         /// 取負等價於把角色互換），一條路徑吃雙向。
+        ///
+        /// 成本控制用 **colStep 而非 rowStep**：垂直位移的資訊在**水平邊緣**（文字行的上下緣、
+        /// 分隔線），水平方向抽樣不會損失它；隔列取樣才會——實測把 rowStep 調成 2 會讓
+        /// 「大片純色＋一條 3px 細線」的測資直接失配（降採樣後那條線只剩 1–2px，隔列剛好跳過）。
+        /// f2f 的重疊區有 95% 以上，是每格最貴的一段計分，所以這裡用比主匹配更疏的欄取樣。
         func score1(_ dy: Int) -> Float {
-            if dy >= 0 { return overlapScore(new: n1, ref: p1, dy: dy, rowStep: 1).mean }
-            return overlapScore(new: p1, ref: n1, dy: -dy, rowStep: 1).mean
+            if dy >= 0 { return overlapScore(new: n1, ref: p1, dy: dy, rowStep: 1, colStep: stepColStep, needsWorst: false).mean }
+            return overlapScore(new: p1, ref: n1, dy: -dy, rowStep: 1, colStep: stepColStep, needsWorst: false).mean
         }
 
         /// L2 全域粗掃找落點（65 候選 × 0.017ms ≈ 1.1ms），回傳 L1 座標的中心。
@@ -127,8 +134,8 @@ public enum ScrollMatcher {
             var best2 = (dy: 0, s: Float.greatestFiniteMagnitude)
             for dy in -limit2...limit2 {
                 if dy == 0, !allowZero { continue }
-                let s = dy >= 0 ? overlapScore(new: n2, ref: p2, dy: dy, rowStep: 1).mean
-                                : overlapScore(new: p2, ref: n2, dy: -dy, rowStep: 1).mean
+                let s = dy >= 0 ? overlapScore(new: n2, ref: p2, dy: dy, rowStep: 1, colStep: stepColStep, needsWorst: false).mean
+                                : overlapScore(new: p2, ref: n2, dy: -dy, rowStep: 1, colStep: stepColStep, needsWorst: false).mean
                 if s.isFinite, s < best2.s { best2 = (dy, s) }
             }
             return best2.s.isFinite ? best2.dy * 2 : nil
@@ -229,7 +236,7 @@ public enum ScrollMatcher {
         let l2Range = max(1, config.minDelta / 4)...max(1, maxDy / 4)
         var scored: [(dy2: Int, raw: Float, ranked: Float)] = []
         for dy in l2Range {
-            let raw = overlapScore(new: n2, ref: r2, dy: dy).mean
+            let raw = overlapScore(new: n2, ref: r2, dy: dy, needsWorst: false).mean
             guard raw.isFinite else { continue }
             var s = raw
             if let p = prior {
@@ -257,7 +264,7 @@ public enum ScrollMatcher {
         var l1Ranked: [(dy1: Int, s: Float)] = []
         for c in candidates {
             let dy1 = refine(new: n1, ref: r1, center: c * 2, radius: 6, rowStep: 2)
-            l1Ranked.append((dy1, overlapScore(new: n1, ref: r1, dy: dy1, rowStep: 2).mean))
+            l1Ranked.append((dy1, overlapScore(new: n1, ref: r1, dy: dy1, rowStep: 2, needsWorst: false).mean))
         }
         l1Ranked.sort { $0.s < $1.s }
 
@@ -301,7 +308,7 @@ public enum ScrollMatcher {
         guard minDy <= maxDy else { return .greatestFiniteMagnitude }
         var best = Float.greatestFiniteMagnitude
         for dy in minDy...maxDy where abs(dy - center) > exclusion {
-            let s = overlapScore(new: n2, ref: r2, dy: dy, earlyExit: best).mean
+            let s = overlapScore(new: n2, ref: r2, dy: dy, earlyExit: best, needsWorst: false).mean
             if s.isFinite, s < best { best = s }
         }
         return best
@@ -313,7 +320,7 @@ public enum ScrollMatcher {
         for dy in max(1, center - radius)...(center + radius) {
             guard dy < new.height else { continue }
             let s = overlapScore(new: new, ref: ref, dy: dy, rowStep: rowStep,
-                                 earlyExit: best.score).mean
+                                 earlyExit: best.score, needsWorst: false).mean
             if s < best.score { best = (dy, s) }
         }
         return best.dy
@@ -348,14 +355,19 @@ public enum ScrollMatcher {
     ///   隔列取樣會讓分數對 ±1px 不敏感甚至排名反轉（實測 dy=201 的分數比正解 dy=200 還低）。
     /// - Note: 接受 `dy == 0`（步進估計要能判定「畫面在變但沒有一致平移」＝局部動畫）。
     ///   此時重疊區＝整格，`(r+dy)*w == r*w`，計分與四等分邏輯都自然成立。
+    /// - Parameter colStep: 欄取樣間隔。**與 rowStep 不對稱**：垂直位移的資訊在水平邊緣，
+    ///   加大 colStep 只是少看幾欄、不影響垂直鑑別力；加大 rowStep 則會跳過細橫線而失配。
+    /// - Parameter needsWorst: 是否要算四等分的最差分。**四等分等於把重疊區再掃一遍**，
+    ///   而所有「找最佳位移」的掃描迴圈都只看 `mean`——那些呼叫一律傳 false。
+    ///   預設留 true 以維持既有語意：誤用時會拿到真實的 worst 而不是靜默放行的假值。
     public static func overlapScore(new: LumaPlane, ref: LumaPlane, dy: Int,
-                                    rowStep: Int = 2,
-                                    earlyExit: Float = .greatestFiniteMagnitude) -> (mean: Float, worst: Float) {
+                                    rowStep: Int = 2, colStep: Int = 2,
+                                    earlyExit: Float = .greatestFiniteMagnitude,
+                                    needsWorst: Bool = true) -> (mean: Float, worst: Float) {
         guard dy >= 0, dy < ref.height else { return (.greatestFiniteMagnitude, .greatestFiniteMagnitude) }
         let overlap = new.height - dy
         guard overlap >= 16 else { return (.greatestFiniteMagnitude, .greatestFiniteMagnitude) }
         let w = new.width
-        let colStep = 2
 
         /// 指定列範圍的 1−ZNCC＋該範圍的每像素變異數（用來判斷這段是否有足夠訊號）。
         /// 無資訊（兩邊皆平坦）回 nil。
@@ -393,6 +405,7 @@ public enum ScrollMatcher {
         guard let whole = zn(0, overlap) else { return (.greatestFiniteMagnitude, .greatestFiniteMagnitude) }
         let mean = whole.score
         if mean > earlyExit { return (.greatestFiniteMagnitude, mean) }
+        guard needsWorst else { return (mean, 0) }
         // 四等分找最差的一份（局部污染防線）。**只看有足夠訊號的區塊**：低紋理區塊的相關性
         // 由雜訊主導、必然趨零，若納入判定會把正常影格誤判成局部污染（實測 ±6 雜訊即誤殺）。
         var worst: Float = 0
@@ -406,33 +419,5 @@ public enum ScrollMatcher {
             lo += q
         }
         return (mean, worst)
-    }
-
-    /// 兩段列區間的 ZNCC（零均值正規化互相關）。1=完全相關、0=不相關。
-    /// 對線性亮度變化免疫（vibrancy／次像素重繪的位準漂移，spec §7.1）。
-    static func zncc(new: LumaPlane, newRow: Int, ref: LumaPlane, refRow: Int,
-                     rows: Int, width: Int) -> Float {
-        let count = rows * width
-        var sumA: Float = 0, sumB: Float = 0
-        for i in 0..<count {
-            sumA += new.v[newRow * width + i]
-            sumB += ref.v[refRow * width + i]
-        }
-        let meanA = sumA / Float(count), meanB = sumB / Float(count)
-        var num: Float = 0, da: Float = 0, db: Float = 0
-        for i in 0..<count {
-            let a = new.v[newRow * width + i] - meanA
-            let b = ref.v[refRow * width + i] - meanB
-            num += a * b; da += a * a; db += b * b
-        }
-        let denom = (da * db).squareRoot()
-        guard denom > 1e-6 else {
-            // 兩邊皆平坦＝**無資訊**（回 .nan 由呼叫端剔除），不可回 1「完美相關」：
-            // 平坦 band 在任何位移下都會投「完美」，把分數曲面抹平 → 最佳與次佳同分 →
-            // 全部判 ambiguous。實測（深色終端機／大片留白的頁面）就是這樣永久拒絕拼接。
-            // 一邊平坦一邊有紋理＝確實不相關，回 0。
-            return (da < 1e-6 && db < 1e-6) ? Float.nan : 0
-        }
-        return num / denom
     }
 }

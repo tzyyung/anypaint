@@ -61,10 +61,13 @@ public enum ScrollStitchOutcome: Equatable, Sendable {
 /// `consume` 寫入同一塊 buffer 就是真的資料競爭（快捲時按「完成」即可撞上）。
 /// 現在改由 `Snapshot` 把資料帶出佇列，讓約定真正成立而不只是宣稱成立。
 public final class ScrollStitchEngine: @unchecked Sendable {
-    /// 一格處理完的狀態快照。呼叫端（MainActor）需要的所有資訊都在這裡，
+    /// engine 的狀態快照。呼叫端（MainActor）需要的所有資訊都在這裡，
     /// 這樣 engine 本身可以嚴格侷限在單一佇列上。
+    ///
+    /// 刻意**不含** outcome：outcome 是「這一格的結果」，而收尾時並沒有這一格
+    /// （硬塞一個假值只會讓呼叫端讀到無意義的欄位）。需要 outcome 的地方由 `consumeSnapshot`
+    /// 一併回傳。
     public struct Snapshot: Sendable {
-        public let outcome: ScrollStitchOutcome
         public let height: Int
         public let consecutiveFailures: Int
         public let appendedFrameCount: Int
@@ -75,25 +78,6 @@ public final class ScrollStitchEngine: @unchecked Sendable {
         public let matchNote: String
     }
 
-    /// 消化一格並回傳狀態快照。**呼叫端只能用回傳值**，不要在別的執行緒讀 engine 屬性。
-    public func consumeSnapshot(frame full: PixelBuffer) -> Snapshot {
-        let outcome = consume(frame: full)
-        return snapshot(outcome: outcome)
-    }
-
-    /// 收尾：產出長圖並附上最終狀態。必須和 `consumeSnapshot` 在同一個佇列上呼叫，
-    /// 否則會與進行中的 `consume` 競爭 stitcher 的 buffer。
-    public func finalizeSnapshot() -> (image: CGImage?, state: Snapshot) {
-        let image = appendedFrameCount >= 1 ? finalize() : nil
-        return (image, snapshot(outcome: .limitReached))
-    }
-
-    private func snapshot(outcome: ScrollStitchOutcome) -> Snapshot {
-        Snapshot(outcome: outcome, height: height, consecutiveFailures: consecutiveFailures,
-                 appendedFrameCount: appendedFrameCount, isLocked: isLocked,
-                 hasQualityDoubt: hasQualityDoubt, trajectory: trajectory,
-                 stepNote: lastStepNote, matchNote: lastMatchNote)
-    }
     public private(set) var appendedFrameCount = 1
     public private(set) var consecutiveFailures = 0
     /// 最近一次 matcher 主判的結果字串（診斷用：區分 ambiguous／lowConfidence／noOverlap）。
@@ -125,15 +109,42 @@ public final class ScrollStitchEngine: @unchecked Sendable {
     private var lastFrameHeight = 0
     /// 上次「實際跑過匹配」的那格指紋（動作判定基準）。
     private var lastProcessedFingerprint: [UInt8]?
-    /// 上一格的完整影格，步進估計的基準。
+    /// 上一格的 luma，步進估計的基準。
     ///
-    /// 刻意存 **full frame** 而非 contentFrame：鎖帶前後 contentFrame 的尺寸會變，
+    /// 存 **luma 而非 PixelBuffer**：luma 轉換是全圖逐像素運算（實測 1.31ms／1957×736），
+    /// 上一格已經算過一次，沒有理由每格再為 prev 重算——記憶體占用兩者相同（都是 4 bytes/px）。
+    ///
+    /// 用 **full frame 的 luma** 而非 contentFrame：鎖帶前後 contentFrame 的尺寸會變，
     /// 存 full 可讓步進估計的兩張圖尺寸永遠一致。靜態帶對 `dy=0` 的偏好不構成問題——
     /// 靜態帶只佔全格一小部分，`dy=0` 時其餘內容不相關，分數過不了步進估計的 0.15 閘。
-    private var prevStepFrame: PixelBuffer?
+    private var prevStepLuma: LumaPlane?
 
     public init(maxHeightPx: Int) {
         self.maxHeightPx = maxHeightPx
+    }
+
+    // MARK: - 對外介面（狀態一律經 Snapshot 帶出佇列）
+
+    /// 消化一格，回傳這格的結果與 engine 狀態。
+    /// **呼叫端只能用回傳值**，不要在別的執行緒讀 engine 屬性。
+    public func consumeSnapshot(frame full: PixelBuffer)
+        -> (outcome: ScrollStitchOutcome, state: Snapshot) {
+        let outcome = consume(frame: full)
+        return (outcome, snapshot())
+    }
+
+    /// 收尾：產出長圖並附上最終狀態。必須和 `consumeSnapshot` 在同一個佇列上呼叫，
+    /// 否則會與進行中的 `consume` 競爭 stitcher 的 buffer。
+    public func finalizeSnapshot() -> (image: CGImage?, state: Snapshot) {
+        let image = appendedFrameCount >= 1 ? finalize() : nil
+        return (image, snapshot())
+    }
+
+    private func snapshot() -> Snapshot {
+        Snapshot(height: height, consecutiveFailures: consecutiveFailures,
+                 appendedFrameCount: appendedFrameCount, isLocked: isLocked,
+                 hasQualityDoubt: hasQualityDoubt, trajectory: trajectory,
+                 stepNote: lastStepNote, matchNote: lastMatchNote)
     }
 
     /// 消化一格。位移的判定完全來自影像——不再接收任何滾輪參數。
@@ -143,7 +154,7 @@ public final class ScrollStitchEngine: @unchecked Sendable {
             stitcher = ScrollStitcher(firstFrame: full, maxHeightPx: maxHeightPx)
             lastAcceptedFullFrame = full
             lastProcessedFingerprint = fingerprint(of: full)   // 基準格也要當動作判定的基準
-            prevStepFrame = full
+            prevStepLuma = LumaPlane(full)
             return .baseCaptured(height: full.height)
         }
         // 動作判定用**影像變化**，不可用滾輪事件量（實機證據：整場 session 累積滾輪只有 3 點，
@@ -162,11 +173,12 @@ public final class ScrollStitchEngine: @unchecked Sendable {
         lastProcessedFingerprint = fingerprint(of: full)
 
         // ① 步進估計：對「上一格」而非長圖尾端。位移小、重疊 95%+，歧義幾乎為零。
-        let step = prevStepFrame.map {
-            ScrollMatcher.matchStep(new: LumaPlane(full), prev: LumaPlane($0),
+        let fullLuma = LumaPlane(full)
+        let step = prevStepLuma.map {
+            ScrollMatcher.matchStep(new: fullLuma, prev: $0,
                                     priorStep: trajectory.lastStep, allowZero: true)
         } ?? .unknown
-        prevStepFrame = full
+        prevStepLuma = fullLuma
         lastStepNote = "\(step)"
         switch step {
         case let .step(_, score): lastStepScore = score

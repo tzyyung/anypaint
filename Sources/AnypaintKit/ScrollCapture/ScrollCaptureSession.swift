@@ -258,20 +258,19 @@ public final class ScrollCaptureSession {
             //
             // engine 的狀態一律透過 Snapshot 帶出佇列——MainActor 不可直接讀 engine 屬性
             // （見 ScrollStitchEngine 的「執行緒約定」）。
-            let snap = engine.consumeSnapshot(frame: frame)
+            let (outcome, state) = engine.consumeSnapshot(frame: frame)
             Task { @MainActor in
                 guard let self else { return }
                 self.engineBusy = false
-                self.lastEngineState = snap
-                self.handle(snapshot: snap)
+                self.lastEngineState = state
+                self.handle(outcome: outcome, state: state)
                 self.pumpEngine()                    // 消化下一格（若期間又收到）
             }
         }
     }
 
-    private func handle(snapshot snap: ScrollStitchEngine.Snapshot) {
-        let outcome = snap.outcome
-        guard state == .capturing else { return }
+    private func handle(outcome: ScrollStitchOutcome, state snap: ScrollStitchEngine.Snapshot) {
+        guard self.state == .capturing else { return }
         frameSeq += 1
         // 只記「非等待」與每 10 格一次，避免檔案爆量
         if !isWaiting(outcome) || frameSeq % 10 == 0 {
@@ -419,14 +418,14 @@ public final class ScrollCaptureSession {
     private func finish() {
         guard state == .capturing || state == .armed else { return }
         state = .finishing
-        guard let engine else { completeFinish(image: nil, state: nil); return }
+        guard let engine else { completeFinish(image: nil); return }
         let seq = frameSeq
         engineQueue.async { [weak self] in
             let (image, endState) = engine.finalizeSnapshot()
             Task { @MainActor in
                 guard let self else { return }
                 self.logFinishSummary(seq: seq, image: image, state: endState)
-                self.completeFinish(image: image, state: endState)
+                self.completeFinish(image: image)
             }
         }
     }
@@ -447,9 +446,8 @@ public final class ScrollCaptureSession {
     /// finalize 是非同步的，期間使用者仍可能按 Esc／⌘⇧X 觸發 `cancel()`——那條路徑會 teardown
     /// 並把 state 設回 idle、也已經發過 `onFinished(nil)`。所以這裡要再確認一次狀態，
     /// 否則會發出**第二次** onFinished（預覽視窗開兩個）。
-    private func completeFinish(image: CGImage?, state finalState: ScrollStitchEngine.Snapshot?) {
+    private func completeFinish(image: CGImage?) {
         guard state == .finishing else { return }
-        _ = finalState
         teardown()
         onFinished?(image, screen?.backingScaleFactor ?? 2)   // 呼叫端（AppDelegate）決定 0/1 格降級與 preview（spec §3）
     }
