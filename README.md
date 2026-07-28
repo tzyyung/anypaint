@@ -1,6 +1,11 @@
 # anypaint
 
-一個 macOS 原生的螢幕截圖 + 貼圖工具，仿 Snipaste 的核心功能。用 Swift + AppKit + ScreenCaptureKit，以 Swift Package Manager 建置（不需 Xcode）。內部代號與識別碼仍為 `anypaint`。
+一個 macOS 原生的螢幕截圖 + 貼圖工具，參考 Snipaste 的核心功能。用 Swift + AppKit + ScreenCaptureKit，以 Swift Package Manager 建置（不需 Xcode）。
+
+<p align="center">
+  <img src="docs/images/toolbar.png" width="820" alt="anypaint 框選截圖與標註工具列"><br>
+  <em>框選任意區域 → 縮放調整 → 用工具列標註 → 複製或存檔。</em>
+</p>
 
 ## 功能
 - 全域快鍵：截圖（預設 `⌘⇧A`）、貼圖（預設 `⌘⇧V`）、滾動截圖（預設 `⌘⇧X`），可在 設定 → 控制 重新錄製。
@@ -29,15 +34,20 @@ swift --version        # 需顯示 Swift 6.0 以上
 ```
 若 Swift 版本過舊：到「系統設定 → 一般 → 軟體更新」更新系統，或安裝 Xcode 16+。
 
-### 步驟 1–3
+### 步驟 1：Clone 並安裝
 ```bash
-git clone <本 repo URL>
+git clone https://github.com/tzyyung/anypaint.git
 cd anypaint
 bash scripts/install.sh
 ```
 安裝腳本會自建並把「anypaint.app」放進 `/Applications`（不可寫時放 `~/Applications`）。裝好後：
 
 1. 開啟後**沒有 Dock 圖示與視窗**——看「選單列右上角」的剪刀圖示。
+
+<p align="center">
+  <img src="docs/images/menubar.png" width="320" alt="選單列的 anypaint 剪刀圖示與選單">
+</p>
+
 2. 首次按截圖快鍵（`⌘⇧A`）時，macOS 會要求螢幕錄製權限：**系統設定 → 隱私權與安全性 → 螢幕錄製 → 允許「anypaint」**。
 3. **授權後必須 `⌘Q` 完全結束再重新開啟**才會生效（僅切開關或再按快鍵不會生效）。
 
@@ -52,27 +62,48 @@ bash scripts/install.sh
 ## 使用
 - 截圖 `⌘⇧A`：拖曳框選 → 可調整/標註 → 按「複製」（或 `Enter`）複製到剪貼簿；工具列另有
   複製文字/存檔/另存/存檔並開啟/貼上。滑鼠移到工具列任一顆鈕，底部會顯示它的用途。
+  - **取色／放大鏡**：框選時有全螢幕十字參考線與像素放大鏡，即時顯示游標處色值；
+    按 `C` 複製色值、`Shift` 切換 RGB／HEX。
+
+    <p align="center">
+      <img src="docs/images/hero-capture.png" width="520" alt="像素放大鏡即時顯示色值，按 C 複製、Shift 切換 RGB/HEX">
+    </p>
   - **複製文字 `⌘T`**：辨識框內文字並複製到剪貼簿，同時開結果窗可檢視／選取局部重新複製。
     框到 QR／條碼時複製其內容（條碼優先於文字——框住 QR 就是想拿裡面的東西）。
+
+    <p align="center">
+      <img src="docs/images/ocr.png" width="760" alt="框選文字後按 ⌘T，辨識結果直接進剪貼簿並開結果窗">
+    </p>
+
   - **測量**（尺規鈕）：拖一下即時顯示像素讀數並烙進圖，不必切換模式——
     斜拉得 `248 × 96 px` ＋ `↗ 266 px`（對角線，畫出你實際拖的那條線）；
     拖成細長條只給那一邊的長度（量間距用）。讀數一律是像素。
-  - **存檔並開啟 `⌘O`**：存到快速儲存資料夾後交給外部 App 繼續編輯（長圖沒有內建標註，
-    這是它的替代路徑）。要用哪個 App 在 設定 → 輸出 → 開啟方式 選；未指定就用系統預設的
-    圖片程式（多數機器＝預覽程式）。檔案是正式檔不是暫存檔，在外部 App 按 `⌘S` 直接存回原處。
+
+    <p align="center">
+      <img src="docs/images/measure.png" width="520" alt="測量工具：拖一下即時顯示像素讀數並烙進圖">
+    </p>
+
+  - **存檔並開啟 `⌘O`**：存檔後交給外部 App 繼續編輯（長圖沒有內建標註時的替代路徑）；
+    用哪個 App 在 設定 → 輸出 → 開啟方式 選。存的是正式檔，在外部 App 按 `⌘S` 直接存回原處。
 - 滾動截圖 `⌘⇧X`：拉框圈住會捲動的內容 → 按「開始」（或滑鼠留在框內滾一下）→ 自己往下捲
   （HUD 顯示已拼接進度；回捲會同步撤回）→ 捲到底自動結束或按「完成」→ 預覽視窗中
   複製（`⌘C`）/存檔（`⌘S`）/另存（`⇧⌘S`）/存檔並開啟（`⌘O`）/丟棄。
+
+  <p align="center">
+    <img src="docs/images/scroll-capture.gif" width="640" alt="滾動截圖：手捲拼接長內容，HUD 顯示進度，完成後預覽">
+  </p>
+
   - **滑鼠要留在框內**；框選高度至少 320 像素（Retina 約 160 點）。
-  - **慢一點捲**最穩：一次跳超過選區高度就會失去重疊，HUD 會提示回捲到斷點附近續接。
+  - **慢一點捲**最穩：一次跳超過選區高度就會失去重疊，HUD 會提示回捲續接。
   - 固定頁首／頁尾與捲軸欄會自動偵測並裁除。
-  - 頁面自己捲動（延遲載入）也會拼進去；廣告／loading 動畫等「原地變動」不會被誤當成捲動。
-  - 若某幾段內容不易辨識，捲到底時 HUD 會請你「往回捲一點再往下捲」確認沒漏——
-    正常情況不會問，只在該次拼接品質有疑慮時才出現。
-  - 若拼接結果不如預期，`/tmp/anypaint-scroll-session.log` 有該次的診斷紀錄可回報。
-  - 運作原理與設計取捨：[`docs/scroll-capture.md`](docs/scroll-capture.md)。
+  - 更多眉角、診斷紀錄與運作原理：[`docs/scroll-capture.md`](docs/scroll-capture.md)。
 - 貼圖 `⌘⇧V`：把剪貼簿影像貼成置頂浮動圖。滾輪縮放、`⌘`+滾輪調透明度、左鍵雙按關閉、`⇧`+雙按切換縮圖、中鍵重設、`⇧`+右鍵 OCR 取字。
 - 設定分四頁：一般（開機啟動）／截圖（看門狗）／輸出（檔名樣板與儲存）／控制（快鍵改鍵＋滑鼠一覽）。
+
+  <p align="center">
+    <img src="docs/images/settings.png" width="480" alt="設定視窗：輸出頁的檔名樣板與儲存選項">
+  </p>
+
 - 檔名樣板語法：`$…$` 日期 token（如 `$yyyy-MM-dd HH.mm.ss$`）、`%…%` 變數；詳見設定頁「命名規則」視窗。
 
 ## 開發
@@ -89,12 +120,9 @@ swift run anypaint-selftest       # 純邏輯自我測試
 > `menu.sh` 的 dev app 已改用 release；`swift build` 僅用於編譯錯誤迭代。
 > 選單第 8 項可執行**滾動截圖自檢**（自動開一個會動的視窗、真實擷取、驗證拼接量，不需人工互動）。
 
-```bash
-```
-
 開發規範與 macOS/AppKit 踩坑紀錄見 `CLAUDE.md`（動手改滾動截圖前務必先讀）。
 
-架構：`Sources/AnypaintKit/`（核心模組）、`Sources/anypaint/`（進入點）、`Sources/anypaint-selftest/`（測試執行檔）。KeyboardShortcuts 為本機 vendored（`vendored/KeyboardShortcuts`，patch 過資源查找）。設計文件見 `docs/superpowers/specs/`。
+架構：`Sources/AnypaintKit/`（核心模組）、`Sources/anypaint/`（進入點）、`Sources/anypaint-selftest/`（測試執行檔）。KeyboardShortcuts 為本機 vendored（`vendored/KeyboardShortcuts`，patch 過資源查找）。
 
 ### 選用：持久簽章身分（給會反覆 rebuild 的開發者）
 ad-hoc 簽章每次 build 識別會變，導致 TCC 螢幕錄製權限每次重置。建立持久自簽身分可讓授權跨重建保留。
