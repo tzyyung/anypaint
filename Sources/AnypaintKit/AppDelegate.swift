@@ -61,6 +61,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.onCloseAllPins = { [weak self] in self?.pinController.closeAll() }
         menuBar.onOpenSettings = { [weak self] in self?.openSettings() }
 
+        // 重拍（overlay 中按 R）：對現在的實況畫面重新凍結（含工具本身），換掉舊 overlay。
+        // 沿用 present() 已存的處理器閉包（含原始 vars），故這裡只需擷取＋換場。
+        overlayController.onReshoot = { [weak self] in self?.reshootOverlay() }
+
         // 全域快鍵（可在設定頁更改；底層為 Carbon，免輔助使用權限）
         KeyboardShortcuts.onKeyDown(for: .capture) { [weak self] in self?.beginCapture() }
         KeyboardShortcuts.onKeyDown(for: .pin) { [weak self] in self?.pinFromClipboard() }
@@ -124,6 +128,22 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 NSLog("anypaint: 擷取失敗 \(error)")
                 NSSound.beep()
+            }
+        }
+    }
+
+    /// 重拍：對現在的實況畫面（overlay 正顯示中）重新凍結，把截圖工具本身也拍進去，
+    /// 再用新快照換掉舊 overlay。showsCursor: true 讓十字游標也入鏡。
+    private func reshootOverlay() {
+        guard overlayController.isActive else { return }
+        Task { @MainActor in
+            do {
+                let snapshots = try await capturer.captureAllDisplays(showsCursor: true)
+                overlayController.reshoot(with: snapshots)
+            } catch {
+                NSLog("anypaint: 重拍擷取失敗 \(error)")
+                NSSound.beep()
+                overlayController.reshootFailed()   // 解旗標，R 還能再按
             }
         }
     }

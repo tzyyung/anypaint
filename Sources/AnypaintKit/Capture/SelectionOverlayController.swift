@@ -43,6 +43,11 @@ final class SelectionOverlayController {
     private var onRecognizeText: ((NSImage, CGRect) -> Void)?
     private var onPin: ((NSImage, CGRect) -> Void)?
     private var onCancel: (() -> Void)?
+    /// 「重拍」（overlay 顯示中按 R）：對現在的實況畫面重新凍結，把工具本身也拍進去。
+    /// 由 AppDelegate 提供實作（擷取 → reshoot(with:)）。
+    var onReshoot: (() -> Void)?
+    /// 重拍的 async 空窗期防重入：擷取還沒回來前再按 R 一律忽略。
+    private var reshootInFlight = false
     private var keyMonitor: Any?
     private var watchdogWarn: DispatchWorkItem?
     private var watchdogFire: DispatchWorkItem?
@@ -79,6 +84,15 @@ final class SelectionOverlayController {
         KeyboardShortcuts.disable(.scrollCapture)
 
         NSApp.activate(ignoringOtherApps: true)
+        buildWindows(snapshots: snapshots)
+        installKeyMonitor()
+        // 逃生路 5：看門狗（免按鍵），互動即重置，秒數可在設定頁調
+        armWatchdog()
+        NSCursor.crosshair.set()
+    }
+
+    /// 用一組快照建立各螢幕的 overlay 視窗，並掛上處理器。present() 與 reshoot() 共用。
+    private func buildWindows(snapshots: [DisplaySnapshot]) {
         for snapshot in snapshots {
             let window = SelectionOverlayWindow(snapshot: snapshot)
             window.selectionView?.onConfirm = { [weak self] image in self?.finish(with: image) }
@@ -114,7 +128,10 @@ final class SelectionOverlayController {
             window.selectionView?.primeHoverState()   // 游標所在螢幕立即有 hover 狀態（修第一擊死區）
             windows.append(window)
         }
+    }
 
+    /// 安裝本地事件監聽器（present() 與 reshoot() 共用）。
+    private func installKeyMonitor() {
         // 逃生路 2：本地事件監聽——Esc 分層（組字讓位 → 編輯中先完成編輯 →
         // 有選取先解除選取 → 否則取消；Task 4 新增「解除選取」這一層）。
         // 取色的 Shift 切換與 C 也走這裡：nonactivating panel 被點擊前收不到
@@ -126,6 +143,20 @@ final class SelectionOverlayController {
                 return event   // 修飾鍵事件一律放行，別破壞系統/IME 的修飾鍵狀態
             }
             self?.armWatchdog()          // 任何鍵都算互動（含文字編輯中打字）
+            // R：重拍——把目前 overlay 的操作畫面連同工具本身拍進新快照。
+            // 比照 C：排除修飾鍵、文字編輯／組字中不攔（讓 r 正常打進編輯器）。
+            // async 空窗期用 reshootInFlight 擋連按。
+            if let self,
+               !event.modifierFlags.contains(.command),
+               !event.modifierFlags.contains(.control),
+               !event.modifierFlags.contains(.option),
+               event.charactersIgnoringModifiers?.lowercased() == "r",
+               !self.reshootInFlight,
+               !self.windows.compactMap({ $0.selectionView }).contains(where: { $0.isEditingText }) {
+                self.reshootInFlight = true
+                self.onReshoot?()
+                return nil
+            }
             // C：取色（放大鏡顯示中）。文字編輯中不攔——讓 c 正常打進編輯器。
             if !event.modifierFlags.contains(.command),
                !event.modifierFlags.contains(.control),
@@ -188,10 +219,30 @@ final class SelectionOverlayController {
             }
             return event
         }
-        // 逃生路 5：看門狗（免按鍵），互動即重置，秒數可在設定頁調
+    }
+
+    /// 重拍（overlay 顯示中按 R）：拆掉目前視窗、用新快照重建，沿用同一組已存的處理器閉包。
+    /// 新快照是「按 R 當下的實況畫面」，含舊 overlay 的十字線／工具列／放大鏡／標註，
+    /// 等於把截圖工具本身拍進去。舊的框選／標註編輯狀態捨棄（已凍進新像素裡）。
+    func reshoot(with snapshots: [DisplaySnapshot]) {
+        guard isActive else { return }
+        // 拆掉舊視窗＋監聽＋看門狗，但保留處理器與 isActive（不走 dismiss，才能無縫換場）。
+        clearWatchdog()
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        for window in windows { window.orderOut(nil) }
+        windows.removeAll()
+        lastInteractedWindow = nil
+        // 用新快照重建（沿用 present() 已存下的 onSelect/onSave/onPin… 閉包）。
+        buildWindows(snapshots: snapshots)
+        installKeyMonitor()
         armWatchdog()
         NSCursor.crosshair.set()
+        reshootInFlight = false
     }
+
+    /// 重拍擷取失敗時呼叫：解除防重入旗標，讓 R 還能再按（overlay 維持原狀不換場）。
+    func reshootFailed() { reshootInFlight = false }
 
     /// 把「選區獨佔權」給某個螢幕：清掉其他螢幕的選區，回傳是否允許。
     ///
@@ -368,6 +419,7 @@ final class SelectionOverlayController {
         for window in windows { window.orderOut(nil) }
         windows.removeAll()
         lastInteractedWindow = nil
+        reshootInFlight = false
         onSelect = nil
         onSave = nil
         onSaveAs = nil

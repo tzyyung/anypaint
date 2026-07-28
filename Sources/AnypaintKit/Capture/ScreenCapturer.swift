@@ -24,7 +24,8 @@ enum CaptureError: Error {
 final class ScreenCapturer {
 
     /// 凍結所有螢幕，各回一張快照。若無螢幕錄製權限會丟 `.noPermission`。
-    func captureAllDisplays() async throws -> [DisplaySnapshot] {
+    /// - Parameter showsCursor: 是否把系統游標拍進畫面（重拍工具本身時設 true，好讓十字游標入鏡）。
+    func captureAllDisplays(showsCursor: Bool = false) async throws -> [DisplaySnapshot] {
         let content: SCShareableContent
         do {
             content = try await SCShareableContent.excludingDesktopWindows(
@@ -50,7 +51,7 @@ final class ScreenCapturer {
             let config = SCStreamConfiguration()
             config.width = Int(filter.contentRect.width * scale)
             config.height = Int(filter.contentRect.height * scale)
-            config.showsCursor = false
+            config.showsCursor = showsCursor
             config.ignoreShadowsDisplay = true
 
             let cgImage = try await SCScreenshotManager.captureImage(
