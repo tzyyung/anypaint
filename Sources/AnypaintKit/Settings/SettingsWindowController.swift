@@ -7,6 +7,9 @@ public final class SettingsWindowController: NSWindowController {
     public init() {
         let tabs = SettingsTabViewController()
         tabs.tabStyle = .toolbar
+        // .toolbar 樣式的 NSTabViewController 會用自己的 title 覆寫視窗標題（nil＝顯示
+        // "Untitled"）——標題要設在 tab controller 上，設在 window.title 會被蓋掉。
+        tabs.title = "anypaint 設定"
         let pages: [(String, String, NSViewController)] = [
             ("一般", "gearshape", GeneralSettingsViewController()),
             ("截圖", "viewfinder", CaptureSettingsViewController()),
@@ -23,7 +26,6 @@ public final class SettingsWindowController: NSWindowController {
                                             pages.count - 1)
 
         let window = NSWindow(contentViewController: tabs)
-        window.title = "anypaint 設定"
         window.styleMask = [.titled, .closable]   // contentViewController 預設含 resizable——明確拿掉
         window.toolbarStyle = .preference
         window.isReleasedWhenClosed = false
