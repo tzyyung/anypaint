@@ -257,6 +257,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         case .freeze, .scroll: return                            // 凍結／滾動中 → 不疊加
         case .none: break
         }
+        // 螢幕錄製權限預檢（已查 header：preflight 不彈框；request 首次會彈系統框）。
+        // request 成功＝使用者剛允許——macOS 授權後常需重啟 app 才生效，因此一律 return 讓使用者重按，
+        // 不直接續跑（續跑會拿到黑畫面 stream）。alert 文案沿用既有 showPermissionAlert。
+        guard CGPreflightScreenCaptureAccess() else {
+            if !CGRequestScreenCaptureAccess() { showPermissionAlert() }
+            return
+        }
         KeyboardShortcuts.disable(.capture, .pin, .scrollCapture)   // 錄製中擋其他三入口（spec §9.1）
         menuBar.setRecording(true)
         // %title% 於按下快鍵當下凍結（spec，同 beginScrollCapture 理由）。
