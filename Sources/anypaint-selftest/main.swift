@@ -1219,6 +1219,11 @@ do {
     let idx = RecordMath.sampleHoldIndices(sourceTimes: [0], duration: 0.05, fps: 12)
     checkEq("sampleHold 極短片下限", idx.count, 2)
 }
+do {
+    // 空來源（0 格捕捉）→ 回空結果，不 crash
+    let idx = RecordMath.sampleHoldIndices(sourceTimes: [], duration: 1.0, fps: 12)
+    checkEq("sampleHold 空來源回空", idx, [])
+}
 
 // 37) RecordMath：尾格補齊判斷（Cap 的 0.5s 門檻）
 checkTrue("needsTailFrame 過期", RecordMath.needsTailFrame(lastPTSSeconds: 10.0, nowSeconds: 10.6))

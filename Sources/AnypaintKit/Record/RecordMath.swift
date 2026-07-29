@@ -7,6 +7,8 @@ public enum RecordMath {
 
     /// GIF 每格 delay（centiseconds）。**累計捨入**：delay = round(累計秒×100) − 已寫入 cs，
     /// 誤差永不漂移（逐格天真捨入 1/12s→8cs 會讓長片加速 ~4%）。
+    ///
+    /// 前置條件：`duration ≤ 0` 時每格 delay 為 minCs。
     /// - Parameters:
     ///   - frameStartTimes: 每格開始顯示的秒數（遞增，首格 0）。
     ///   - duration: 總長（秒）＝最後一格顯示到此為止。
@@ -26,6 +28,8 @@ public enum RecordMath {
     }
 
     /// 均勻目標時間網格（秒）。至少 2 格（GIF 最少兩格才有動畫意義）。
+    ///
+    /// 前置條件：`fps > 0`。
     public static func gridTimes(duration: Double, fps: Double) -> [Double] {
         let count = max(2, Int(duration * fps))
         return (0..<count).map { Double($0) / fps }
@@ -34,10 +38,13 @@ public enum RecordMath {
     /// sample-and-hold：對每個目標時刻，取「PTS ≤ 目標」的最新來源格 index；
     /// 目標早於第一格 PTS 時用第一格。一個來源格可重複使用（靜止期）、也可被跳過（快動）。
     /// VFR 母帶的大 PTS 空洞（SCK 靜止不供格）因此天然消化。
-    /// - Parameter sourceTimes: 來源每格 PTS（秒、遞增、非空）。
+    ///
+    /// 前置條件：`fps > 0`；`sourceTimes` 空時回空結果。
+    /// - Parameter sourceTimes: 來源每格 PTS（秒、遞增）。
     public static func sampleHoldIndices(sourceTimes: [Double],
                                          duration: Double,
                                          fps: Double) -> [Int] {
+        guard !sourceTimes.isEmpty else { return [] }
         var out: [Int] = []
         var src = 0
         for t in gridTimes(duration: duration, fps: fps) {
