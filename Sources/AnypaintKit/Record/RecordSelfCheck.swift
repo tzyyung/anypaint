@@ -182,6 +182,7 @@ public final class RecordSelfCheck {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             GifExporter.export(movieURL: movieURL, to: gifURL, pointScale: pointScale, fps: fps,
                                format: .gif,   // 判準確定性：自檢不吃設定，顯式走 GIF（設計文件 §1.2）
+                               engine: .builtin,   // 判準確定性：不受本機是否裝 gifski 影響（設計文件 §1.7）
                                progress: { _ in }, completion: { _ in cont.resume() })
         }
         guard let src = CGImageSourceCreateWithURL(gifURL as CFURL, nil) else {

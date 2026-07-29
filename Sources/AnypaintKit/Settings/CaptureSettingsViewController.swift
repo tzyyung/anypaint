@@ -55,7 +55,7 @@ final class CaptureSettingsViewController: NSViewController {
         recordUseHEVCCheckbox.action = #selector(recordUseHEVCToggled)
 
         let stack = NSStackView(views: [heading, recordCursorCheckbox, recordClickRingCheckbox,
-                                        buildRecordGifFpsRow(), recordUseHEVCCheckbox])
+                                        buildRecordGifFpsRow(), buildGifskiHintLabel(), recordUseHEVCCheckbox])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -86,6 +86,24 @@ final class CaptureSettingsViewController: NSViewController {
 
     @objc private func recordGifFpsChanged() {
         AppSettings.recordGifFps = recordGifFpsPopup.selectedTag()
+    }
+
+    /// gifski 偵測 hint（唯讀，設計文件 §1.7）：偵測跑在 loadView（同步、一次 stat 呼叫，
+    /// 成本可忽略），不隨後續互動更新——裝/移除 gifski 需要重開設定頁才會反映，可接受。
+    private func buildGifskiHintLabel() -> NSView {
+        let text: String
+        if let path = GifskiEngine.detect() {
+            text = "已偵測到 gifski（\(path)）——GIF 將以較高品質引擎產生"
+        } else {
+            text = "未偵測到 gifski——使用內建編碼器（安裝 gifski 可提升 GIF 品質）"
+        }
+        let label = NSTextField(labelWithString: text)
+        label.usesSingleLineMode = false
+        label.cell?.wraps = true
+        label.preferredMaxLayoutWidth = 420
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        return label
     }
 
     @objc private func recordUseHEVCToggled() {

@@ -16,11 +16,36 @@ public enum AnimationFormat {
     }
 }
 
+/// GIF 引擎選擇（設計文件 §1.7）。`.auto`：format 為 `.gif` 且偵測到外部 gifski → 走子程序高品質
+/// 路徑，任何失敗回退 `.builtin`；APNG 格式或找不到 gifski 一律等同 `.builtin`。
+/// 自檢顯式傳 `.builtin`——判準要確定性，不能被「這台機器裝了沒裝 gifski」影響（RecordSelfCheck）。
+public enum GifEngine {
+    case auto
+    case builtin
+}
+
+/// gifski/img2webp 這類外部子程序失敗回退時的一行式診斷（同 ScrollSessionLog 的 append 慣例，
+/// 設計文件 §1.7）。內容極精簡（時間戳＋原因），只在失敗路徑觸發，非熱路徑、無效能影響。
+enum RecordSessionLog {
+    static let path = "/tmp/anypaint-record-session.log"
+    static func add(_ line: String) {
+        guard let data = "\(Date()) \(line)\n".data(using: .utf8) else { return }
+        if let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile()
+            h.write(data)
+            h.closeFile()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+}
+
 /// 母帶 MP4 → GIF/APNG。AVAssetReader 循序解碼（不用 AVAssetImageGenerator——精準 seek 慢，
 /// Gifski.app 已遷移）；sample-and-hold；1x 點尺寸；CGImageDestination 依格式分別累計捨入
 /// （GIF）或秒值直接寫（APNG，設計文件 §1.5）。
 /// GIF 品質上限自覺（設計文件 §6.5）：ImageIO 單一全域調色盤、無時域抖色——UI 內容可接受。
 /// APNG 全彩無此限制，但非通用貼圖格式（聊天軟體支援度不一），因此與 GIF 並存而非取代。
+/// 外部 gifski 引擎（設計文件 §1.7）在 GIF 上不受這個限制——`engine: .auto` 時偵測到就優先走它。
 ///
 /// 全程 async、單一 `Task.detached`：`asset.duration`／`tracks(withMediaType:)`／
 /// `track.naturalSize` 這些同步 API 在近期 SDK 已標 deprecated，一律改用 `load(...)` async 版本
@@ -37,14 +62,30 @@ public enum GifExporter {
     ///     沿用舊的隱式 12）。
     ///   - format: 輸出格式，預設 `.gif`（舊呼叫端不用改）。
     ///   - timeRange: 非 nil 時只匯出這段範圍（剪裁，T6 消費）；nil＝整段母帶（行為不變）。
+    ///   - engine: `.auto`（預設，舊呼叫端不用改）在 GIF 上會嘗試外部 gifski、失敗回退內建；
+    ///     `.builtin` 略過偵測，直接走 CGImageDestination（RecordSelfCheck 用，判準確定性）。
     public static func export(movieURL: URL, to outURL: URL, pointScale: CGFloat,
                               fps: Double,
                               format: AnimationFormat = .gif,
                               timeRange: CMTimeRange? = nil,
+                              engine: GifEngine = .auto,
                               progress: @escaping @MainActor (Double) -> Void,
                               completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
         Task.detached(priority: .userInitiated) {
             do {
+                // 選引擎放在最外層 do/catch 內：gifski 失敗 fallthrough 到內建，兩條路徑共用
+                // 同一個 completion——確定只發一次（設計文件 §1.7）。
+                if format == .gif, engine == .auto, let gifskiPath = GifskiEngine.detect() {
+                    do {
+                        try await exportViaGifski(movieURL: movieURL, to: outURL, pointScale: pointScale,
+                                                  fps: fps, timeRange: timeRange, gifskiPath: gifskiPath,
+                                                  progress: progress)
+                        await completion(.success(()))
+                        return
+                    } catch {
+                        RecordSessionLog.add("gifski 失敗（\(error)），回退內建編碼器 movieURL=\(movieURL.lastPathComponent)")
+                    }
+                }
                 try await exportAsync(movieURL: movieURL, to: outURL, pointScale: pointScale,
                                       fps: fps, format: format, timeRange: timeRange, progress: progress)
                 await completion(.success(()))
@@ -54,9 +95,89 @@ public enum GifExporter {
         }
     }
 
+    /// 內建 CGImageDestination 路徑（GIF 與 APNG 共用）；行為與重構前完全一致——這是回歸網
+    /// （RecordSelfCheck 顯式走 `.builtin`）。
     private static func exportAsync(movieURL: URL, to outURL: URL, pointScale: CGFloat,
                                     fps: Double, format: AnimationFormat, timeRange: CMTimeRange?,
                                     progress: @escaping @MainActor (Double) -> Void) async throws {
+        let plan = try await prepareReader(movieURL: movieURL, pointScale: pointScale,
+                                           fps: fps, timeRange: timeRange)
+
+        guard let dest = CGImageDestinationCreateWithURL(outURL as CFURL,
+                                                         format.utType.identifier as CFString,
+                                                         plan.grid.count, nil) else {
+            plan.reader.cancelReading()
+            throw RecordError.writerFailed(nil)
+        }
+        CGImageDestinationSetProperties(dest, format.containerProperties as CFDictionary)
+        let perFrameProperties = format.perFrameProperties(delaysSeconds:
+            format == .gif
+                ? RecordMath.gifDelaysCentiseconds(frameStartTimes: plan.grid, duration: plan.duration).map { Double($0) / 100.0 }
+                : RecordMath.apngDelaysSeconds(frameStartTimes: plan.grid, duration: plan.duration))
+
+        try await decodeLoop(plan: plan, progress: progress) { gridIndex, image in
+            CGImageDestinationAddImage(dest, image, perFrameProperties[gridIndex] as CFDictionary)
+        }
+        guard CGImageDestinationFinalize(dest) else { throw RecordError.writerFailed(nil) }
+    }
+
+    /// gifski 路徑（僅 GIF）：抽格寫 PNG 到暫存目錄 → 呼叫 gifski 子程序組 GIF → 成功即刪
+    /// frames 目錄。任何失敗（reader 中途壞掉、gifski spawn/exit≠0/無輸出檔）一律 throw，
+    /// 讓 `export` 接手回退內建；frames 目錄一律 `defer` 刪，不論成功或失敗
+    /// （殘留另有啟動清掃兜底，`anypaint-record-` 前綴）。
+    /// 進度切兩段：抽格 0→0.7，gifski 子程序 0.7→1.0（完成時跳滿，設計文件 §1.7）。
+    private static func exportViaGifski(movieURL: URL, to outURL: URL, pointScale: CGFloat,
+                                        fps: Double, timeRange: CMTimeRange?, gifskiPath: String,
+                                        progress: @escaping @MainActor (Double) -> Void) async throws {
+        let plan = try await prepareReader(movieURL: movieURL, pointScale: pointScale,
+                                           fps: fps, timeRange: timeRange)
+
+        let framesDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("anypaint-record-frames-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: framesDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: framesDir) }
+
+        // 零填充排序（frame-0001.png…）確保 gifski 依序吃到正確的畫面順序。
+        var framePaths: [String] = []
+        framePaths.reserveCapacity(plan.grid.count)
+        try await decodeLoop(plan: plan, progress: { done in progress(done * 0.7) }) { gridIndex, image in
+            let path = framesDir.appendingPathComponent(String(format: "frame-%04d.png", gridIndex)).path
+            try writePNG(image, to: path)
+            framePaths.append(path)
+        }
+
+        try GifskiEngine.run(gifskiPath: gifskiPath,
+                             arguments: GifskiEngine.arguments(fps: Int(fps.rounded()), quality: 90,
+                                                               width: plan.outW,
+                                                               output: outURL.path, frames: framePaths))
+        await progress(1.0)
+    }
+
+    /// 單張 CGImage → PNG 檔（gifski 路徑逐格寫檔用）。
+    private static func writePNG(_ image: CGImage, to path: String) throws {
+        guard let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL,
+                                                         UTType.png.identifier as CFString, 1, nil) else {
+            throw RecordError.writerFailed(nil)
+        }
+        CGImageDestinationAddImage(dest, image, nil)
+        guard CGImageDestinationFinalize(dest) else { throw RecordError.writerFailed(nil) }
+    }
+
+    /// 兩條下游（內建 CGImageDestinationAddImage／gifski 寫 PNG）共用的素材：載入 asset／track、
+    /// 設好 reader（含 timeRange clamp、rangeStartSeconds 歸零）、算好 grid 與輸出點尺寸。
+    /// reader 已 `startReading()`，呼叫端負責之後接 `decodeLoop`。
+    private struct FramePlan {
+        let reader: AVAssetReader
+        let output: AVAssetReaderTrackOutput
+        let grid: [Double]
+        let duration: Double
+        let rangeStartSeconds: Double
+        let outW: Int
+        let outH: Int
+    }
+
+    private static func prepareReader(movieURL: URL, pointScale: CGFloat, fps: Double,
+                                      timeRange: CMTimeRange?) async throws -> FramePlan {
         let asset = AVURLAsset(url: movieURL)
         let tracks = try await asset.loadTracks(withMediaType: .video)
         guard let track = tracks.first else { throw RecordError.noFrames }
@@ -94,49 +215,52 @@ public enum GifExporter {
             duration = assetDuration
         }
         reader.startReading()
-        defer { reader.cancelReading() }   // 全程同一顆 async 函式、無並發存取（見上方型別註解）
 
         let grid = RecordMath.gridTimes(duration: duration, fps: fps)
         let pxW = Int(naturalSize.width), pxH = Int(naturalSize.height)
         let outW = max(1, Int((CGFloat(pxW) / pointScale).rounded()))
         let outH = max(1, Int((CGFloat(pxH) / pointScale).rounded()))
+        return FramePlan(reader: reader, output: output, grid: grid, duration: duration,
+                         rangeStartSeconds: rangeStartSeconds, outW: outW, outH: outH)
+    }
 
-        guard let dest = CGImageDestinationCreateWithURL(outURL as CFURL,
-                                                         format.utType.identifier as CFString,
-                                                         grid.count, nil) else {
-            throw RecordError.writerFailed(nil)
-        }
-        CGImageDestinationSetProperties(dest, format.containerProperties as CFDictionary)
-        let perFrameProperties = format.perFrameProperties(delaysSeconds:
-            format == .gif
-                ? RecordMath.gifDelaysCentiseconds(frameStartTimes: grid, duration: duration).map { Double($0) / 100.0 }
-                : RecordMath.apngDelaysSeconds(frameStartTimes: grid, duration: duration))
+    /// 逐格解碼＋sample-and-hold：對每個 grid index 依序呼叫一次 `onFrame`（同步、可 throw）；
+    /// 呼叫端只需決定「格產出後要做什麼」（內建直接 AddImage；gifski 寫 PNG 檔），解碼／縮圖／
+    /// reader 收尾的邏輯只有一份。`reader.cancelReading()` 在函式結束時呼叫——全程同一顆 async
+    /// 函式、無並發存取（見上方型別註解）。
+    private static func decodeLoop(plan: FramePlan,
+                                   progress: @escaping @MainActor (Double) -> Void,
+                                   onFrame: (Int, CGImage) throws -> Void) async throws {
+        defer { plan.reader.cancelReading() }
 
         // 線上 sample-and-hold：與 RecordMath.sampleHoldIndices 同構的「解碼超前一格」寫法——
         // `current` 對應該函式的 sourceTimes[src]，`next` 對應 sourceTimes[src+1]（若存在）。
         // 純函式的內迴圈「while src+1<count && sourceTimes[src+1]<=t { src+=1 }」在這裡就是
         // 下面的「while let n = next, n.pts <= target { current = n; next = decodeNext() }」——
         // 兩者逐字對應；行為若歧異，以純函式（Task 1 已 selftest）為準（設計文件 §6）。
-        guard var current = decodeNext(from: output, width: outW, height: outH, rangeStartSeconds: rangeStartSeconds) else {
+        guard var current = decodeNext(from: plan.output, width: plan.outW, height: plan.outH,
+                                       rangeStartSeconds: plan.rangeStartSeconds) else {
             // 首格就拿不到：跟主迴圈結尾同一套判準——reader 已經 .failed 代表母帶讀到一半
             // （這裡是一開始）就壞了，不是「真的沒有格」，兩者要分開回報。
-            if reader.status == .failed { throw RecordError.writerFailed(reader.error) }
+            if plan.reader.status == .failed { throw RecordError.writerFailed(plan.reader.error) }
             throw RecordError.noFrames
         }
-        var next = decodeNext(from: output, width: outW, height: outH, rangeStartSeconds: rangeStartSeconds)
+        var next = decodeNext(from: plan.output, width: plan.outW, height: plan.outH,
+                              rangeStartSeconds: plan.rangeStartSeconds)
 
         // 進度節流：格數可能上百，逐格 hop 進 MainActor 太浪費——每 5%（至少每 10 格）才 await 一次；
-        // 最後一格永遠補送，確保呼叫端收得到 1.0。
-        let progressStep = max(10, grid.count / 20)
-        for gridIndex in grid.indices {
-            let target = grid[gridIndex]
+        // 最後一格永遠補送，確保呼叫端收得到 1.0（gifski 路徑會再疊上自己的 0.7 上限，見呼叫處）。
+        let progressStep = max(10, plan.grid.count / 20)
+        for gridIndex in plan.grid.indices {
+            let target = plan.grid[gridIndex]
             while let n = next, n.pts <= target {
                 current = n
-                next = decodeNext(from: output, width: outW, height: outH, rangeStartSeconds: rangeStartSeconds)
+                next = decodeNext(from: plan.output, width: plan.outW, height: plan.outH,
+                                  rangeStartSeconds: plan.rangeStartSeconds)
             }
-            CGImageDestinationAddImage(dest, current.image, perFrameProperties[gridIndex] as CFDictionary)
-            if gridIndex % progressStep == 0 || gridIndex == grid.count - 1 {
-                let done = Double(gridIndex + 1) / Double(grid.count)
+            try onFrame(gridIndex, current.image)
+            if gridIndex % progressStep == 0 || gridIndex == plan.grid.count - 1 {
+                let done = Double(gridIndex + 1) / Double(plan.grid.count)
                 // 這個 await 同時是 cooperative thread pool 的讓出點：拿掉節流、改成每格都
                 // await，CPU-bound 的解碼／縮圖迴圈會長時間佔住 pool thread 不放手；反過來
                 // 若把節流拿掉去「優化」成完全不 await，這條 Task 就再也不會讓出，等於堵住
@@ -151,10 +275,9 @@ public enum GifExporter {
         // completion(.success(()))——吐出一支大半凍結、看起來正常但其實漏掉損毀點之後內容的 GIF。
         // 損毀與「壞格跳過」（decodeNext 內部續讀）是兩件事，這裡分開處理：壞格不中斷整段匯出，
         // reader 真的死亡則必須讓呼叫端知道。
-        if reader.status == .failed {
-            throw RecordError.writerFailed(reader.error)
+        if plan.reader.status == .failed {
+            throw RecordError.writerFailed(plan.reader.error)
         }
-        guard CGImageDestinationFinalize(dest) else { throw RecordError.writerFailed(nil) }
     }
 
     /// 循序讀下一格已解碼影像（BGRA → 縮到 1x 點尺寸的 CGImage）；EOF 或讀取錯誤回 nil。

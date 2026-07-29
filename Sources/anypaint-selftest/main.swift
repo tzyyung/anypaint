@@ -1269,4 +1269,27 @@ do {
 }
 checkEq("apngDelays 空輸入", RecordMath.apngDelaysSeconds(frameStartTimes: [], duration: 1.0), [Double]())
 
+// 42) GifskiEngine.detect（注入 isExecutable stub，設計文件 §1.7；候選順序＝優先序：homebrew 優先）
+checkEq("gifski detect homebrew優先",
+        GifskiEngine.detect(isExecutable: { _ in true }),
+        "/opt/homebrew/bin/gifski")
+checkEq("gifski detect 只有usr/local",
+        GifskiEngine.detect(isExecutable: { $0 == "/usr/local/bin/gifski" }),
+        "/usr/local/bin/gifski")
+checkEq("gifski detect 都沒有回nil",
+        GifskiEngine.detect(isExecutable: { _ in false }),
+        nil)
+
+// 43) GifskiEngine.arguments（純函式：引數順序＋frames 逐一列舉，設計文件 §1.7）
+// --width 必傳：實測 gifski 預設把輸出限縮在約 800x600（gifski -h 記載＋實機驗證過，見
+// GifskiEngine.arguments 文件註解），不顯式帶寬度會讓超過門檻的擷取畫面被悄悄縮小。
+checkEq("gifski arguments 引數順序與frames展開",
+        GifskiEngine.arguments(fps: 12, quality: 90, width: 978, output: "/tmp/out.gif",
+                               frames: ["/tmp/f/frame-0001.png", "/tmp/f/frame-0002.png"]),
+        ["--fps", "12", "--quality", "90", "--width", "978", "-o", "/tmp/out.gif",
+         "/tmp/f/frame-0001.png", "/tmp/f/frame-0002.png"])
+checkEq("gifski arguments 空frames",
+        GifskiEngine.arguments(fps: 8, quality: 90, width: 640, output: "/tmp/out.gif", frames: []),
+        ["--fps", "8", "--quality", "90", "--width", "640", "-o", "/tmp/out.gif"])
+
 T.finish()
