@@ -175,4 +175,22 @@ public enum AppSettings {
         }
         set { UserDefaults.standard.set(newValue, forKey: scrollMaxHeightKey) }
     }
+
+    // MARK: - 動畫截圖
+
+    private static let recordCursorKey = "recordShowsCursor"
+    private static let recordClickRingKey = "recordClickRing"
+
+    /// 錄製時顯示滑鼠游標（交給 SCStreamConfiguration.showsCursor）。預設開。
+    public static var recordShowsCursor: Bool {
+        get { UserDefaults.standard.object(forKey: recordCursorKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: recordCursorKey) }
+    }
+
+    /// 錄製時顯示點擊高亮圈（螢幕透明視窗，SCK 自然拍入）。預設開。
+    /// 設定頁上與游標連動：游標關閉時此項停用（Kap 的 UX 慣例，設計文件 §7）。
+    public static var recordClickRing: Bool {
+        get { UserDefaults.standard.object(forKey: recordClickRingKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: recordClickRingKey) }
+    }
 }

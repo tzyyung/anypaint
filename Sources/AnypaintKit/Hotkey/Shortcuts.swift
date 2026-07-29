@@ -9,4 +9,6 @@ public extension KeyboardShortcuts.Name {
     static let pin = Self("pin", default: .init(.v, modifiers: [.command, .shift]))
     /// 滾動截圖（預設 ⌘⇧X——⌘⇧S 會撞自家框選「另存為」與系統 Duplicate，spec D1）
     static let scrollCapture = Self("scrollCapture", default: .init(.x, modifiers: [.command, .shift]))
+    /// 動畫截圖（預設 ⌘⇧R——R=record，不撞既有 A/V/X；框選內的 R 重拍是 overlay 本地鍵、非全域，不衝突）
+    static let animatedCapture = Self("animatedCapture", default: .init(.r, modifiers: [.command, .shift]))
 }
