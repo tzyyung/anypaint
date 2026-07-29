@@ -6,13 +6,13 @@ import AVKit
 /// 視窗骨架/持有慣例對照 `ScrollPreviewWindow`（該檔 5-45 行的骨架、174-216 行的
 /// controller 持有／forget／present 慣例）——這裡不重複解釋，只記差異。
 final class RecordPreviewWindow: NSWindow {
-    /// 內容區最小尺寸：底部「狀態列＋存 GIF＋存 APNG＋存 MP4＋拍快照＋開啟位置＋丟棄」放得下、
-    /// 影片區也留得下基本可視面積。實測（一次性量測，同 ScrollPreviewWindow.minContentWidth 的
-    /// 量法——NSButton.sizeToFit() 量真實寬度，不是憑印象估）：加「存 APNG」後六顆鈕依序寬
-    /// 61/77/68/63/76/50pt，加 stack spacing 5×8pt 與左右邊距 12×2，button row 本身需要
-    /// ~459pt——比舊值 400（五顆鈕時代）已經不夠，因此把下限重新調到 480，留 ~21pt 安全邊際
-    /// （同等級於先前 374→400 的 26pt 裕度）。
-    static let minContentWidth: CGFloat = 480
+    /// 內容區最小尺寸：底部「狀態列＋剪裁＋存 GIF＋存 APNG＋存 MP4＋拍快照＋開啟位置＋丟棄」
+    /// 放得下、影片區也留得下基本可視面積。實測（一次性量測，同 ScrollPreviewWindow.minContentWidth
+    /// 的量法——NSButton.sizeToFit() 量真實寬度，不是憑印象估）：加「剪裁」後七顆鈕依序寬
+    /// 50/61/77/68/63/76/50pt，加 stack spacing 6×8pt 與左右邊距 12×2，button row 本身需要
+    /// ~517pt——比舊值 480（六顆鈕時代）已經不夠，因此把下限重新調到 540，留 ~23pt 安全邊際
+    /// （同等級於先前 400→480 的 21pt 裕度）。
+    static let minContentWidth: CGFloat = 540
     static let minContentHeight: CGFloat = 240
 
     private let movieURL: URL
@@ -22,8 +22,13 @@ final class RecordPreviewWindow: NSWindow {
     private let captureScale: CGFloat      // 擷取螢幕 backingScaleFactor（GIF 降 1x 用；單位：像素/點）
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?    // 循環播放：AVPlayerLooper 官方做法，必須持有否則不循環
+    private var playerView: AVPlayerView?  // 剪裁鈕要問 canBeginTrimming／呼叫 beginTrimming，需持有
     private var isExporting = false        // 見 close() 的說明：匯出（GIF 或 APNG）中擋下關閉
     private var lastSavedURL: URL?         // 最近一次存 GIF/APNG/MP4 成功的路徑；「開啟位置」用
+    // 剪裁範圍：nil＝未剪裁（匯出整段母帶，行為不變）；非 nil＝三種匯出格式都套用這段範圍
+    // （設計文件 §1.6）。母帶絕對時間軸座標（與 player.currentItem 的
+    // reversePlaybackEndTime/forwardPlaybackEndTime 同一單位），不是相對剪裁前次結果的偏移。
+    private var trimRange: CMTimeRange?
     private let statusLabel = NSTextField(labelWithString: "")
     private let openLocationButton = NSButton(title: "開啟位置", target: nil, action: nil)
     private var buttons: [NSButton] = []
@@ -69,7 +74,10 @@ final class RecordPreviewWindow: NSWindow {
         playerView.player = q
         q.play()
         player = q
+        self.playerView = playerView
 
+        let trimButton = NSButton(title: "剪裁", target: self, action: #selector(trimAction))
+        trimButton.toolTip = "拖動原生剪裁列選取時間段，之後三種匯出格式都套用這段範圍"
         let saveGifButton = NSButton(title: "存 GIF", target: self, action: #selector(saveGifAction))
         saveGifButton.toolTip = "匯出為 GIF 並存到預設資料夾"
         let saveApngButton = NSButton(title: "存 APNG", target: self, action: #selector(saveApngAction))
@@ -84,7 +92,8 @@ final class RecordPreviewWindow: NSWindow {
         openLocationButton.isEnabled = false   // 還沒存過檔前無路徑可開
         let discardButton = NSButton(title: "丟棄", target: self, action: #selector(discardAction))
         discardButton.toolTip = "丟掉這段動畫截圖並關窗（需確認）"
-        buttons = [saveGifButton, saveApngButton, saveMp4Button, snapshotButton, openLocationButton, discardButton]
+        buttons = [trimButton, saveGifButton, saveApngButton, saveMp4Button, snapshotButton,
+                   openLocationButton, discardButton]
         for b in buttons {
             b.bezelStyle = .rounded
             b.translatesAutoresizingMaskIntoConstraints = false
@@ -95,8 +104,8 @@ final class RecordPreviewWindow: NSWindow {
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .secondaryLabelColor
 
-        let buttonRow = NSStackView(views: [saveGifButton, saveApngButton, saveMp4Button, snapshotButton,
-                                            openLocationButton, discardButton])
+        let buttonRow = NSStackView(views: [trimButton, saveGifButton, saveApngButton, saveMp4Button,
+                                            snapshotButton, openLocationButton, discardButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
         buttonRow.translatesAutoresizingMaskIntoConstraints = false
@@ -129,6 +138,45 @@ final class RecordPreviewWindow: NSWindow {
 
     // MARK: - 按鈕語意
 
+    /// 剪裁：原生 trim UI（設計文件 §1.6）。已查 AVKit header（`AVPlayerView.h`）：
+    /// `canBeginTrimming` 唯讀屬性、`beginTrimmingWithCompletionHandler:` 只回傳
+    /// `.okButton`/`.cancelButton`，**不直接給範圍**——選取結果要另外讀。已查 AVFoundation
+    /// header（`AVPlayerItem.h`）：`forwardPlaybackEndTime`/`reversePlaybackEndTime` 是唯一
+    /// 暴露在 `AVPlayerItem` 上的可編輯範圍屬性；header 本身沒有寫「這就是 trim UI 寫回的地方」
+    /// （header 沒把兩者關聯起來講），但這是 AVKit 官方 trim UI 對外溝通選取結果的既定慣例
+    /// （長年公開範例／文件如此），也是 `AVPlayerItem` 上唯一能表達「子範圍」的 API——
+    /// 沒有第二條路可查。**這段標記為待實機驗證**：OK 之後兩個屬性的值是否確實反映使用者
+    /// 選取範圍，需要在真機拖過 trim UI 才能確認。
+    ///
+    /// Looper 相容性風險（設計文件 §1.6）：`AVQueuePlayer`＋`AVPlayerLooper` 在無縫循環時會
+    /// 準備／輪替 currentItem 的複本，`canBeginTrimming`／trim 結果讀取是否受影響無法在無 UI
+    /// 環境確認。這裡先實作「直接對現有 looper 播放呼叫 beginTrimming」的路徑（brief 核可的
+    /// 第一案）；若實機測出 `canBeginTrimming` 為 false 或選取範圍讀不對，fallback 方案＝
+    /// trim 前把 `looper` 設 nil、改單一 `AVPlayerItem` 播放（`actionAtItemEnd = .none` ＋監聽
+    /// `AVPlayerItemDidPlayToEndTimeNotification` 手動 seek 到 0 恢復單曲循環），trim 完成後
+    /// 视情况重建 looper。两案都记录在报告，尚未走 fallback。
+    @objc private func trimAction() {
+        guard let playerView, let player, playerView.canBeginTrimming else {
+            statusLabel.stringValue = "此播放器不支援剪裁"
+            return
+        }
+        playerView.beginTrimming { [weak self] result in
+            guard let self, result == .okButton, let item = player.currentItem else { return }
+            // reversePlaybackEndTime 無效＝使用者沒動起點（維持 0）；forwardPlaybackEndTime
+            // 無效＝沒動終點（維持母帶全長）——兩者預設值都是 kCMTimeInvalid（見 header）。
+            let start = item.reversePlaybackEndTime.isValid ? item.reversePlaybackEndTime : .zero
+            let end = item.forwardPlaybackEndTime.isValid ? item.forwardPlaybackEndTime : item.duration
+            self.trimRange = CMTimeRange(start: start, end: end)
+            self.statusLabel.stringValue = String(format: "已剪裁 %.1fs–%.1fs，匯出將套用",
+                                                  start.seconds, end.seconds)
+        }
+        // 取消：AVKit trim UI 的既定行為是取消時不套用變更，這裡不用額外處理——不更新
+        // `trimRange` 就等於維持剪裁前的狀態（第一次剪裁前＝nil／已剪裁過＝上次的範圍）。
+        // 再按「剪裁」可重剪：beginTrimming 用 currentItem 目前的
+        // forwardPlaybackEndTime/reversePlaybackEndTime 當 trim UI 初始選取範圍，第二次呼叫
+        // 因此會從上次的結果繼續調整，覆蓋 `trimRange` 屬性即可，不需要額外的「清除剪裁」入口。
+    }
+
     /// 存 GIF：匯出中停用所有按鈕＋statusLabel 顯示進度；完成後存到快速儲存路徑。
     @objc private func saveGifAction() { exportAndSave(format: .gif, label: "GIF") }
 
@@ -147,7 +195,7 @@ final class RecordPreviewWindow: NSWindow {
         let tmpURL = movieURL.deletingPathExtension().appendingPathExtension(ext)
         let fps = Double(AppSettings.recordGifFps)
         GifExporter.export(movieURL: movieURL, to: tmpURL, pointScale: captureScale,
-                           fps: fps, format: format,
+                           fps: fps, format: format, timeRange: trimRange,
                            progress: { [weak self] p in
                                self?.statusLabel.stringValue = "\(label) 匯出中… \(Int(p * 100))%"
                            },
@@ -173,19 +221,75 @@ final class RecordPreviewWindow: NSWindow {
                            })
     }
 
-    /// 存 MP4：copy 母帶（不 move——之後可能還要匯 GIF，母帶得留著）。
+    /// 存 MP4：無剪裁沿用原本的零轉檔 copy（不 move——之後可能還要匯 GIF，母帶得留著）；
+    /// 有剪裁則走 `AVAssetExportSession` + `AVAssetExportPresetPassthrough` 切 `timeRange`
+    /// 匯到暫存再 saveCopy（設計文件 §1.6）。已查 header（`AVAssetExportSession.h`）：
+    /// - `timeRange` 屬性（`AVAssetExportSessionDurationAndLength` category）：預設
+    ///   `kCMTimeZero..kCMTimePositiveInfinity`（全長），沒有任何一段文件說 passthrough 不支援
+    ///   設定它——與其他 preset 一致對待。
+    /// - `AVAssetExportPresetPassthrough`：「media of all tracks passed through exactly as
+    ///   stored」，不重編碼；`timeRange` 只是篩選要輸出哪一段樣本，兩者互不衝突。
+    /// - 匯出 API：`export(to:as:) async throws`（macOS 15+ 才有，Package.swift 目前
+    ///   deployment target 是 macOS 14——用了會過不了可用性檢查）vs. 舊式
+    ///   `exportAsynchronously(completionHandler:)`（`API_DEPRECATED_WITH_REPLACEMENT` 起始
+    ///   版本正是 macOS 15）。已用最小重現專案在 `.macOS(.v14)` target 下實測：呼叫
+    ///   `exportAsynchronously(completionHandler:)` **零 warning**（Swift 的 deprecated
+    ///   availability 只在 deployment target ≥ 該版本時才生效，14 < 15 不觸發）——因此這裡
+    ///   選舊式 API，不是偷懶，是查完＋量完的結論；deployment target 升到 15 之後這裡要換
+    ///   `export(to:as:)`。
     @objc private func saveMp4Action() {
-        let saved = output.saveCopy(from: movieURL, ext: "mp4", vars: vars)
-        if let saved {
-            lastSavedURL = saved
-            openLocationButton.isEnabled = true
+        guard let trimRange else {
+            let saved = output.saveCopy(from: movieURL, ext: "mp4", vars: vars)
+            if let saved {
+                lastSavedURL = saved
+                openLocationButton.isEnabled = true
+            }
+            statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" } ?? "MP4 存檔失敗"
+            return
         }
-        statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" } ?? "MP4 存檔失敗"
+        isExporting = true
+        setButtonsEnabled(false)
+        statusLabel.stringValue = "MP4 剪裁匯出中…"
+        // 暫存檔沿用 RecordOutputService.tempMovieURL()：檔名固定「anypaint-record-<uuid>.mp4」，
+        // 與母帶同前綴，app 下次啟動的 cleanupStaleTempFiles() 掃得到（若這次強制關閉/當掉沒清到）。
+        let tmpURL = output.tempMovieURL()
+        Task { [weak self] in
+            guard let self else { return }
+            guard let session = AVAssetExportSession(asset: AVURLAsset(url: self.movieURL),
+                                                     presetName: AVAssetExportPresetPassthrough) else {
+                self.isExporting = false
+                self.setButtonsEnabled(true)
+                self.statusLabel.stringValue = "MP4 剪裁匯出失敗：無法建立匯出工作階段"
+                return
+            }
+            session.outputURL = tmpURL
+            session.outputFileType = .mp4
+            session.timeRange = trimRange
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                session.exportAsynchronously { continuation.resume() }
+            }
+            self.isExporting = false
+            self.setButtonsEnabled(true)
+            if session.status == .completed {
+                let saved = self.output.saveCopy(from: tmpURL, ext: "mp4", vars: self.vars)
+                try? FileManager.default.removeItem(at: tmpURL)
+                if let saved { self.lastSavedURL = saved }
+                self.statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" }
+                    ?? "MP4 存檔失敗"
+            } else {
+                try? FileManager.default.removeItem(at: tmpURL)
+                self.statusLabel.stringValue = "MP4 剪裁匯出失敗：\(session.error?.localizedDescription ?? "未知錯誤")"
+            }
+            self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
+        }
     }
 
     /// 拍快照：把播放器目前所在時刻的畫面複製到剪貼簿。不受 `lastSavedURL` 影響（跟存不存過檔
     /// 無關，任何時刻都能拍），GIF 匯出中則跟其他鈕一起被 `setButtonsEnabled(false)` 停用
-    /// （它就在 `buttons` 陣列裡，沒有特殊路徑）。
+    /// （它就在 `buttons` 陣列裡，沒有特殊路徑）。**也不受 `trimRange` 影響**（設計文件
+    /// §1.4/§1.6：拍快照本來就是對「播放器目前所在時刻」出手，取的是 `player.currentTime()`，
+    /// 跟有沒有剪裁、剪裁範圍是什麼完全無關；日後的預覽拖曳出檔案（§1.4）同理給整段母帶，
+    /// 也不吃 `trimRange`）。
     ///
     /// 用 `AVAssetImageGenerator.image(at:)`（macOS 13+ 的 async API，`generateCGImageAsynchronously
     /// ForTime:completionHandler:` 的 Swift 覆寫；已對照 SDK header 的 `NS_REFINED_FOR_SWIFT_ASYNC`

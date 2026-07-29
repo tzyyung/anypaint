@@ -84,7 +84,11 @@ public enum GifExporter {
         if let timeRange {
             reader.timeRange = timeRange
             rangeStartSeconds = timeRange.start.seconds
-            duration = timeRange.duration.seconds
+            // clamp：AVAssetReader.h 對 timeRange 的說明是「與 [0, asset 實際時長] 取交集後」才是
+            // 真正讀取的範圍——呼叫端傳進超出母帶尾端的請求範圍不會報錯，只會默默少讀，但這裡的
+            // duration 若不clamp，grid／delay 計算會以「請求的長度」為準，吐出一支比實際內容
+            // 更長（尾端補靜止格）的動畫。故取 min(請求長度, 母帶時長-範圍起點)。
+            duration = min(timeRange.duration.seconds, assetDuration - rangeStartSeconds)
         } else {
             rangeStartSeconds = 0
             duration = assetDuration
