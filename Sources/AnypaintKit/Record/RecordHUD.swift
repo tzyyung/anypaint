@@ -1,5 +1,18 @@
 import AppKit
 
+// 實機教訓（round 2）：ScrollHUD 純按鈕面板不覆寫 canBecomeKey（borderless NSPanel 預設非 key），
+// 按鈕靠 hit-test 不需要 key window。本 HUD 多了 durationField 這個文字輸入欄——canBecomeKey
+// 預設 false 時面板永遠成不了 key window，文字欄收不到任何按鍵，點了打不了字（round 1 的
+// becomesKeyOnlyIfNeeded 因此完全無效：它只決定「何時」變 key，前提是 canBecomeKey 本身要為
+// true）。改用 ScrollSelectionOverlay.swift 的 ScrollSelectionWindow 同一手法：子類覆寫
+// canBecomeKey=true，並保留 becomesKeyOnlyIfNeeded=true 限制「只有點進文字欄才真的取 key」，
+// 兩者疊加才是「按鈕不搶焦點、文字欄可以打字」。canBecomeMain 維持 false——HUD 不該搶走
+// app 的 main window 身分（menu bar app 沒有一般意義的 main window）。
+private final class RecordHUDPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
 /// 動畫截圖 HUD。視窗配置與擺位沿用 ScrollHUDController 成例（四件套缺一有坑，見該檔頭註）。
 /// armed：〔秒數欄（空白=不限）〕〔開始〕〔取消〕；recording：〔● 時鐘〕〔停止〕〔取消〕。
 @MainActor
@@ -61,7 +74,7 @@ public final class RecordHUDController: NSObject {
     }
 
     private func buildPanel() {
-        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 56),
+        let p = RecordHUDPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 56),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)  // 高於選區 overlay
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
@@ -69,12 +82,10 @@ public final class RecordHUDController: NSObject {
         p.backgroundColor = NSColor.black.withAlphaComponent(0.75)
         p.hasShadow = true
         p.isReleasedWhenClosed = false
-        // canBecomeKey 不覆寫——borderless NSPanel 預設即非 key；不 makeKey、不 activate，
-        // 點按鈕靠 NSButton 在 nonactivating panel 上的正常 hit-test（AppKit 對滑鼠事件一律送給
-        // 游標下的視窗，與該視窗是否為 key 無關；已查證 nonactivatingPanel 官方文件與已知問題）。
-        // durationField 例外：文字輸入需要 key window 才能收到按鍵。becomesKeyOnlyIfNeeded 讓面板
-        // 平時維持非 key（不搶前景），只在使用者點進欄位、真的要打字時才允許成為 key——
-        // 兩者都要（accessory app 不 activate 就進不了前景，nonactivating panel 天生不搶焦點）。
+        // canBecomeKey=true 由 RecordHUDPanel 子類覆寫（見檔頭註：文字欄位需要 key window）。
+        // becomesKeyOnlyIfNeeded 限制「只有點進 durationField 才真的取 key」——按鈕仍靠 hit-test，
+        // 不因為 canBecomeKey 變 true 就搶走前景／偷走其他視窗的 key 狀態（nonactivating panel
+        // 本身也不 makeKey、不 activate，兩層限制疊加）。
         p.becomesKeyOnlyIfNeeded = true
 
         clockLabel.textColor = .white
@@ -87,6 +98,11 @@ public final class RecordHUDController: NSObject {
         durationField.alignment = .right
         durationField.translatesAutoresizingMaskIntoConstraints = false
         durationField.widthAnchor.constraint(equalToConstant: 48).isActive = true
+        // 秒數欄按 Enter＝按「開始」（armed 唯一可能狀態；recording 時欄位已隱藏收不到打字）。
+        // NSTextField 預設 sendsActionOnEndEditing=false，action 只在按下 Return 時觸發，
+        // 點別處讓欄位失焦**不會**誤發——與 primaryButton 共用同一個 selector 安全。
+        durationField.target = self
+        durationField.action = #selector(primaryTapped)
 
         durationSuffix.textColor = .white
         durationSuffix.font = .systemFont(ofSize: 12, weight: .regular)
