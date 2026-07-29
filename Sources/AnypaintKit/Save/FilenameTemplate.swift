@@ -70,11 +70,13 @@ public enum FilenameTemplate {
     }
 
     /// 檔名段（最後路徑段）為空或僅剩清洗替代字/空白/點 → 以 fallbackName 取代檔名段（spec 邊界）。
+    /// 將指定副檔名（不含點；如 "png"、"mp4"）從檔名移除再檢查剩餘部分是否有意義。
     public static func ensuringMeaningfulFilename(_ expandedPath: String,
-                                                  fallbackName: String) -> String {
+                                                  fallbackName: String,
+                                                  ext: String = "png") -> String {
         let name = (expandedPath as NSString).lastPathComponent
         let stripped = name
-            .replacingOccurrences(of: ".png", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "." + ext, with: "", options: .caseInsensitive)
             .filter { $0 != "-" && $0 != " " && $0 != "." }
         guard stripped.isEmpty else { return expandedPath }
         let dir = (expandedPath as NSString).deletingLastPathComponent

@@ -951,6 +951,14 @@ checkEq("ensuringMeaningfulFilename 正常保留",
         FilenameTemplate.ensuringMeaningfulFilename("/d/a.png", fallbackName: "f.png"), "/d/a.png")
 checkEq("ensuringMeaningfulFilename 純檔名 fallback",
         FilenameTemplate.ensuringMeaningfulFilename(".png", fallbackName: "f.png"), "f.png")
+checkEq("ensuringMeaningfulFilename mp4 空檔名 fallback",
+        FilenameTemplate.ensuringMeaningfulFilename("/d/---.mp4", fallbackName: "f.mp4", ext: "mp4"), "/d/f.mp4")
+checkEq("ensuringMeaningfulFilename mp4 正常保留",
+        FilenameTemplate.ensuringMeaningfulFilename("/d/a.mp4", fallbackName: "f.mp4", ext: "mp4"), "/d/a.mp4")
+checkEq("ensuringMeaningfulFilename gif 空白+點 fallback",
+        FilenameTemplate.ensuringMeaningfulFilename("    .gif", fallbackName: "a.gif", ext: "gif"), "a.gif")
+checkEq("ensuringMeaningfulFilename gif 內容+點 保留",
+        FilenameTemplate.ensuringMeaningfulFilename("/d/ ab .gif", fallbackName: "x.gif", ext: "gif"), "/d/ ab .gif")
 
 // 31) 輸出設定：quickSave 遷移純函式＋CaptureVars.frontWindowTitle
 checkEq("quickSave 遷移：新鍵已設用新值",
