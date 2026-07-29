@@ -39,7 +39,7 @@
 | 匯出 GIF | fps 可設定（8/10/12/15/20，預設 12，設定 → 截圖 → 動畫截圖）、1x（點）尺寸，背景 queue 解碼，預覽窗顯示進度；偵測到外部 gifski 時優先走它產生更高品質 GIF，任何失敗自動回退內建編碼器（§6） |
 | 匯出 APNG | 全彩、無 GIF 那種 256 色調色盤限制，副檔名 `.png`；檔案通常較小但非通用貼圖格式（聊天軟體支援度不一），與 GIF 並存而非取代 |
 | 匯出 WebP | 只在偵測到外部 `img2webp` 時「存 WebP」鈕才出現；沒有內建可回退，沒裝就不出現（不出灰鈕不出錯誤） |
-| 剪裁 | 預覽視窗「剪裁」鈕開原生 `AVPlayerView` trim UI，選定的時間段套用到之後三種匯出格式（GIF/APNG/MP4）；拍快照、拖曳出檔案兩者都不受剪裁影響（一律對應「目前播放位置」／「整段母帶」） |
+| 剪裁 | 預覽視窗「剪裁」鈕開原生 `AVPlayerView` trim UI，選定的時間段套用到之後所有匯出格式（GIF/APNG/MP4，以及偵測到 img2webp 時的 WebP）；拍快照、拖曳出檔案兩者都不受剪裁影響（一律對應「目前播放位置」／「整段母帶」） |
 | 拖曳出檔案 | 預覽視窗播放器影像區可直接拖曳出**整段母帶** MP4（設計決定：不受剪裁影響，一律整段，v1 語意單純化）；匯出中（GIF/APNG/WebP in-flight）也可正常拖曳 |
 | 儲存通知可點擊 | 系統通知點擊 → `NSWorkspace.activateFileViewerSelecting`，Finder 開啟並選取剛存的檔案；檔案已被移走/刪除時安靜 no-op |
 
@@ -226,7 +226,11 @@ RecordSelfCheck.swift 內建自檢工具（見 §7），不參與正式流程
 ### 剪裁（timeRange）如何影響匯出
 
 預覽視窗「剪裁」鈕（原生 `AVPlayerView.beginTrimming`）產生的 `CMTimeRange`（母帶絕對時間軸，
-見 `RecordPreviewWindow.trimAction`）往下傳到 `GifExporter.prepareReader`：
+見 `RecordPreviewWindow.trimAction`）往下傳到 `GifExporter.prepareReader`——**GIF／APNG／WebP
+三者共用同一條路徑**：`saveGifAction`／`saveApngAction` 走 `GifExporter.export(...timeRange:
+trimRange...)`，`saveWebpAction` 走 `GifExporter.exportWebP(...timeRange: trimRange...)`，兩者
+內部都經過 `extractFramesAsPNG` → `prepareReader`，因此下面幾條 clamp／歸零規則對 WebP 同樣
+成立，不是只有 GIF/APNG 才有：
 
 - `reader.timeRange = timeRange` 必須在 `startReading()` 之前設（`AVAssetReader.h`：之後設值
   會丟例外）。
@@ -240,8 +244,8 @@ RecordSelfCheck.swift 內建自檢工具（見 §7），不參與正式流程
   對應時間 0」——`decodeNext` 讀出當下立刻減去 `rangeStartSeconds`，不歸零會讓整段輸出跟著
   剪裁範圍的起點平移。
 - 存 MP4 的剪裁走完全不同的路：`AVAssetExportSession` + `AVAssetExportPresetPassthrough`
-  （不重編碼，只切 `timeRange`），跟 GIF/APNG 的 `AVAssetReader.timeRange` 是兩條獨立路徑，
-  細節見 `RecordPreviewWindow.saveMp4Action` 的 header 引用。
+  （不重編碼，只切 `timeRange`），跟 GIF/APNG/WebP 共用的 `AVAssetReader.timeRange` 是兩條
+  獨立路徑，細節見 `RecordPreviewWindow.saveMp4Action` 的 header 引用。
 - 拍快照、拖曳出檔案**都不受 `trimRange` 影響**（拍快照對「目前播放位置」出手；拖曳一律給
   整段母帶，見 §8）。
 
@@ -354,8 +358,8 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
 | 6 | armed HUD 秒數欄可打字 | 選區框好、HUD 進入 armed 後，滑鼠點進秒數欄能正常打字並在「開始」後生效（nonactivating panel 的鍵盤路由是 CLAUDE.md 點名的高風險區） |
 | 7 | 通知點擊開位置 | 截圖／滾動截圖／動畫截圖存檔通知點擊後，Finder 開啟並選取該檔案；檔案已被移走時點擊安靜無反應（不報錯） |
 | 8 | HEVC 可播＋奇數像素邊長選區 | 設定開啟 HEVC 後錄製匯出的 MP4 能在 QuickTime／預覽 正常播放；框選邊長換算成奇數像素時仍能正常編碼、播放不歪 |
-| 9 | 剪裁全流程（六項） | `canBeginTrimming` 在 `AVPlayerLooper` 播放下為 true 且 trim UI 正常顯示（若否需走 §1.6 提到的 fallback：暫停 looper 改單曲播放）；OK 後 `reversePlaybackEndTime`/`forwardPlaybackEndTime` 確實反映使用者選取範圍；剪裁後首格是選取起點附近的畫面（非黑格或範圍外內容）；GIF／APNG／MP4 三種格式在同一個 `trimRange` 下匯出，時長一致且符合預期；重剪（再按「剪裁」）與取消（trim UI 選 Cancel）後 `trimRange` 維持/更新正確；trim overlay 顯示中關閉預覽視窗行為正常（不 crash、不留孤兒暫存檔） |
-| 10 | 拖曳出 MP4 | 播放器影像區拖曳到 Finder／瀏覽器能收到完整母帶 MP4；`DragOriginView` 疊加的透明拖曳層是否吞掉 `AVPlayerView` 原生的 click-to-pause 手勢（點擊影像區能否正常暫停/續播） |
+| 9 | 剪裁全流程（六項） | `canBeginTrimming` 在 `AVPlayerLooper` 播放下為 true 且 trim UI 正常顯示（若否需走 §1.6 提到的 fallback：暫停 looper 改單曲播放）；OK 後 `reversePlaybackEndTime`/`forwardPlaybackEndTime` 確實反映使用者選取範圍；剪裁後首格是選取起點附近的畫面（非黑格或範圍外內容）；GIF／APNG／MP4／WebP（偵測到 img2webp 時）在同一個 `trimRange` 下匯出，時長一致且符合預期；重剪（再按「剪裁」）與取消（trim UI 選 Cancel）後 `trimRange` 維持/更新正確；trim overlay 顯示中關閉預覽視窗行為正常（不 crash、不留孤兒暫存檔） |
+| 10 | 拖曳出 MP4（六項） | 拖到 Finder：檔案落地、檔名符合樣板展開（剝 .png 補 .mp4）、內容為完整可播母帶；拖到瀏覽器：`NSFilePromiseProvider` 的 promise 型拖曳是否被接收端正確接受（部分較舊/客製拖放實作只吃 `NSURL`／`NSFilenamesPboardType`，不吃 promise）；`contentOverlayView` 疊的 `DragOriginView` 確實不擋 `.inline` 控制列的滑鼠事件（scrubber 拖曳、播放/暫停按鈕、原生 click-to-pause 手勢不被吞掉）；右鍵選單／視訊分析選取等 `AVPlayerView` 原生手勢確實穿透 `DragOriginView`；拖曳進行中同時有 GIF/APNG/MP4/WebP 匯出在跑，兩者對同一份母帶的檔案 I/O 不互相干擾；拖曳中途（`writePromiseTo` 背景複製還沒完成）就關閉/丟棄預覽視窗（母帶被刪除）不出錯 |
 | 11 | gifski 兩況 | 裝 gifski（`brew install gifski`）：存 GIF 走外部引擎，畫質明顯優於內建（無明顯調色盤 banding）；不裝（或暫時改名模擬移除）：存 GIF 正常回退內建路徑，行為與第一輪相同 |
 | 12 | img2webp（三項） | `-d`（per-frame delay）語法在真實 img2webp 上行為與 libwebp 官方文件描述一致（本機未裝，尚未實測，見 §6）；產出的 WebP 讀回檢視畫面/fps/循環都正確；「存 WebP」鈕從偵測到匯出到開啟位置的預覽全流程正常 |
 | 13 | APNG 在目標平台可動 | 匯出的 APNG 在預期會用到的平台/軟體（macOS 預覽、瀏覽器、聊天軟體等）上正確播放動畫而非靜態單張（支援度因軟體而異，是已知風險不是 bug） |
