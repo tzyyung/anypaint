@@ -1,5 +1,6 @@
 import AppKit
 import AVKit
+import UniformTypeIdentifiers
 
 /// 動畫截圖預覽：AVPlayerView 循環播放母帶＋〔存 GIF〕〔存 APNG〕〔存 MP4〕〔拍快照〕
 /// 〔開啟位置〕〔丟棄〕。
@@ -75,6 +76,26 @@ final class RecordPreviewWindow: NSWindow {
         q.play()
         player = q
         self.playerView = playerView
+
+        // 拖曳出 MP4（設計文件 §1.4）：掛在 contentOverlayView，不是自己疊一層蓋住整個
+        // playerView 再算控制列高度來避開。已查 header（AVKit.framework `AVPlayerView.h`
+        // 84-88 行）：contentOverlayView 官方定義就是「video content 與 controls 之間」
+        // 的掛載點——用它天生只蓋影像區、不蓋 .inline 控制列／scrubber，不需要寫死避開
+        // 高度（brief 點名的三案之一，這裡是查完 header 後最乾淨的選擇；理由與否決的另兩案
+        // 見 task-7-report.md）。若拿不到（理論上 player 已設定就會有，防禦性處理）就整個
+        // 放棄拖曳功能，不影響其他既有按鈕。
+        if let overlay = playerView.contentOverlayView {
+            let dragView = DragOriginView()
+            dragView.owner = self
+            dragView.translatesAutoresizingMaskIntoConstraints = false
+            overlay.addSubview(dragView)
+            NSLayoutConstraint.activate([
+                dragView.topAnchor.constraint(equalTo: overlay.topAnchor),
+                dragView.leadingAnchor.constraint(equalTo: overlay.leadingAnchor),
+                dragView.trailingAnchor.constraint(equalTo: overlay.trailingAnchor),
+                dragView.bottomAnchor.constraint(equalTo: overlay.bottomAnchor),
+            ])
+        }
 
         let trimButton = NSButton(title: "剪裁", target: self, action: #selector(trimAction))
         trimButton.toolTip = "拖動原生剪裁列選取時間段，之後三種匯出格式都套用這段範圍"
@@ -388,6 +409,112 @@ final class RecordPreviewWindow: NSWindow {
         try? FileManager.default.removeItem(at: movieURL)
         controller?.forget(self)
         super.close()
+    }
+
+    // MARK: - 拖曳出 MP4
+
+    /// 疊在 contentOverlayView 整個範圍的拖曳起點：只轉發拖曳手勢，不吃其他事件——沒
+    /// override 的滑鼠事件（例如右鍵選單）依 NSResponder 預設行為往下一個 responder 傳，
+    /// 不會被這層擋住（**待實機驗證**：右鍵選單/視訊分析選取等 AVPlayerView 原生手勢
+    /// 是否真的穿透，command line 環境驗不了）。
+    ///
+    /// mouseDragged 累積位移超過閾值（4pt）才真的呼叫 `beginDraggingSession`：單純點擊
+    /// 影像區（例如以後若加點擊手勢）不會被誤判成拖曳意圖。
+    ///
+    /// 嵌在 RecordPreviewWindow 內部：Swift 的 `private` 存取範圍涵蓋外層型別本身，這裡才
+    /// 讀得到 `owner.movieURL`（同檔案作用域，不必額外開放存取層級）。
+    private final class DragOriginView: NSView, NSDraggingSource {
+        weak var owner: RecordPreviewWindow?
+        private var mouseDownLocation: NSPoint?
+
+        override func mouseDown(with event: NSEvent) {
+            mouseDownLocation = event.locationInWindow
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let start = mouseDownLocation, let owner else { return }
+            let dx = event.locationInWindow.x - start.x
+            let dy = event.locationInWindow.y - start.y
+            guard dx * dx + dy * dy >= 16 else { return }   // 4pt 位移閾值
+            mouseDownLocation = nil
+
+            // 拖曳提供整段母帶：不受 trimRange／isExporting 影響（設計文件 §1.4/§1.6，
+            // 同 snapshotAction 的說明——讀母帶跟匯出不衝突，母帶在關閉視窗前都在）。
+            let provider = NSFilePromiseProvider(fileType: UTType.mpeg4Movie.identifier,
+                                                 delegate: owner)
+            // writePromiseTo 是 NS_SWIFT_NONISOLATED（見 AppKit header），執行時不在
+            // MainActor 上、不能碰 owner 的任何 MainActor 隔離狀態——來源路徑改走 userInfo
+            // 傳遞，讀寫都不必跨 actor。
+            provider.userInfo = owner.movieURL
+            let item = NSDraggingItem(pasteboardWriter: provider)
+            let icon = NSWorkspace.shared.icon(for: .mpeg4Movie)
+            let iconSize: CGFloat = 64
+            item.setDraggingFrame(
+                NSRect(x: bounds.midX - iconSize / 2, y: bounds.midY - iconSize / 2,
+                       width: iconSize, height: iconSize),
+                contents: icon)
+            beginDraggingSession(with: [item], event: event, source: self)
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            mouseDownLocation = nil
+        }
+
+        func draggingSession(_ session: NSDraggingSession,
+                             sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+            .copy
+        }
+    }
+}
+
+/// writePromiseTo 的背景複製佇列：母帶可能不小（螢幕錄製），若卡在 delegate 預設的
+/// mainOperationQueue（等於主執行緒）會頂到 UI（CLAUDE.md 記過的教訓：I/O 不可卡主執行緒）。
+/// 宣告在檔案作用域（不是 RecordPreviewWindow 的成員）：MainActor 隔離只套用在型別成員上，
+/// 這裡刻意不掛在型別上，讓 `operationQueueForFilePromiseProvider`／`writePromiseTo`
+/// 這兩個非 MainActor 情境能直接讀取，不必處理跨 actor 存取。
+private let dragPromiseCopyQueue = OperationQueue()
+
+/// 拖曳出 MP4：`NSFilePromiseProviderDelegate` conformance（設計文件 §1.4）。
+extension RecordPreviewWindow: NSFilePromiseProviderDelegate {
+    /// 檔名：manualNameTemplate 展開（同「另存為」共用的樣板，見
+    /// `CaptureOutputService.saveWithPanel`）→ 剝 .png → 補 .mp4。這個 delegate 方法標了
+    /// `NS_SWIFT_UI_ACTOR`（見 header），在 Swift 端等於 @MainActor，可以安心讀
+    /// self.vars／AppSettings。
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider,
+                             fileNameForType fileType: String) -> String {
+        let now = Date()
+        var name = FilenameTemplate.expand(AppSettings.manualNameTemplate, date: now, vars: vars)
+        if FilenameTemplate.hasPNGExtension(name) { name = String(name.dropLast(4)) }
+        name = FilenameTemplate.ensuringExtension(name, ext: "mp4")
+        // 只能回傳純檔名（NSFilePromiseProvider 的契約）；manualNameTemplate 本來就是純檔名
+        // （AppSettings 的文件註記），這裡仍防禦性取 lastPathComponent，避免萬一樣板含 /
+        // 被誤判成目錄。
+        return (name as NSString).lastPathComponent
+    }
+
+    /// 母帶複製到拖曳目的地：這個 delegate 方法標了 `NS_SWIFT_NONISOLATED`（見 header），
+    /// 執行時不在 MainActor 上——來源路徑從 `userInfo` 讀（見 DragOriginView.mouseDragged
+    /// 的說明），不碰 self 的任何 MainActor 隔離狀態。
+    nonisolated func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider,
+                                         writePromiseTo url: URL,
+                                         completionHandler: @escaping (Error?) -> Void) {
+        guard let source = filePromiseProvider.userInfo as? URL else {
+            completionHandler(CocoaError(.fileNoSuchFile))
+            return
+        }
+        do {
+            try FileManager.default.copyItem(at: source, to: url)
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
+    }
+
+    /// 指到背景佇列（見 dragPromiseCopyQueue 的說明），不落在預設的 mainOperationQueue。
+    /// Swift 端方法名是 `operationQueue(for:)`（ObjC `operationQueueForFilePromiseProvider:`
+    /// 舊名在 Swift 3 就被 rename 掉了——編譯器直接報錯點名新名字，不是憑印象猜的）。
+    func operationQueue(for filePromiseProvider: NSFilePromiseProvider) -> OperationQueue {
+        dragPromiseCopyQueue
     }
 }
 
