@@ -180,6 +180,8 @@ public enum AppSettings {
 
     private static let recordCursorKey = "recordShowsCursor"
     private static let recordClickRingKey = "recordClickRing"
+    private static let recordGifFpsKey = "recordGifFps"
+    private static let recordUseHEVCKey = "recordUseHEVC"
 
     /// 錄製時顯示滑鼠游標（交給 SCStreamConfiguration.showsCursor）。預設開。
     public static var recordShowsCursor: Bool {
@@ -192,5 +194,46 @@ public enum AppSettings {
     public static var recordClickRing: Bool {
         get { UserDefaults.standard.object(forKey: recordClickRingKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: recordClickRingKey) }
+    }
+
+    /// GIF 編碼幀率選項。
+    public static let recordGifFpsOptions: [Int] = [8, 10, 12, 15, 20]
+
+    /// GIF 幀率正規化：找最接近的選項；平手時取較小值（determinism）。
+    ///
+    /// 純函式，供 selftest 直接測試。
+    public static func normalizedRecordGifFps(_ v: Int) -> Int {
+        let options = recordGifFpsOptions
+        if options.contains(v) {
+            return v
+        }
+        var best = options[0]
+        var bestDiff = abs(v - best)
+        for opt in options {
+            let diff = abs(v - opt)
+            if diff < bestDiff || (diff == bestDiff && opt < best) {
+                best = opt
+                bestDiff = diff
+            }
+        }
+        return best
+    }
+
+    /// GIF 編碼幀率（fp）。預設 12。
+    public static var recordGifFps: Int {
+        get {
+            // 未設定過 → 預設 12；已設定 → 正規化（防止舊版本設定值跨版本失效）
+            guard let v = UserDefaults.standard.object(forKey: recordGifFpsKey) as? Int else { return 12 }
+            return normalizedRecordGifFps(v)
+        }
+        set {
+            UserDefaults.standard.set(normalizedRecordGifFps(newValue), forKey: recordGifFpsKey)
+        }
+    }
+
+    /// MP4 使用 HEVC 編碼（檔案較小，舊裝置相容性較差）。預設 false（H.264）。
+    public static var recordUseHEVC: Bool {
+        get { UserDefaults.standard.object(forKey: recordUseHEVCKey) as? Bool ?? false }
+        set { UserDefaults.standard.set(newValue, forKey: recordUseHEVCKey) }
     }
 }

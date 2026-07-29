@@ -1248,4 +1248,12 @@ checkEq("ensuringExtension 已有（大小寫不拘）", FilenameTemplate.ensuri
 checkEq("ensuringExtension gif", FilenameTemplate.ensuringExtension("b.png", ext: "gif"), "b.png.gif")
 checkEq("ensuringPNGExtension 行為不變", FilenameTemplate.ensuringPNGExtension("c"), "c.png")
 
+// 40) 動畫截圖 GIF fps 正規化
+checkEq("gifFps 正規化 命中", AppSettings.normalizedRecordGifFps(12), 12)
+checkEq("gifFps 正規化 平手取小", AppSettings.normalizedRecordGifFps(11), 10)
+checkEq("gifFps 正規化 就近", AppSettings.normalizedRecordGifFps(13), 12)
+checkEq("gifFps 正規化 下界", AppSettings.normalizedRecordGifFps(7), 8)
+checkEq("gifFps 正規化 上界", AppSettings.normalizedRecordGifFps(99), 20)
+checkEq("gifFps 正規化 零", AppSettings.normalizedRecordGifFps(0), 8)
+
 T.finish()
