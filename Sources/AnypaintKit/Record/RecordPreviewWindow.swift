@@ -5,7 +5,11 @@ import AVKit
 /// 視窗骨架/持有慣例對照 `ScrollPreviewWindow`（該檔 5-45 行的骨架、174-216 行的
 /// controller 持有／forget／present 慣例）——這裡不重複解釋，只記差異。
 final class RecordPreviewWindow: NSWindow {
-    /// 內容區最小尺寸：底部「狀態列＋存 GIF＋存 MP4＋丟棄」放得下、影片區也留得下基本可視面積。
+    /// 內容區最小尺寸：底部「狀態列＋存 GIF＋存 MP4＋開啟位置＋丟棄」放得下、影片區也留得下
+    /// 基本可視面積。實測（一次性量測，同 ScrollPreviewWindow.minContentWidth 的量法——
+    /// NSButton.sizeToFit() 量真實寬度，不是憑印象估）：四顆鈕依序寬 61/68/76/50pt，加 stack
+    /// spacing 3×8pt 與左右邊距 12×2，button row 本身只需要 ~303pt——遠低於這裡的 380，
+    /// 加「開啟位置」這顆鈕不需要調大下限。
     static let minContentWidth: CGFloat = 380
     static let minContentHeight: CGFloat = 240
 
@@ -16,7 +20,9 @@ final class RecordPreviewWindow: NSWindow {
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?    // 循環播放：AVPlayerLooper 官方做法，必須持有否則不循環
     private var isExportingGif = false     // 見 close() 的說明：匯出中擋下關閉
+    private var lastSavedURL: URL?         // 最近一次存 GIF/MP4 成功的路徑；「開啟位置」用
     private let statusLabel = NSTextField(labelWithString: "")
+    private let openLocationButton = NSButton(title: "開啟位置", target: nil, action: nil)
     private var buttons: [NSButton] = []
     weak var controller: RecordPreviewWindowController?
 
@@ -62,9 +68,13 @@ final class RecordPreviewWindow: NSWindow {
         saveGifButton.toolTip = "匯出為 GIF 並存到預設資料夾"
         let saveMp4Button = NSButton(title: "存 MP4", target: self, action: #selector(saveMp4Action))
         saveMp4Button.toolTip = "複製母帶存成 MP4（不影響之後再匯出 GIF）"
+        openLocationButton.target = self
+        openLocationButton.action = #selector(openLocationAction)
+        openLocationButton.toolTip = "在 Finder 開啟並選取剛存的檔案"
+        openLocationButton.isEnabled = false   // 還沒存過檔前無路徑可開
         let discardButton = NSButton(title: "丟棄", target: self, action: #selector(discardAction))
         discardButton.toolTip = "丟掉這段動畫截圖並關窗（需確認）"
-        buttons = [saveGifButton, saveMp4Button, discardButton]
+        buttons = [saveGifButton, saveMp4Button, openLocationButton, discardButton]
         for b in buttons {
             b.bezelStyle = .rounded
             b.translatesAutoresizingMaskIntoConstraints = false
@@ -75,7 +85,7 @@ final class RecordPreviewWindow: NSWindow {
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .secondaryLabelColor
 
-        let buttonRow = NSStackView(views: [saveGifButton, saveMp4Button, discardButton])
+        let buttonRow = NSStackView(views: [saveGifButton, saveMp4Button, openLocationButton, discardButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
         buttonRow.translatesAutoresizingMaskIntoConstraints = false
@@ -126,18 +136,36 @@ final class RecordPreviewWindow: NSWindow {
                                case .success:
                                    let saved = self.output.saveCopy(from: tmpGif, ext: "gif", vars: self.vars)
                                    try? FileManager.default.removeItem(at: tmpGif)
+                                   if let saved { self.lastSavedURL = saved }
                                    self.statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" }
                                        ?? "GIF 存檔失敗"
                                case .failure(let e):
                                    self.statusLabel.stringValue = "GIF 匯出失敗：\(e)"
                                }
+                               // 「開啟位置」不是跟著上面 setButtonsEnabled(true) 無條件打開：
+                               // 還沒存過檔（lastSavedURL 是 nil）就不該讓使用者按得下去——
+                               // 沒有路徑可開，按了也只是 guard 直接 return，但那是「看起來能按
+                               // 卻沒反應」，比「本來就是灰的」更讓人困惑。
+                               self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
                            })
     }
 
     /// 存 MP4：copy 母帶（不 move——之後可能還要匯 GIF，母帶得留著）。
     @objc private func saveMp4Action() {
         let saved = output.saveCopy(from: movieURL, ext: "mp4", vars: vars)
+        if let saved {
+            lastSavedURL = saved
+            openLocationButton.isEnabled = true
+        }
         statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" } ?? "MP4 存檔失敗"
+    }
+
+    /// 開啟位置：在 Finder 開啟並選取最近一次存檔的檔案。accessory app 慣例：呼叫前不需要
+    /// 自己 activate——`NSWorkspace.activateFileViewerSelecting` 會讓 Finder 自己浮到前景，
+    /// 這是系統 API 對外的行為，不是本專案 overlay/nonactivating panel 那套事件路由問題。
+    @objc private func openLocationAction() {
+        guard let url = lastSavedURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     /// 丟棄：確認（無法復原，流程同 ScrollPreviewWindow.discardAction）→ close。
