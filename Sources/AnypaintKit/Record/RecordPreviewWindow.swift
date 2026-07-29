@@ -1,21 +1,23 @@
 import AppKit
 import AVKit
 
-/// 動畫截圖預覽：AVPlayerView 循環播放母帶＋〔存 GIF〕〔存 MP4〕〔丟棄〕。
+/// 動畫截圖預覽：AVPlayerView 循環播放母帶＋〔存 GIF〕〔存 MP4〕〔拍快照〕〔開啟位置〕〔丟棄〕。
 /// 視窗骨架/持有慣例對照 `ScrollPreviewWindow`（該檔 5-45 行的骨架、174-216 行的
 /// controller 持有／forget／present 慣例）——這裡不重複解釋，只記差異。
 final class RecordPreviewWindow: NSWindow {
-    /// 內容區最小尺寸：底部「狀態列＋存 GIF＋存 MP4＋開啟位置＋丟棄」放得下、影片區也留得下
-    /// 基本可視面積。實測（一次性量測，同 ScrollPreviewWindow.minContentWidth 的量法——
-    /// NSButton.sizeToFit() 量真實寬度，不是憑印象估）：四顆鈕依序寬 61/68/76/50pt，加 stack
-    /// spacing 3×8pt 與左右邊距 12×2，button row 本身只需要 ~303pt——遠低於這裡的 380，
-    /// 加「開啟位置」這顆鈕不需要調大下限。
-    static let minContentWidth: CGFloat = 380
+    /// 內容區最小尺寸：底部「狀態列＋存 GIF＋存 MP4＋拍快照＋開啟位置＋丟棄」放得下、影片區
+    /// 也留得下基本可視面積。實測（一次性量測，同 ScrollPreviewWindow.minContentWidth 的量法——
+    /// NSButton.sizeToFit() 量真實寬度，不是憑印象估）：五顆鈕依序寬 61/68/63/76/50pt，加 stack
+    /// spacing 4×8pt 與左右邊距 12×2，button row 本身需要 ~374pt——加「拍快照」這顆鈕後只剩
+    /// 6pt 餘裕（相對舊值 380），比 ScrollPreviewWindow 的字型／語系裕度（345→360，＋15）還窄，
+    /// 因此把下限一併調到 400，維持同等級的安全邊際。
+    static let minContentWidth: CGFloat = 400
     static let minContentHeight: CGFloat = 240
 
     private let movieURL: URL
     private let vars: [String: String]
     private let output: RecordOutputService
+    private let pinboard: PinboardService
     private let captureScale: CGFloat      // 擷取螢幕 backingScaleFactor（GIF 降 1x 用；單位：像素/點）
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?    // 循環播放：AVPlayerLooper 官方做法，必須持有否則不循環
@@ -26,11 +28,12 @@ final class RecordPreviewWindow: NSWindow {
     private var buttons: [NSButton] = []
     weak var controller: RecordPreviewWindowController?
 
-    init(movieURL: URL, vars: [String: String], output: RecordOutputService,
+    init(movieURL: URL, vars: [String: String], output: RecordOutputService, pinboard: PinboardService,
          captureScale: CGFloat, contentRect: NSRect) {
         self.movieURL = movieURL
         self.vars = vars
         self.output = output
+        self.pinboard = pinboard
         self.captureScale = captureScale
         super.init(
             contentRect: contentRect,
@@ -52,7 +55,9 @@ final class RecordPreviewWindow: NSWindow {
         guard let content = contentView else { return }
 
         let playerView = AVPlayerView()
-        playerView.controlsStyle = .minimal
+        // .inline（非 .minimal）：原生控制列含可拖曳的進度條（scrubber），讓使用者能拖到任意
+        // 時刻——「拍快照」要對著使用者選定的那一格出手，沒有可拖進度條就只能拍到目前播放位置。
+        playerView.controlsStyle = .inline
         playerView.translatesAutoresizingMaskIntoConstraints = false
 
         // player 建立：AVQueuePlayer + AVPlayerLooper 是 Apple 文件的無縫循環官方做法；
@@ -68,13 +73,15 @@ final class RecordPreviewWindow: NSWindow {
         saveGifButton.toolTip = "匯出為 GIF 並存到預設資料夾"
         let saveMp4Button = NSButton(title: "存 MP4", target: self, action: #selector(saveMp4Action))
         saveMp4Button.toolTip = "複製母帶存成 MP4（不影響之後再匯出 GIF）"
+        let snapshotButton = NSButton(title: "拍快照", target: self, action: #selector(snapshotAction))
+        snapshotButton.toolTip = "把目前播放位置的畫面複製到剪貼簿（⌘⇧V 可貼成浮動貼圖）"
         openLocationButton.target = self
         openLocationButton.action = #selector(openLocationAction)
         openLocationButton.toolTip = "在 Finder 開啟並選取剛存的檔案"
         openLocationButton.isEnabled = false   // 還沒存過檔前無路徑可開
         let discardButton = NSButton(title: "丟棄", target: self, action: #selector(discardAction))
         discardButton.toolTip = "丟掉這段動畫截圖並關窗（需確認）"
-        buttons = [saveGifButton, saveMp4Button, openLocationButton, discardButton]
+        buttons = [saveGifButton, saveMp4Button, snapshotButton, openLocationButton, discardButton]
         for b in buttons {
             b.bezelStyle = .rounded
             b.translatesAutoresizingMaskIntoConstraints = false
@@ -85,7 +92,8 @@ final class RecordPreviewWindow: NSWindow {
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .secondaryLabelColor
 
-        let buttonRow = NSStackView(views: [saveGifButton, saveMp4Button, openLocationButton, discardButton])
+        let buttonRow = NSStackView(views: [saveGifButton, saveMp4Button, snapshotButton,
+                                            openLocationButton, discardButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
         buttonRow.translatesAutoresizingMaskIntoConstraints = false
@@ -158,6 +166,34 @@ final class RecordPreviewWindow: NSWindow {
             openLocationButton.isEnabled = true
         }
         statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" } ?? "MP4 存檔失敗"
+    }
+
+    /// 拍快照：把播放器目前所在時刻的畫面複製到剪貼簿。不受 `lastSavedURL` 影響（跟存不存過檔
+    /// 無關，任何時刻都能拍），GIF 匯出中則跟其他鈕一起被 `setButtonsEnabled(false)` 停用
+    /// （它就在 `buttons` 陣列裡，沒有特殊路徑）。
+    ///
+    /// 用 `AVAssetImageGenerator.image(at:)`（macOS 13+ 的 async API，`generateCGImageAsynchronously
+    /// ForTime:completionHandler:` 的 Swift 覆寫；已對照 SDK header 的 `NS_REFINED_FOR_SWIFT_ASYNC`
+    /// 確認簽章，不是憑印象）——不用已 deprecated 的同步 `copyCGImage(at:actualTime:)`，零 warning
+    /// 是硬約束。容忍度設 `.zero`：拍快照要對到使用者在 scrubber 上選的那一格，不要讓 generator
+    /// 為了效能就近抓鄰近格。輸出走 `PinboardService.copyLarge`（與 ScrollPreviewWindow.copyAction
+    /// 同款），scale 用 `captureScale`——與整個檔案的「像素↔點」換算基準一致（同 GIF 降 1x 的道理）。
+    @objc private func snapshotAction() {
+        guard let player else { return }
+        let time = player.currentTime()
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: movieURL))
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await generator.image(at: time)
+                self.pinboard.copyLarge(cgImage: result.image, scale: self.captureScale)
+                self.statusLabel.stringValue = "快照已複製（⌘⇧V 可貼出）"
+            } catch {
+                self.statusLabel.stringValue = "拍快照失敗：\(error)"
+            }
+        }
     }
 
     /// 開啟位置：在 Finder 開啟並選取最近一次存檔的檔案。accessory app 慣例：呼叫前不需要
@@ -245,10 +281,12 @@ private func loadNaturalSize(movieURL: URL) async -> CGSize {
 @MainActor
 public final class RecordPreviewWindowController {
     private let output: RecordOutputService
+    private let pinboard: PinboardService
     private var windows: [RecordPreviewWindow] = []
 
-    public init(output: RecordOutputService) {
+    public init(output: RecordOutputService, pinboard: PinboardService) {
         self.output = output
+        self.pinboard = pinboard
     }
 
     /// 開一個新的預覽視窗。
@@ -281,7 +319,7 @@ public final class RecordPreviewWindowController {
         let height = min(max(idealHeight, RecordPreviewWindow.minContentHeight), visible.height)
         let contentRect = NSRect(x: 0, y: 0, width: width, height: height)
 
-        let window = RecordPreviewWindow(movieURL: movieURL, vars: vars, output: output,
+        let window = RecordPreviewWindow(movieURL: movieURL, vars: vars, output: output, pinboard: pinboard,
                                          captureScale: scale, contentRect: contentRect)
         window.controller = self
         windows.append(window)

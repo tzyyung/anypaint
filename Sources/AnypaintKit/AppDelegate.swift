@@ -267,7 +267,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             self.menuBar.setRecording(false)
             guard let url else { return }                              // 取消或失敗 → 靜默（同 scroll 慣例）
             if self.recordPreviewController == nil {
-                self.recordPreviewController = RecordPreviewWindowController(output: self.recordOutput)
+                self.recordPreviewController = RecordPreviewWindowController(output: self.recordOutput,
+                                                                              pinboard: self.pinboard)
             }
             Task { @MainActor in
                 // present(movieURL:vars:captureScale:) 是 async（需先讀母帶 naturalSize）。
