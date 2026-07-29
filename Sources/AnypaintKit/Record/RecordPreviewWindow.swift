@@ -33,6 +33,7 @@ final class RecordPreviewWindow: NSWindow {
     // §1.7b：沒有內建 WebP 編碼器可退，跟 gifski 的「找不到就回退內建」語意不同）。
     private let img2webpPath: String?
     private var isExporting = false        // 見 close() 的說明：匯出（GIF 或 APNG 或 WebP）中擋下關閉
+    private var isTrimming = false         // trim overlay 顯示中擋下關閉（見 close()，不給強制關閉逃生口）
     private var lastSavedURL: URL?         // 最近一次存 GIF/APNG/MP4 成功的路徑；「開啟位置」用
     // 剪裁範圍：nil＝未剪裁（匯出整段母帶，行為不變）；非 nil＝三種匯出格式都套用這段範圍
     // （設計文件 §1.6）。母帶絕對時間軸座標（與 player.currentItem 的
@@ -200,9 +201,11 @@ final class RecordPreviewWindow: NSWindow {
         // 使用者不該還按得下丟棄／存檔等鈕。completion（OK 或 Cancel 都會呼叫一次）用 defer
         // 解鎖，兩條結果路徑共用同一份收尾，不必在每個分支各複製一次。
         setButtonsEnabled(false)
+        isTrimming = true   // 見 close() 的守衛：trim overlay 顯示中不給關窗，不論強制與否
         playerView.beginTrimming { [weak self] result in
             guard let self else { return }
             defer {
+                self.isTrimming = false
                 self.setButtonsEnabled(true)
                 self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
             }
@@ -423,6 +426,18 @@ final class RecordPreviewWindow: NSWindow {
 
     // 紅鈕（標準關閉）與「丟棄」共用這個 close()（同 ScrollPreviewWindow 慣例）。
     override func close() {
+        // 剪裁中關窗：不給強制關閉逃生口，跟下面 isExporting 的處理不同——trim 隨時可以讓
+        // 使用者自己按原生剪裁列的「完成」或「取消」結束，不像匯出可能因為母帶損毀等原因讓
+        // 背景 Task 卡死、除了強制關閉別無他法，因此這裡不需要（也不該給）逃生口。
+        if isTrimming {
+            let alert = NSAlert()
+            alert.messageText = "剪裁進行中——請先按剪裁列的完成或取消"
+            alert.addButton(withTitle: "好")
+            alert.alertStyle = .warning
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+            return
+        }
         // 匯出中（GIF 或 APNG）關窗：GifExporter 沒有 cancel/timeout，detached Task 可能卡死
         // （例如母帶損毀導致 reader 卡在某個狀態）——若只「擋下關閉、要求等待」而不給逃生口，
         // 使用者除了強制砍掉整個 app 別無他法。因此提供第二顆「強制關閉」鈕，預設鈕仍是
@@ -521,9 +536,11 @@ final class RecordPreviewWindow: NSWindow {
 
 /// writePromiseTo 的背景複製佇列：母帶可能不小（螢幕錄製），若卡在 delegate 預設的
 /// mainOperationQueue（等於主執行緒）會頂到 UI（CLAUDE.md 記過的教訓：I/O 不可卡主執行緒）。
-/// 宣告在檔案作用域（不是 RecordPreviewWindow 的成員）：MainActor 隔離只套用在型別成員上，
-/// 這裡刻意不掛在型別上，讓 `operationQueueForFilePromiseProvider`／`writePromiseTo`
-/// 這兩個非 MainActor 情境能直接讀取，不必處理跨 actor 存取。
+/// 宣告在檔案作用域（不是 RecordPreviewWindow 的成員）：已查 AppKit header——
+/// `operationQueueForFilePromiseProvider:` 標的其實是 `NS_SWIFT_UI_ACTOR`（等於 MainActor），
+/// 只有 `writePromiseTo` 才是 `NS_SWIFT_NONISOLATED`。掛在檔案作用域的理由是
+/// `writePromiseTo` 實際執行時就在這顆 queue 上、不在 MainActor——要能跨隔離讀到它，
+/// 就不能宣告成 RecordPreviewWindow 的成員（那會被 MainActor 隔離，`writePromiseTo` 讀不到）。
 private let dragPromiseCopyQueue = OperationQueue()
 
 /// 拖曳出 MP4：`NSFilePromiseProviderDelegate` conformance（設計文件 §1.4）。
@@ -538,6 +555,14 @@ extension RecordPreviewWindow: NSFilePromiseProviderDelegate {
         var name = FilenameTemplate.expand(AppSettings.manualNameTemplate, date: now, vars: vars)
         if FilenameTemplate.hasPNGExtension(name) { name = String(name.dropLast(4)) }
         name = FilenameTemplate.ensuringExtension(name, ext: "mp4")
+        // degenerate 樣板（清洗後全空，例如樣板本身只由非法字元組成）會讓上面剝完副檔名的
+        // 檔名段變空，補完 .mp4 就成了純粹的「.mp4」——在 Finder 顯示成隱藏檔。fallback 仿
+        // RecordOutputService.saveCopy 的模式：展開 defaultName、剝 .png、補正確副檔名，交給
+        // ensuringMeaningfulFilename 判斷原檔名是否有意義、需不需要代打。
+        let fallback = FilenameTemplate.ensuringExtension(
+            String(FilenameTemplate.expand(FilenameTemplate.defaultName, date: now, vars: vars).dropLast(4)),
+            ext: "mp4")
+        name = FilenameTemplate.ensuringMeaningfulFilename(name, fallbackName: fallback, ext: "mp4")
         // 只能回傳純檔名（NSFilePromiseProvider 的契約）；manualNameTemplate 本來就是純檔名
         // （AppSettings 的文件註記），這裡仍防禦性取 lastPathComponent，避免萬一樣板含 /
         // 被誤判成目錄。

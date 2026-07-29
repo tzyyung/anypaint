@@ -228,9 +228,11 @@ RecordSelfCheck.swift 內建自檢工具（見 §7），不參與正式流程
 預覽視窗「剪裁」鈕（原生 `AVPlayerView.beginTrimming`）產生的 `CMTimeRange`（母帶絕對時間軸，
 見 `RecordPreviewWindow.trimAction`）往下傳到 `GifExporter.prepareReader`——**GIF／APNG／WebP
 三者共用同一條路徑**：`saveGifAction`／`saveApngAction` 走 `GifExporter.export(...timeRange:
-trimRange...)`，`saveWebpAction` 走 `GifExporter.exportWebP(...timeRange: trimRange...)`，兩者
-內部都經過 `extractFramesAsPNG` → `prepareReader`，因此下面幾條 clamp／歸零規則對 WebP 同樣
-成立，不是只有 GIF/APNG 才有：
+trimRange...)`，`saveWebpAction` 走 `GifExporter.exportWebP(...timeRange: trimRange...)`；內建
+CGImageDestination 路徑（`exportAsync`，GIF 未偵測到 gifski 時／APNG 一律）直接呼叫
+`prepareReader`，只有 gifski／img2webp 外部引擎路徑（`exportViaGifski`／`exportViaImg2webp`）
+才會先經過 `extractFramesAsPNG` 再轉呼叫 `prepareReader`——不論走哪一條，下面幾條 clamp／
+歸零規則都對 WebP 同樣成立，不是只有 GIF/APNG 才有：
 
 - `reader.timeRange = timeRange` 必須在 `startReading()` 之前設（`AVAssetReader.h`：之後設值
   會丟例外）。
@@ -358,7 +360,7 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
 | 6 | armed HUD 秒數欄可打字 | 選區框好、HUD 進入 armed 後，滑鼠點進秒數欄能正常打字並在「開始」後生效（nonactivating panel 的鍵盤路由是 CLAUDE.md 點名的高風險區） |
 | 7 | 通知點擊開位置 | 截圖／滾動截圖／動畫截圖存檔通知點擊後，Finder 開啟並選取該檔案；檔案已被移走時點擊安靜無反應（不報錯） |
 | 8 | HEVC 可播＋奇數像素邊長選區 | 設定開啟 HEVC 後錄製匯出的 MP4 能在 QuickTime／預覽 正常播放；框選邊長換算成奇數像素時仍能正常編碼、播放不歪 |
-| 9 | 剪裁全流程（六項） | `canBeginTrimming` 在 `AVPlayerLooper` 播放下為 true 且 trim UI 正常顯示（若否需走 §1.6 提到的 fallback：暫停 looper 改單曲播放）；OK 後 `reversePlaybackEndTime`/`forwardPlaybackEndTime` 確實反映使用者選取範圍；剪裁後首格是選取起點附近的畫面（非黑格或範圍外內容）；GIF／APNG／MP4／WebP（偵測到 img2webp 時）在同一個 `trimRange` 下匯出，時長一致且符合預期；重剪（再按「剪裁」）與取消（trim UI 選 Cancel）後 `trimRange` 維持/更新正確；trim overlay 顯示中關閉預覽視窗行為正常（不 crash、不留孤兒暫存檔） |
+| 9 | 剪裁全流程（六項） | `canBeginTrimming` 在 `AVPlayerLooper` 播放下為 true 且 trim UI 正常顯示（若否需走 §1.6 提到的 fallback：暫停 looper 改單曲播放）；OK 後 `reversePlaybackEndTime`/`forwardPlaybackEndTime` 確實反映使用者選取範圍；剪裁後首格是選取起點附近的畫面（非黑格或範圍外內容）；GIF／APNG／MP4／WebP（偵測到 img2webp 時）在同一個 `trimRange` 下匯出，時長一致且符合預期；重剪（再按「剪裁」）與取消（trim UI 選 Cancel）後 `trimRange` 維持/更新正確；trim overlay 顯示中按關閉：確認守衛 alert 出現且取消 trim 後可正常關窗（`RecordPreviewWindow.isTrimming` 守衛已程式碼化，不給強制關閉逃生口，見 §6） |
 | 10 | 拖曳出 MP4（六項） | 拖到 Finder：檔案落地、檔名符合樣板展開（剝 .png 補 .mp4）、內容為完整可播母帶；拖到瀏覽器：`NSFilePromiseProvider` 的 promise 型拖曳是否被接收端正確接受（部分較舊/客製拖放實作只吃 `NSURL`／`NSFilenamesPboardType`，不吃 promise）；`contentOverlayView` 疊的 `DragOriginView` 確實不擋 `.inline` 控制列的滑鼠事件（scrubber 拖曳、播放/暫停按鈕、原生 click-to-pause 手勢不被吞掉）；右鍵選單／視訊分析選取等 `AVPlayerView` 原生手勢確實穿透 `DragOriginView`；拖曳進行中同時有 GIF/APNG/MP4/WebP 匯出在跑，兩者對同一份母帶的檔案 I/O 不互相干擾；拖曳中途（`writePromiseTo` 背景複製還沒完成）就關閉/丟棄預覽視窗（母帶被刪除）不出錯 |
 | 11 | gifski 兩況 | 裝 gifski（`brew install gifski`）：存 GIF 走外部引擎，畫質明顯優於內建（無明顯調色盤 banding）；不裝（或暫時改名模擬移除）：存 GIF 正常回退內建路徑，行為與第一輪相同 |
 | 12 | img2webp（三項） | `-d`（per-frame delay）語法在真實 img2webp 上行為與 libwebp 官方文件描述一致（本機未裝，尚未實測，見 §6）；產出的 WebP 讀回檢視畫面/fps/循環都正確；「存 WebP」鈕從偵測到匯出到開啟位置的預覽全流程正常 |

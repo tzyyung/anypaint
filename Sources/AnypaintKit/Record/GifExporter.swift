@@ -193,7 +193,9 @@ public enum GifExporter {
     /// 抽格寫 PNG 到暫存目錄（gifski／img2webp 兩條外部子程序路徑共用；「先抽 PNG 再丟外部工具」
     /// 是同一套管線，抽格本體只留一份，兩個引擎各自只補上自己的子程序呼叫與引數）。
     /// 呼叫端負責建立/清理 `framesDir`（`defer` 放在呼叫端，這裡只管抽格寫檔）。
-    /// 零填充排序（frame-0001.png…）確保外部工具依序吃到正確的畫面順序。
+    /// 真正的排序保證是 `framePaths` 陣列本身的順序（呼叫端依這個陣列順序把檔案交給
+    /// gifski／img2webp）；零填充（frame-000001.png…）只是防外部工具自己重新掃描目錄、
+    /// 依檔名字典序排列時被弄亂的保險。6 位數：不限時長的錄製理論上可超過 9999 格。
     private static func extractFramesAsPNG(movieURL: URL, pointScale: CGFloat, fps: Double,
                                            timeRange: CMTimeRange?, framesDir: URL,
                                            progress: @escaping @MainActor (Double) -> Void)
@@ -205,7 +207,7 @@ public enum GifExporter {
         var framePaths: [String] = []
         framePaths.reserveCapacity(plan.grid.count)
         try await decodeLoop(plan: plan, progress: progress) { gridIndex, image in
-            let path = framesDir.appendingPathComponent(String(format: "frame-%04d.png", gridIndex)).path
+            let path = framesDir.appendingPathComponent(String(format: "frame-%06d.png", gridIndex)).path
             try writePNG(image, to: path)
             framePaths.append(path)
         }
