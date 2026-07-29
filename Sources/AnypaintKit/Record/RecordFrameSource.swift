@@ -142,16 +142,18 @@ public final class RecordFrameSource: NSObject {
     private var outputURL: URL?
     private let sampleQueue = DispatchQueue(label: "anypaint.record.frames")
     /// nonisolated：handler 在 sampleQueue 上直接讀（同 ScrollFrameSource.ciContext 的編譯器限制
-    /// 說明，但這裡是可變的 var，多一條額外保證要記清楚）。**豁免理由（fix round 2 改寫過，
-    /// 之前的版本過度宣稱）**：真正成立的不變式是「`self.box` 只在『這次呼叫自己手上有一個
+    /// 說明，但這裡是可變的 var，多一條額外保證要記清楚）。**豁免理由（fix round 3 再次校正——
+    /// round 2 只讓 `abort()` 遵守，`stopAndFinish()` 當時仍是漏網之魚，這裡把敘述改成兩者
+    /// 都遵守之後才成立的樣子）**：真正成立的不變式是「`self.box` 只在『這次呼叫自己手上有一個
     /// 已經 `await stream.stopCapture()` 過的 stream』時才會被清 nil」——寫入者必須先親自
-    /// 確認過 SCK 不再派發 handler，才能碰 box。`start()` 的 pendingStop 分支、`stopAndFinish()`
-    /// 都遵守這條；`abort()` 也遵守，但反過來說：如果呼叫 `abort()` 時 `self.stream` 還是 nil
-    /// （代表 `start()` 還在飛，尚未走到賦值 `self.stream` 那步——這正是 `self.box` 可能已經
-    /// 存在、handler 也可能已經在 sampleQueue 上跑的窗口），`abort()` 手上沒有可以自己
-    /// `stopCapture()` 的 stream，這時它完全不碰 `self.box`（見 `abort()` 內的早退分支），
-    /// 把清理完全交給 `start()` 自己的 pendingStop 分支收尾。沒有這條規則以前，`abort()`
-    /// 會在這個窗口對 `self.box` 做無同步的跨執行緒寫，跟 sampleQueue 上的讀是真的資料競爭。
+    /// 確認過 SCK 不再派發 handler，才能碰 box。`start()` 的 pendingStop 分支、`abort()`、
+    /// `stopAndFinish()` 三者都遵守這條；`abort()`／`stopAndFinish()` 若被呼叫時 `self.stream`
+    /// 還是 nil（代表 `start()` 還在飛，尚未走到賦值 `self.stream` 那步——這正是 `self.box`
+    /// 可能已經存在、handler 也可能已經在 sampleQueue 上跑的窗口），兩者手上都沒有可以自己
+    /// `stopCapture()` 的 stream，這時都完全不碰 `self.box`（見各自內部的早退分支），把清理
+    /// 完全交給 `start()` 自己的 pendingStop 分支收尾。沒有這條規則以前，`abort()`（後來
+    /// `stopAndFinish()` 也被抓到同一個洞）會在這個窗口對 `self.box` 做無同步的跨執行緒寫，
+    /// 跟 sampleQueue 上的讀是真的資料競爭。
     private nonisolated(unsafe) var box: WriterBox?
 
     /// - Parameters:
@@ -172,6 +174,17 @@ public final class RecordFrameSource: NSObject {
         guard stream == nil, box == nil else { throw RecordError.alreadyRecording }
         pendingStop = false
         self.outputURL = outputURL
+        defer {
+            // 這個函式有三段更早的 throw（SCShareableContent 抓取失敗、noDisplays、
+            // WriterBox.init 失敗）發生在 self.box 被指派之前——那些路徑上面沒有任何程式碼
+            // 會清 self.outputURL，若不補這個 defer，物件雖然沒有 box/stream 洩漏，卻會留著
+            // 一個指向「什麼都還沒建」的 outputURL，跟上面「拋錯後全部回到 nil」的契約不符。
+            // 判準用 `box == nil`：一旦 self.box 被指派過，之後任何一條退出路徑（下面的
+            // 內層 do/catch、pendingStop 分支、或成功完成）都已經各自處理過 outputURL 的去留，
+            // 這裡就不重複插手（用 box 而非額外的旗標，因為它已經是「有沒有建出東西」的
+            // 事實依據，不需要平行維護第二個布林值）。
+            if box == nil { self.outputURL = nil }
+        }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         guard let displayID = screen.deviceDescription[key] as? CGDirectDisplayID,
@@ -247,9 +260,23 @@ public final class RecordFrameSource: NSObject {
     }
 
     /// 正常停止：停 stream → 在 sampleQueue 上 finalize（補尾格＋endSession＋status 檢查）。
+    ///
+    /// 若 `start()` 還在飛（例如 `SCShareableContent` 抓取慢了幾百毫秒、使用者這時就按了
+    /// 停止，或限時錄影剛好在這個窗口到期），這裡沒有自己的 stream 可以先確認 SCK 收手，
+    /// 會直接丟 `RecordError.noFrames`——即使 `WriterBox` 當下可能已經建好、甚至已經收到
+    /// 第一格：對呼叫端來說「根本還沒真正開始錄影」跟「錄了但一格都沒收到」結果一樣，都是
+    /// 沒有可用的母帶。真正的收尾（cancel＋刪暫存檔）交給 `start()` 自己的 pendingStop
+    /// 分支，這裡不搶（見 `box` 屬性上的豁免理由）。
     public func stopAndFinish() async throws -> URL {
         pendingStop = true
-        if let stream { self.stream = nil; try? await stream.stopCapture() }
+        guard let stream else {
+            // 同 abort() 的早退分支，理由一致：self.stream 還是 nil 時，手上沒有可以先
+            // await stopCapture() 的 stream，不碰 self.box／self.outputURL，全部交給
+            // start() 自己的 pendingStop 分支收尾。
+            throw RecordError.noFrames
+        }
+        self.stream = nil
+        try? await stream.stopCapture()
         guard let box, let url = outputURL else { throw RecordError.noFrames }
         // 母帶的所有權在這裡整個轉交出去（box 與 outputURL 都清成 nil）：
         // 之後不管是 abort() 被誤呼叫、還是呼叫端等 continuation 期間又呼叫別的方法，
@@ -273,7 +300,14 @@ public final class RecordFrameSource: NSObject {
         }
     }
 
-    /// 取消：停 stream、丟母帶、刪暫存檔。
+    /// 取消：已經在錄影時，停 stream、丟母帶、刪暫存檔（回傳前保證這三件事都做完）。
+    ///
+    /// 若 `start()` 還在飛（`self.stream` 尚未賦值——例如 `SCShareableContent` 抓取還沒
+    /// 回來，或還在等 `startCapture()`），這裡沒有自己的 stream 可以先確認 SCK 收手，
+    /// 只會設 `pendingStop = true` 就立刻回傳；實際的停 stream／丟母帶／刪暫存檔會延後到
+    /// `start()` 自己的 pendingStop 分支才發生（`start()` 那次呼叫尚未 resume，呼叫端看
+    /// 不到、也等不到那個時間點）。也就是說：`abort()` 回傳時，暫存檔不保證已經被刪掉——
+    /// 只有在呼叫 `abort()` 當下已經確定在錄影（`self.stream` 非 nil）才有這個保證。
     public func abort() async {
         pendingStop = true
         guard let stream else {
