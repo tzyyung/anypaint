@@ -20,11 +20,15 @@ public final class RecordHUDController: NSObject {
 
     public override init() { super.init() }
 
-    /// 秒數欄解析：空白/非數字/≤0 → nil（不限）；有值 clamp 1...600（設計文件 §1）。
+    /// 秒數欄解析：空白/非整數/≤0 → nil（不限）；有值 clamp 1...600（設計文件 §1「1–600 整數秒」）。
+    /// 用 `Int(t)`，不用 `Double(t)`：小數輸入（例如 "2.5"）視為無效——同空白一樣回 nil、
+    /// 靜默當成不限，不在 HUD 上顯示錯誤。待命階段的 HUD 沒有錯誤訊息的容身之處
+    /// （`showMessage` 是給選區太小用的），與其半吊子地只挑得出某些無效輸入來提示、
+    /// 不如統一「無效輸入＝不限」這一種行為，簡單且可預期。
     public var durationSeconds: Double? {
         let t = durationField.stringValue.trimmingCharacters(in: .whitespaces)
-        guard let v = Double(t), v > 0 else { return nil }
-        return min(600, max(1, v))
+        guard let v = Int(t), v > 0 else { return nil }
+        return Double(min(600, max(1, v)))
     }
 
     /// 位置：選區下緣外 12pt；貼近螢幕底時翻到上緣外；水平 clamp 進螢幕（避免貼邊選區把 HUD 推出畫面）。

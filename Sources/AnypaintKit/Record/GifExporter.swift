@@ -72,6 +72,9 @@ public enum GifExporter {
         // 下面的「while let n = next, n.pts <= target { current = n; next = decodeNext() }」——
         // 兩者逐字對應；行為若歧異，以純函式（Task 1 已 selftest）為準（設計文件 §6）。
         guard var current = decodeNext(from: output, width: outW, height: outH) else {
+            // 首格就拿不到：跟主迴圈結尾同一套判準——reader 已經 .failed 代表母帶讀到一半
+            // （這裡是一開始）就壞了，不是「真的沒有格」，兩者要分開回報。
+            if reader.status == .failed { throw RecordError.writerFailed(reader.error) }
             throw RecordError.noFrames
         }
         var next = decodeNext(from: output, width: outW, height: outH)

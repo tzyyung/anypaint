@@ -176,8 +176,13 @@ public final class RecordSession {
                 guard self.state == .finishing else { return }
                 self.teardown()
                 self.onFinished?(nil, scale)
+                // NSLog 在未公證自簽 app 撈不到（CLAUDE.md 診斷原則）——不論哪種失敗都要有
+                // 使用者感知得到的回饋，否則整段錄製「憑空消失」使用者卻毫無所覺。
                 if case RecordError.noFrames = error { NSSound.beep() }   // 一格都沒錄到
-                else { NSLog("anypaint: 動畫截圖收檔失敗 %@", String(describing: error)) }
+                else {
+                    NSSound.beep()
+                    NSLog("anypaint: 動畫截圖收檔失敗 %@", String(describing: error))
+                }
             }
         }
     }
@@ -208,6 +213,9 @@ public final class RecordSession {
                 // 若母帶其實已經寫完只是回呼卡住，半成品/完成檔留在暫存目錄，交給下次啟動的
                 // `RecordOutputService.cleanupStaleTempFiles()` 掃掉，這裡不等也不主動刪
                 // （沒有安全的方式在不確定 writer 是否還在寫的情況下去動那個檔案）。
+                // 這條放生路徑原本零回饋（NSLog 在未公證自簽 app 撈不到——CLAUDE.md）——
+                // 使用者只會看到框與 HUD 憑空消失，比照上面 writerFailed 的 beep 給個訊號。
+                NSSound.beep()
                 self.teardown()
                 self.onFinished?(nil, self.screen?.backingScaleFactor ?? 2)
             default:
@@ -240,5 +248,8 @@ public final class RecordSession {
         hud.dismiss()
         durationLimit = nil
         state = .idle
+        // 這次 session 的 stream 已經死透（或從未活過）：清掉回呼，避免上一段錄製的死 stream
+        // 遲到觸發的錯誤在下一段全新錄製開始後才送達、把新 session 也一起 stopRecording() 掉。
+        frameSource.onStreamError = nil
     }
 }

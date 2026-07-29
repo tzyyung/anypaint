@@ -24,7 +24,7 @@
 
 | 行為 | 說明 |
 |---|---|
-| 逃生路徑：取消（丟棄） | Esc（僅 selecting/armed）、HUD 取消鈕、armed 中再按同一顆全域快鍵（Carbon，不受 app 前景狀態影響） |
+| 逃生路徑：取消（丟棄） | Esc（僅 selecting/armed）、HUD 取消鈕、selecting/armed 中再按同一顆全域快鍵（Carbon，不受 app 前景狀態影響） |
 | 逃生路徑：停止（收檔保留） | recording 中再按同一顆全域快鍵、HUD 停止鈕、倒數到、看門狗、stream error 兜底——五者共用同一條停止程序（§4） |
 | 不限時看門狗 | 10 分鐘自動走正常停止路徑（防忘記停吃光磁碟） |
 | 錄製中顯示游標／點擊高亮圈 | 設定可各自關；**游標關閉時點擊圈勾選框連動停用**（`CaptureSettingsViewController.updateClickRingEnabledState`）——點擊圈要開，游標必須先開（Kap 的 UX 細節，設定 → 控制/截圖分頁） |
@@ -159,8 +159,9 @@ RecordSelfCheck.swift 內建自檢工具（見 §7），不參與正式流程
   選區中心、只靠 alpha 0 保證使用者看不到這次借位。
 - 視覺（Screenity 參數）：按下瞬間在游標處顯示 40pt 圈、**寫死 `NSColor.systemOrange`**
   （不是系統 accent 色）3pt 實色描邊為主視覺；疊一層同心、半徑微放大（+0.5pt）、4pt
-  半透明黑（35% alpha）描邊在下——半徑與線寬都比橘圈大，因此會在橘圈外緣每側露出約 0.5pt
-  深色輪廓保對比（CLAUDE.md「疊色描邊」教訓的實作方式：這裡用「同心微放大」達成同樣的
+  半透明黑（35% alpha）描邊在下——半徑比橘圈大 0.5pt、線寬又多 1pt，幾何上外側露出 1pt、
+  內側露出 0（`ClickRingOverlay.swift:81` 註解「3pt 亮橘描邊＋1pt 深色外圈」），足夠在橘圈
+  外緣提供對比（CLAUDE.md「疊色描邊」教訓的實作方式：這裡用「同心微放大」達成同樣的
   「任一背景都留得下對比」效果，不是該教訓描述的「同寬黑白交錯」手法）；按住拖曳跟隨游標；
   放開後 350ms **淡出**（`ClickRingView.fadeOut` 只動 `alphaValue`，不縮放尺寸）。
 
@@ -258,7 +259,7 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
    啟動：`open -n -a <bundle> --args --record-selfcheck`（**必須 `open -n`**——既有實例會吃掉
    `--args`，症狀是「啟動了卻不寫 log」，同滾動截圖既有教訓）。結果寫
    `/tmp/anypaint-record-selfcheck.log`，跑完自動 exit。首跑全過：時長 6.00s、
-   格數＝`Int(實測時長×12)`＝71（粗估 72±2 一併過關）、寬 360（對應 6s×12fps）。
+   格數＝`Int(實測時長×12)`＝71（粗估 72±2 一併過關）、寬 360（＝像素寬 720 ÷ scale 2.0）。
 
    與正式流程唯一差異：`excludeSelf: false`（自檢要拍的正是自家測試視窗）。其餘（filter／
    sourceRect 座標鏈／queueDepth／WriterBox 補尾格／GifExporter 取樣）完全相同。
@@ -267,10 +268,17 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
 的 `isTerminal` 冪等化、`reader.status` 檢查，全部是純邏輯 selftest 測不到、只在把整條管線
 接起來跑（app 內自檢或實機手動操作）才會現形的坑。
 
-**尚未自動化、仍在手動清單上**：點擊圈是否真的入鏡（HUD/預覽視窗不入鏡有 app 整體排除
-兜底，點擊圈的 `exceptingWindows` 白名單只有靜態推理＋windowID 比對邏輯的正確性，沒有
-自動化驗證會去真的解碼母帶確認圈有沒有拍進去）——`RecordSelfCheck` 目前不模擬滑鼠點擊，
-這條仍要實機手動驗證。
+**尚未自動化、仍在手動清單上**（`RecordSelfCheck` 目前不模擬滑鼠點擊、不切前景/背景、
+不打字進 HUD，以下都只有靜態推理或部分自動化，沒有端到端驗證）：
+
+| # | 驗證項目 | 預期結果 |
+|---|---|---|
+| 1 | 點擊圈入鏡 | 錄出的 mp4 裡看得到橘圈（點擊圈的 `exceptingWindows` 白名單只有靜態推理＋windowID 比對邏輯的正確性，沒有自動化驗證會去真的解碼母帶確認圈有沒有拍進去） |
+| 2 | HUD／選區框不入鏡 | 錄出的 mp4 裡看不到 HUD 面板或選區框線（app 整體排除兜底，但沒有解碼母帶做過確認） |
+| 3 | 失去前景後仍能停止 | 錄製中點別的 app 搶走前景，再按 `⌘⇧R` 仍能正常停止並收到檔案（Carbon 全域快鍵不受 app 前景狀態影響） |
+| 4 | 游標／點擊圈開關生效 | 設定分頁關閉游標後，點擊圈選項變灰且不可勾；分別開關兩者錄製，實際行為與設定一致 |
+| 5 | 長時間中段靜止 | 錄 10 秒、中間靜止 5 秒 → 收到的 mp4 時長仍 ~10s（不因 SCK 靜止不供格而變短），匯出的 GIF 靜止段播放不跳格 |
+| 6 | armed HUD 秒數欄可打字 | 選區框好、HUD 進入 armed 後，滑鼠點進秒數欄能正常打字並在「開始」後生效（nonactivating panel 的鍵盤路由是 CLAUDE.md 點名的高風險區） |
 
 ---
 
