@@ -93,14 +93,33 @@ public enum GifExporter {
             ] as CFDictionary)
             if gridIndex % progressStep == 0 || gridIndex == grid.count - 1 {
                 let done = Double(gridIndex + 1) / Double(grid.count)
+                // 這個 await 同時是 cooperative thread pool 的讓出點：拿掉節流、改成每格都
+                // await，CPU-bound 的解碼／縮圖迴圈會長時間佔住 pool thread 不放手；反過來
+                // 若把節流拿掉去「優化」成完全不 await，這條 Task 就再也不會讓出，等於堵住
+                // 這顆 pool thread 直到匯出完成——節流是兩者的折衷，不是可有可無的效能微調。
                 await progress(done)
             }
+        }
+        // AVAssetReader.h：copyNextSampleBuffer() 回 nil 之後必須查 status 才能分辨「真的讀完」
+        // 還是「讀到一半失敗」——先前這裡完全沒查，母帶中途損毀（例如錄影當掉留下的截斷檔）會讓
+        // reader 轉 .failed，上面的迴圈卻只看到 decodeNext 回 nil、當成「這段期間畫面靜止」，
+        // 靜默拿 current 補滿剩餘所有 grid 格，最後 CGImageDestinationFinalize 照樣成功、
+        // completion(.success(()))——吐出一支大半凍結、看起來正常但其實漏掉損毀點之後內容的 GIF。
+        // 損毀與「壞格跳過」（decodeNext 內部續讀）是兩件事，這裡分開處理：壞格不中斷整段匯出，
+        // reader 真的死亡則必須讓呼叫端知道。
+        if reader.status == .failed {
+            throw RecordError.writerFailed(reader.error)
         }
         guard CGImageDestinationFinalize(dest) else { throw RecordError.writerFailed(nil) }
     }
 
     /// 循序讀下一格已解碼影像（BGRA → 縮到 1x 點尺寸的 CGImage）；EOF 或讀取錯誤回 nil。
     /// 解不出影像的壞格直接跳過繼續讀（不中斷整段匯出）。
+    ///
+    /// 每一格來源（包括之後會被下一格取代、其實用不到的那些靜止期中間格）都在讀出當下立刻
+    /// `downscaled(...)`，不能延後到「確定會用到」才轉——`output.alwaysCopiesSampleData = false`
+    /// 表示 sample buffer 背後的記憶體是 reader 內部緩衝區的借用，`copyNextSampleBuffer()`
+    /// 下一次呼叫就可能回收；留著 `CMSampleBuffer`／`CVPixelBuffer` 等下一輪才讀是 use-after-free。
     private static func decodeNext(from output: AVAssetReaderTrackOutput,
                                    width: Int, height: Int) -> (image: CGImage, pts: Double)? {
         while let sb = output.copyNextSampleBuffer() {
