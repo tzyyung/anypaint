@@ -1183,4 +1183,50 @@ check("sideRect 底部超界 clamp",
 
 runScrollCaptureTests()
 
+// 35) RecordMath：GIF delay 累計捨入（gifski src/lib.rs 同法——逐格天真捨入會累積漂移）
+do {
+    // 12fps、10 秒：120 格，每格 1/12s=8.33cs。天真捨入(8cs)總長只有 9.6s（漂 4%）；
+    // 累計捨入的總和必須落在 1000±1 cs。
+    let times = (0..<120).map { Double($0) / 12.0 }
+    let delays = RecordMath.gifDelaysCentiseconds(frameStartTimes: times, duration: 10.0)
+    checkEq("gifDelays 格數", delays.count, 120)
+    let total = delays.reduce(0, +)
+    checkTrue("gifDelays 總長不漂移（\(total)cs）", abs(total - 1000) <= 1)
+    checkTrue("gifDelays 每格 ≥ 2cs", delays.allSatisfy { $0 >= 2 })
+    // 均勻 12fps 下 delay 只會是 8 或 9 交錯，不會出現離群值
+    checkTrue("gifDelays 值域 8...9", delays.allSatisfy { (8...9).contains($0) })
+}
+do {
+    // 不均勻（VFR）輸入：0, 0.5, 3.0 三格、總長 5s → delay = 50, 250, 200 cs
+    let delays = RecordMath.gifDelaysCentiseconds(frameStartTimes: [0, 0.5, 3.0], duration: 5.0)
+    checkEq("gifDelays VFR", delays, [50, 250, 200])
+}
+
+// 36) RecordMath：sample-and-hold 網格映射（VFR 大空洞天然消化）
+do {
+    // 來源：0s 與 3s 兩格（中間 3 秒靜止＝SCK 不供格）；4 秒 @2fps → 8 個目標格
+    // 目標時刻 0,0.5,1,1.5,2,2.5,3,3.5 → 前 6 個用格0、後 2 個用格1
+    let idx = RecordMath.sampleHoldIndices(sourceTimes: [0, 3.0], duration: 4.0, fps: 2)
+    checkEq("sampleHold VFR 空洞", idx, [0, 0, 0, 0, 0, 0, 1, 1])
+}
+do {
+    // 目標時刻早於第一格 PTS（首格晚到）→ 用第一格（index 0），不可回傳 -1
+    let idx = RecordMath.sampleHoldIndices(sourceTimes: [0.4, 0.5], duration: 1.0, fps: 2)
+    checkEq("sampleHold 首格晚到", idx, [0, 1])
+}
+do {
+    // 極短片：至少 2 個目標格（GIF 最少兩格才有動畫意義）
+    let idx = RecordMath.sampleHoldIndices(sourceTimes: [0], duration: 0.05, fps: 12)
+    checkEq("sampleHold 極短片下限", idx.count, 2)
+}
+
+// 37) RecordMath：尾格補齊判斷（Cap 的 0.5s 門檻）
+checkTrue("needsTailFrame 過期", RecordMath.needsTailFrame(lastPTSSeconds: 10.0, nowSeconds: 10.6))
+checkTrue("needsTailFrame 未過期", !RecordMath.needsTailFrame(lastPTSSeconds: 10.0, nowSeconds: 10.4))
+
+// 38) RecordMath：HUD 時鐘文字（正數 mm:ss；限時=倒數且不出現負值）
+checkEq("hudClock 正數", RecordMath.hudClockText(elapsedSeconds: 65, limitSeconds: nil), "01:05")
+checkEq("hudClock 倒數", RecordMath.hudClockText(elapsedSeconds: 3, limitSeconds: 10), "00:07")
+checkEq("hudClock 倒數不出現負值", RecordMath.hudClockText(elapsedSeconds: 12, limitSeconds: 10), "00:00")
+
 T.finish()
