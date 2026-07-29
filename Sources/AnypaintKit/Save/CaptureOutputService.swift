@@ -39,7 +39,7 @@ public final class CaptureOutputService {
         do {
             try CaptureSaver.writePNG(image: image, to: url)
             if AppSettings.saveNotificationEnabled {
-                SaveNotifier.shared.notifySaved(filename: url.lastPathComponent)
+                SaveNotifier.shared.notifySaved(filename: url.lastPathComponent, fileURL: url)
             }
             return url
         } catch {
@@ -102,7 +102,7 @@ public final class CaptureOutputService {
         do {
             try CaptureSaver.writePNG(cgImage: cgImage, to: url)
             if AppSettings.saveNotificationEnabled {
-                SaveNotifier.shared.notifySaved(filename: url.lastPathComponent)
+                SaveNotifier.shared.notifySaved(filename: url.lastPathComponent, fileURL: url)
             }
             return url
         } catch {

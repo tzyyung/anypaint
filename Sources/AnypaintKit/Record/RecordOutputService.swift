@@ -46,7 +46,7 @@ public final class RecordOutputService {
                                                     withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: tempURL, to: url)
             if AppSettings.saveNotificationEnabled {
-                SaveNotifier.shared.notifySaved(filename: url.lastPathComponent)
+                SaveNotifier.shared.notifySaved(filename: url.lastPathComponent, fileURL: url)
             }
             return url
         } catch {
