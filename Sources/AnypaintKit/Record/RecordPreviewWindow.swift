@@ -160,8 +160,17 @@ final class RecordPreviewWindow: NSWindow {
             statusLabel.stringValue = "此播放器不支援剪裁"
             return
         }
+        // trim overlay 蓋在播放器上時鎖住其他按鈕（review minor finding）：原生剪裁 UI 顯示中
+        // 使用者不該還按得下丟棄／存檔等鈕。completion（OK 或 Cancel 都會呼叫一次）用 defer
+        // 解鎖，兩條結果路徑共用同一份收尾，不必在每個分支各複製一次。
+        setButtonsEnabled(false)
         playerView.beginTrimming { [weak self] result in
-            guard let self, result == .okButton, let item = player.currentItem else { return }
+            guard let self else { return }
+            defer {
+                self.setButtonsEnabled(true)
+                self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
+            }
+            guard result == .okButton, let item = player.currentItem else { return }
             // reversePlaybackEndTime 無效＝使用者沒動起點（維持 0）；forwardPlaybackEndTime
             // 無效＝沒動終點（維持母帶全長）——兩者預設值都是 kCMTimeInvalid（見 header）。
             let start = item.reversePlaybackEndTime.isValid ? item.reversePlaybackEndTime : .zero
@@ -255,10 +264,17 @@ final class RecordPreviewWindow: NSWindow {
         let tmpURL = output.tempMovieURL()
         Task { [weak self] in
             guard let self else { return }
-            guard let session = AVAssetExportSession(asset: AVURLAsset(url: self.movieURL),
-                                                     presetName: AVAssetExportPresetPassthrough) else {
+            // defer：不管走哪個出口（建 session 失敗的 early return、匯出失敗、匯出成功），
+            // 「解除匯出中鎖定＋校正開啟位置鈕」都要做到——review 抓到的 bug 正是 early return
+            // 那個出口漏了這行，讓「還沒存過檔卻能按開啟位置」（R1 已修過一次的同型問題）重演。
+            // defer 保證所有出口一致，不必在每個 return 前手動複製這兩行。
+            defer {
                 self.isExporting = false
                 self.setButtonsEnabled(true)
+                self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
+            }
+            guard let session = AVAssetExportSession(asset: AVURLAsset(url: self.movieURL),
+                                                     presetName: AVAssetExportPresetPassthrough) else {
                 self.statusLabel.stringValue = "MP4 剪裁匯出失敗：無法建立匯出工作階段"
                 return
             }
@@ -268,8 +284,6 @@ final class RecordPreviewWindow: NSWindow {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 session.exportAsynchronously { continuation.resume() }
             }
-            self.isExporting = false
-            self.setButtonsEnabled(true)
             if session.status == .completed {
                 let saved = self.output.saveCopy(from: tmpURL, ext: "mp4", vars: self.vars)
                 try? FileManager.default.removeItem(at: tmpURL)
@@ -280,7 +294,6 @@ final class RecordPreviewWindow: NSWindow {
                 try? FileManager.default.removeItem(at: tmpURL)
                 self.statusLabel.stringValue = "MP4 剪裁匯出失敗：\(session.error?.localizedDescription ?? "未知錯誤")"
             }
-            self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
         }
     }
 
