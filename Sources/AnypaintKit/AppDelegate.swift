@@ -47,6 +47,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 內建自檢（ANYPAINT_SCROLL_SELFCHECK=1）：不進正常啟動流程，跑完寫檔即結束。
     private var scrollSelfCheck: ScrollCaptureSelfCheck?
+    /// 動畫截圖內建自檢（--record-selfcheck）：同上，跑完寫檔即結束。
+    private var recordSelfCheck: RecordSelfCheck?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         // 必須用啟動參數（不是環境變數）：從終端直跑 binary 時 TCC 把螢幕錄製的責任歸給終端機
@@ -56,6 +58,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             || ProcessInfo.processInfo.environment["ANYPAINT_SCROLL_SELFCHECK"] == "1" {
             let check = ScrollCaptureSelfCheck()
             scrollSelfCheck = check
+            check.run()
+            return
+        }
+        if CommandLine.arguments.contains("--record-selfcheck") {
+            let check = RecordSelfCheck()
+            recordSelfCheck = check
             check.run()
             return
         }

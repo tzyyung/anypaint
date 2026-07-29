@@ -161,12 +161,17 @@ public final class RecordFrameSource: NSObject {
     ///   - showsCursor: 游標交給 SCK 畫（實戰專案一致做法）。
     ///   - ringWindowNumber: 點擊圈視窗的 windowNumber；非 nil 時把它放進 exceptingWindows
     ///     白名單（app 整體排除、唯獨它被拍——設計文件 §3 filter）。
+    ///   - excludeSelf: 是否把自家 app 整個排除在擷取外（正式流程一律 true，才不會把
+    ///     選區框／HUD／點擊圈以外的自家視窗拍進母帶）。**僅內建自檢模式**傳 false——
+    ///     自檢要拍的正是自家那個會動的測試視窗，其餘管線與正式流程完全相同
+    ///     （比照 `ScrollFrameSource.start` 同名參數）。
     ///
     /// 契約：`start()` 拋錯（TCC 拒絕、`CaptureError.noDisplays` 都是實機常見狀況）之後，
     /// 物件已經自己清乾淨（`self.box`／`self.stream`／`self.outputURL` 全部回到 nil）——
     /// 呼叫端可以直接重試，不需要先呼叫 `abort()` 才能再 `start()`。
     public func start(selectionGlobal: CGRect, screen: NSScreen,
-                      showsCursor: Bool, ringWindowNumber: Int?, outputURL: URL) async throws {
+                      showsCursor: Bool, ringWindowNumber: Int?, outputURL: URL,
+                      excludeSelf: Bool = true) async throws {
         // 防重入：呼叫端若在前一段 session 收尾（stopAndFinish/abort）完成前又呼叫 start()，
         // 絕不能無條件覆寫 stream/box——舊 stream 會變孤兒、舊 WriterBox 永久扣住一張
         // IOSurface（queueDepth 張裡的一張）不放。stopAndFinish/abort 都會在真正收尾前把
@@ -196,7 +201,9 @@ public final class RecordFrameSource: NSObject {
               let display = content.displays.first(where: { $0.displayID == displayID }) else {
             throw CaptureError.noDisplays
         }
-        let selfApps = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+        let selfApps = excludeSelf
+            ? content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+            : []
         // exceptingWindows 是建 filter 當下的靜態快照 → 點擊圈視窗必須已存在（session 先建它再
         // 呼叫這裡）。用 windowID 比對，不用標題（設計文件 §3；QuickRecorder 用標題比對較脆弱）。
         var excepting: [SCWindow] = []
