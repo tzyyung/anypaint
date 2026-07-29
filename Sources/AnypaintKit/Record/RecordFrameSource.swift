@@ -5,6 +5,7 @@ import ScreenCaptureKit
 public enum RecordError: Error {
     case noFrames               // 一格都沒收到就停止
     case writerFailed(Error?)   // finishWriting 後 status != .completed（QuickRecorder 教訓）
+    case alreadyRecording       // start() 在既有 session 收尾前又被呼叫——絕不重入覆寫 stream/box
 }
 
 /// AVAssetWriter 封裝＋最後一格保留。**只在 sampleQueue 上觸碰**（append 與 finalize 都派進
@@ -25,6 +26,12 @@ final class WriterBox: @unchecked Sendable {
     /// 保留最後一格供停止時補尾。**永久佔掉 SCK IOSurface 池一張**——queueDepth 必須 ≥ 5
     /// （nonstrict 原註解；本 stream 設 6）。
     private var lastSampleBuffer: CMSampleBuffer?
+    /// `finish`／`cancel` 第一次被呼叫就鎖住，之後兩者皆變 no-op；`append` 也一併擋掉。
+    /// 補的是一個實機會撞到的競態：`RecordFrameSource.start()` 的 await 期間被 `abort()`
+    /// 打斷時，`abort()` 與 `start()` 自己的收尾分支可能對同一個 box 各呼叫一次 cancel()——
+    /// `markAsFinished`／`cancelWriting` 對已終結的 writer 再呼叫一次是 AVFoundation 的
+    /// ObjC exception（Swift 攔不到，直接 crash）。這面旗子讓兩次呼叫中只有先到的那次生效。
+    private var isTerminal = false
 
     init(outputURL: URL, pixelWidth: Int, pixelHeight: Int) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
@@ -52,7 +59,10 @@ final class WriterBox: @unchecked Sendable {
 
     /// sampleQueue 上呼叫。只收 .complete 的 buffer（呼叫端已 gate）。
     func append(_ sb: CMSampleBuffer) {
-        guard writer.status == .writing else { return }   // startWriting 失敗時讓格子靜默落空
+        // isTerminal：finish()/cancel() 呼叫過就不能再 append——`markAsFinished()` 之後
+        // `writer.status` 在 finishWriting 完成前仍會回報 .writing（非同步收尾的空窗期），
+        // 只靠 status 擋不住這段時間遲到的格子（曾經是真的 crash 路徑）。
+        guard !isTerminal, writer.status == .writing else { return }   // startWriting 失敗時讓格子靜默落空
         if !sessionStarted {
             sessionStarted = true
             writer.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(sb))
@@ -66,8 +76,21 @@ final class WriterBox: @unchecked Sendable {
     /// - Parameter nowUptime: 停止當下的 host clock 秒數（ProcessInfo.systemUptime；
     ///   SCK 的 PTS 在 host clock 上，**不可用 Date**——設計文件 §3）。
     func finish(nowUptime: TimeInterval, completion: @escaping (Result<Void, RecordError>) -> Void) {
+        guard !isTerminal else {
+            // 已經 finish 或 cancel 過一次——冪等：不重做，也不再碰 writer。
+            completion(.failure(.writerFailed(nil)))
+            return
+        }
+        isTerminal = true
+        guard writer.status == .writing else {
+            // 中途已經離開 .writing（磁碟滿→.failed 等 QuickRecorder 教訓；或已被取消／完成）：
+            // 不能再呼叫 endSession／markAsFinished／finishWriting／cancelWriting，這些對非
+            // .writing 狀態的 writer 呼叫是 AVFoundation 的 ObjC exception，Swift 攔不到。
+            completion(.failure(.writerFailed(writer.error)))
+            return
+        }
         guard sessionStarted, let last = lastSampleBuffer else {
-            writer.cancelWriting()
+            writer.cancelWriting()   // 此處已知 status == .writing，cancelWriting() 安全
             completion(.failure(.noFrames))
             return
         }
@@ -100,6 +123,9 @@ final class WriterBox: @unchecked Sendable {
 
     /// 取消：丟掉母帶。
     func cancel() {
+        guard !isTerminal else { return }   // 已經 finish 或 cancel 過一次——冪等
+        isTerminal = true
+        guard writer.status == .writing else { return }   // 已經 .failed/.completed：什麼都不用做
         input.markAsFinished()
         writer.cancelWriting()
         lastSampleBuffer = nil
@@ -130,6 +156,11 @@ public final class RecordFrameSource: NSObject {
     ///     白名單（app 整體排除、唯獨它被拍——設計文件 §3 filter）。
     public func start(selectionGlobal: CGRect, screen: NSScreen,
                       showsCursor: Bool, ringWindowNumber: Int?, outputURL: URL) async throws {
+        // 防重入：呼叫端若在前一段 session 收尾（stopAndFinish/abort）完成前又呼叫 start()，
+        // 絕不能無條件覆寫 stream/box——舊 stream 會變孤兒、舊 WriterBox 永久扣住一張
+        // IOSurface（queueDepth 張裡的一張）不放。stopAndFinish/abort 都會在真正收尾前把
+        // self.stream 與 self.box 清成 nil，所以這個檢查等同「上一段真的結束了嗎」。
+        guard stream == nil, box == nil else { throw RecordError.alreadyRecording }
         pendingStop = false
         self.outputURL = outputURL
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -170,13 +201,18 @@ public final class RecordFrameSource: NSObject {
         try await stream.startCapture()
         if pendingStop {                     // start 的 await 期間被取消（同 ScrollFrameSource 慣例）
             try? await stream.stopCapture()
-            // cancel 與刪檔必須在同一個 sampleQueue block 裡依序做：cancelWriting() 對 AVAssetWriter
-            // 是同步的，但 sampleQueue.async 本身是 fire-and-forget，若刪檔改放在這裡外面、
-            // 在 MainActor 上緊接著呼叫，就會跟佇列上還沒真的跑到的 cancel() 賽跑（檔案可能還被
-            // writer 占著）。放進同一個 block 保證「先取消、寫入器真的收手，才刪檔」。
-            sampleQueue.async {
-                boxLocal.cancel()
-                try? FileManager.default.removeItem(at: outputURL)
+            // 只有在 self.box 仍然是「我剛剛建的那個」時才由這裡清理：await 這段期間
+            // abort() 可能已經搶先把 self.box 讀走、nil 掉、自己派工 cancel 過一次了——
+            // 若不檢查就無條件再 cancel 一次 boxLocal，會是對同一個 WriterBox 呼叫兩次
+            // cancel（WriterBox 自己的 isTerminal 雖然會擋下第二次的實際動作，這裡的
+            // === 檢查是第二層：避免多送一次不必要的 sampleQueue 派工，且讓「誰負責清理」
+            // 這件事在 MainActor 上就講清楚，不只靠 WriterBox 內部冪等兜底）。
+            if self.box === boxLocal {
+                self.box = nil
+                sampleQueue.async {
+                    boxLocal.cancel()
+                    try? FileManager.default.removeItem(at: outputURL)
+                }
             }
             return
         }
@@ -188,14 +224,22 @@ public final class RecordFrameSource: NSObject {
         pendingStop = true
         if let stream { self.stream = nil; try? await stream.stopCapture() }
         guard let box, let url = outputURL else { throw RecordError.noFrames }
+        // 母帶的所有權在這裡整個轉交出去（box 與 outputURL 都清成 nil）：
+        // 之後不管是 abort() 被誤呼叫、還是呼叫端等 continuation 期間又呼叫別的方法，
+        // 看到的都是「這裡已經沒東西了」，不會有 abort() 誤刪已經（或即將）成功的檔案
+        // ——刪檔的責任只留給下面 .failure 分支自己收拾暫存檔。
         self.box = nil
+        self.outputURL = nil
         let now = ProcessInfo.processInfo.systemUptime
         return try await withCheckedThrowingContinuation { cont in
             sampleQueue.async {
                 box.finish(nowUptime: now) { result in
                     switch result {
-                    case .success: cont.resume(returning: url)
-                    case .failure(let e): cont.resume(throwing: e)
+                    case .success:
+                        cont.resume(returning: url)
+                    case .failure(let e):
+                        try? FileManager.default.removeItem(at: url)   // 寫失敗的半成品不留在磁碟上
+                        cont.resume(throwing: e)
                     }
                 }
             }
@@ -209,13 +253,19 @@ public final class RecordFrameSource: NSObject {
         let box = self.box
         self.box = nil
         let url = outputURL
-        // 理由同 start() 的 pendingStop 分支：cancel 與刪檔擠進同一個 sampleQueue block，
-        // 讓「先取消、寫入器真的收手，才刪檔」成立，不與 fire-and-forget 的 async 賽跑。
-        sampleQueue.async {
-            box?.cancel()
-            if let url { try? FileManager.default.removeItem(at: url) }
-        }
         outputURL = nil
+        // 理由同 start() 的 pendingStop 分支：cancel 與刪檔擠進同一個 sampleQueue block，
+        // 讓「先取消、寫入器真的收手，才刪檔」成立。這裡額外用 continuation 等它真的做完
+        // 才讓 abort() 回傳——否則是 fire-and-forget，呼叫端 await 完 abort() 就以為收尾
+        // 完成、緊接著用同一個路徑 start() 新錄影，會跟這裡還沒真的跑到的 removeItem 賽跑
+        // （新檔案剛落地就被舊的刪檔刪掉）。
+        await withCheckedContinuation { cont in
+            sampleQueue.async {
+                box?.cancel()
+                if let url { try? FileManager.default.removeItem(at: url) }
+                cont.resume()
+            }
+        }
     }
 }
 
