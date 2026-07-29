@@ -43,12 +43,15 @@ public final class SaveNotifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// 使用者點擊通知時開啟檔案位置。
     /// 檔案已被移走或刪除時 activateFileViewerSelecting 是安靜 no-op，可接受（spec §1.1）。
+    /// NSWorkspace 的執行緒親和性 header 未載明——防禦性跳主執行緒（成本為零）。
     public func userNotificationCenter(_ center: UNUserNotificationCenter,
                                        didReceive response: UNNotificationResponse,
                                        withCompletionHandler completionHandler:
                                            @escaping () -> Void) {
         if let filePath = response.notification.request.content.userInfo["filePath"] as? String {
-            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: filePath)])
+            DispatchQueue.main.async {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: filePath)])
+            }
         }
         completionHandler()
     }
