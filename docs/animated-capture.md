@@ -14,11 +14,15 @@
 
 ## 1. 使用者看到的行為
 
-`⌘⇧R`（設定可改）→ 拉框圈住要錄的區域 → HUD 待命（可設錄製秒數，空白＝不限）→
+`⌘⇧R`（設定可改）→（無螢幕錄製權限時先走系統詢問／既有引導提示，見下表「權限預檢」）→
+拉框圈住要錄的區域 → HUD 待命（可設錄製秒數，空白＝不限）→
 按「開始」→ 錄製（HUD 顯示計時／倒數）→ 停止（手動鈕／倒數到／看門狗／stream error 共用
-同一條路徑）→ 預覽視窗（AVPlayerView 循環播放）→〔存 GIF〕〔存 MP4〕〔丟棄〕。
-「丟棄」與紅鈕關閉共用同一個 `close()`；GIF 匯出中關閉會先跳警示，需要選「強制關閉」才會
-真正關窗並刪除母帶（見 §6 的逃生口說明）。
+同一條路徑）→ 預覽視窗（AVPlayerView 循環播放）→
+〔剪裁〕〔存 GIF〕〔存 APNG〕〔存 MP4〕〔存 WebP，僅偵測到 img2webp 才出現〕〔拍快照〕
+〔開啟位置〕〔丟棄〕；播放器影像區也可直接拖曳出整段母帶 MP4。
+「丟棄」與紅鈕關閉共用同一個 `close()`；匯出中（GIF／APNG／WebP）關閉會先跳警示，需要選
+「強制關閉」才會真正關窗並刪除母帶（見 §6 的逃生口說明）。存檔通知可直接點擊，在 Finder
+開啟並選取剛存的檔案（截圖／滾動截圖／動畫截圖三處存檔都受益，非動畫截圖獨有）。
 
 定位是「會動的截圖」，不是螢幕錄影機：不錄音訊、不能暫停續錄、不做 webcam。
 
@@ -27,10 +31,17 @@
 | 逃生路徑：取消（丟棄） | Esc（僅 selecting/armed）、HUD 取消鈕、selecting/armed 中再按同一顆全域快鍵（Carbon，不受 app 前景狀態影響） |
 | 逃生路徑：停止（收檔保留） | recording 中再按同一顆全域快鍵、HUD 停止鈕、倒數到、看門狗、stream error 兜底——五者共用同一條停止程序（§4） |
 | 不限時看門狗 | 10 分鐘自動走正常停止路徑（防忘記停吃光磁碟） |
+| 權限預檢 | `beginAnimatedCapture()` 開頭 `CGPreflightScreenCaptureAccess()` 為 false → `CGRequestScreenCaptureAccess()`（首次觸發系統詢問）→ 仍拒絕 → 走既有 `showPermissionAlert()`、直接 return，不進 session；request 剛被使用者允許也一律 return 讓使用者重按（授權後常需重啟 app 才生效，續跑會拿到黑畫面 stream） |
 | 錄製中顯示游標／點擊高亮圈 | 設定可各自關；**游標關閉時點擊圈勾選框連動停用**（`CaptureSettingsViewController.updateClickRingEnabledState`）——點擊圈要開，游標必須先開（Kap 的 UX 細節，設定 → 控制/截圖分頁） |
 | 最小選區 | 64 **點**（`RecordSession.minSelectionEdgePt`；錄製無匹配需求，門檻遠低於滾動截圖的 320px） |
-| 匯出 MP4 | 搬移母帶（copy，非 move——之後可能還要匯 GIF）；零轉檔，母帶本身即最終品質 |
-| 匯出 GIF | 12fps、1x（點）尺寸，背景 queue 解碼，預覽窗顯示進度 |
+| 匯出 MP4 | 無剪裁：搬移母帶（copy，非 move——之後可能還要匯 GIF/APNG）；零轉檔，母帶本身即最終品質。有剪裁：`AVAssetExportSession` + `AVAssetExportPresetPassthrough` 只切 `timeRange` 不重編碼，匯到暫存再存檔（§6） |
+| MP4 編碼（HEVC） | 設定 → 截圖 → 動畫截圖：「MP4 使用 HEVC」checkbox，預設關（H.264）。開啟後檔案較小（位元率因子 0.9→0.45，同款 Azayaka 公式）、舊裝置相容性較差；檔案仍是 `.mp4`（hevc-in-mp4 合法），GIF/APNG/WebP 解碼端不受影響 |
+| 匯出 GIF | fps 可設定（8/10/12/15/20，預設 12，設定 → 截圖 → 動畫截圖）、1x（點）尺寸，背景 queue 解碼，預覽窗顯示進度；偵測到外部 gifski 時優先走它產生更高品質 GIF，任何失敗自動回退內建編碼器（§6） |
+| 匯出 APNG | 全彩、無 GIF 那種 256 色調色盤限制，副檔名 `.png`；檔案通常較小但非通用貼圖格式（聊天軟體支援度不一），與 GIF 並存而非取代 |
+| 匯出 WebP | 只在偵測到外部 `img2webp` 時「存 WebP」鈕才出現；沒有內建可回退，沒裝就不出現（不出灰鈕不出錯誤） |
+| 剪裁 | 預覽視窗「剪裁」鈕開原生 `AVPlayerView` trim UI，選定的時間段套用到之後三種匯出格式（GIF/APNG/MP4）；拍快照、拖曳出檔案兩者都不受剪裁影響（一律對應「目前播放位置」／「整段母帶」） |
+| 拖曳出檔案 | 預覽視窗播放器影像區可直接拖曳出**整段母帶** MP4（設計決定：不受剪裁影響，一律整段，v1 語意單純化）；匯出中（GIF/APNG/WebP in-flight）也可正常拖曳 |
+| 儲存通知可點擊 | 系統通知點擊 → `NSWorkspace.activateFileViewerSelecting`，Finder 開啟並選取剛存的檔案；檔案已被移走/刪除時安靜 no-op |
 
 限制：需 macOS 14+；螢幕由**框選當下滑鼠所在位置**決定；`SCShareableContent` 偶發
 `noDisplays` 是暫時性的，報錯讓使用者重試（同滾動截圖既有教訓）。
@@ -167,21 +178,34 @@ RecordSelfCheck.swift 內建自檢工具（見 §7），不參與正式流程
 
 ---
 
-## 6. GIF 匯出（`GifExporter`）
+## 6. 匯出（GIF／APNG／WebP／MP4 剪裁，`GifExporter`）
+
+`GifExporter` 已泛化為 `AnimationFormat`（`.gif`/`.apng`）＋`GifEngine`（`.auto`/`.builtin`）
+兩個維度，加上可選的 `timeRange: CMTimeRange?`（剪裁）；WebP 走完全獨立的
+`GifExporter.exportWebP`（見下方「外部引擎」小節，沒有回退，語意跟 GIF/APNG 不同，不共用同一個
+`export(...)` 入口）。內建 CGImageDestination 路徑（本節前 7 點）是三種格式共同的地基，
+外部 gifski/img2webp 是**在這之上**多出來的可選加值路徑，不是取代它。
 
 1. `AVAssetReader` + BGRA output settings **循序解碼**母帶——不用 `AVAssetImageGenerator`
    （精準 seek 慢，Gifski.app 已遷移過這條路）。
-2. 均勻目標網格（12fps，`RecordMath.gridTimes`）＋ **sample-and-hold**
-   （`RecordMath.sampleHoldIndices`）：對每個目標時間取「PTS ≤ 目標」的最新解碼格；一格可
-   重複使用、也可被跳過——天然消化 VFR 母帶的靜止空洞（SCK 靜止不供格）。
-   `GifExporter.exportAsync` 內的線上迴圈（`current`/`next` 解碼超前一格）與這個純函式
-   逐字對應，行為若歧異以純函式（有 selftest）為準。
-3. 縮到 **1x（點）尺寸**（2x Retina GIF 檔案爆炸；Gifski.app 對長邊 >1200px 也會警告）。
-4. `CGImageDestination` 寫入：
-   - per-frame delay 用**累計捨入**（`RecordMath.gifDelaysCentiseconds`）：
+2. 均勻目標網格（fps 可設定，`RecordMath.gridTimes`；GIF/APNG 匯出讀
+   `AppSettings.recordGifFps`，選項 8/10/12/15/20、預設 12；**自檢顯式傳 12，不吃設定**——
+   判準要確定性，見 §8）＋ **sample-and-hold**（`RecordMath.sampleHoldIndices`）：對每個目標
+   時間取「PTS ≤ 目標」的最新解碼格；一格可重複使用、也可被跳過——天然消化 VFR 母帶的靜止空洞
+   （SCK 靜止不供格）。`GifExporter` 內的線上迴圈（`current`/`next` 解碼超前一格）與這個純
+   函式逐字對應，行為若歧異以純函式（有 selftest）為準。
+3. 縮到 **1x（點）尺寸**（2x Retina 檔案爆炸；Gifski.app 對長邊 >1200px 也會警告）。
+4. `CGImageDestination` 寫入，per-frame delay **依格式分兩套規則**（`AnimationFormat` 的
+   `perFrameProperties`）：
+   - **GIF**：**累計捨入**（`RecordMath.gifDelaysCentiseconds`）：
      `delay_cs = round(累計秒×100) − 已寫入 cs`，clamp 下限 2cs（逐格天真捨入 1/12s→8cs
      會累積漂移，長片會加速約 4%；gifski `src/lib.rs` 同法）。
-   - `kCGImagePropertyGIFLoopCount = 0`（無限循環）。
+   - **APNG**：`kCGImagePropertyAPNGDelayTime` 直接吃**秒（Double）**，沒有 GIF 的 2cs
+     （50fps）下限，逐格用「下一格起點 − 本格起點」即可（`RecordMath.apngDelaysSeconds`），
+     不需要累計捨入去消化取整誤差——那是 GIF 特有的問題。
+   - 容器層級都設「無限循環」，只是 dictionary key 不同：GIF 用
+     `kCGImagePropertyGIFLoopCount`、APNG 用 `kCGImagePropertyAPNGLoopCount`（都已查
+     `CGImageProperties.h` 確認 key 名與所屬 dictionary）。
    - 逐格轉完即釋放（`decodeNext` 讀出當下立刻 `downscaled(...)`，不延後），因為
      `output.alwaysCopiesSampleData = false`——sample buffer 背後是 reader 內部緩衝區的借用，
      下一次 `copyNextSampleBuffer()` 就可能回收，留著等下一輪才轉是 use-after-free。
@@ -190,24 +214,72 @@ RecordSelfCheck.swift 內建自檢工具（見 §7），不參與正式流程
    （例如錄影當掉留下的截斷檔）會讓 reader 轉 `.failed`，若不查，迴圈只看到 `decodeNext`
    回 nil、誤判成「這段期間畫面靜止」，靜默拿最後一格補滿剩餘所有格，
    `CGImageDestinationFinalize` 照樣成功——吐出一支大半凍結、看起來正常但漏掉損毀點之後
-   內容的 GIF。損毀母帶不得靜默成功。
+   內容的 GIF/APNG。損毀母帶不得靜默成功。
 6. **不可跨執行緒呼叫 `cancelReading()`**（Gifski.app 遷移警告：會觸發 MediaToolbox
    `EXC_BAD_ACCESS`）。`GifExporter` 全程在同一顆 `Task.detached` 裡跑，`await progress(...)`
    只是暫停點、不是另開一顆 Task 平行碰 reader，因此天然滿足這條紀律，`reader.cancelReading()`
    直接用 `defer` 收尾即可，不需要 cooperative check。
-7. 已知品質上限：ImageIO 是單一全域 256 色調色盤、無時域抖色——UI 操作類（大片平色）可接受，
-   漸層/照片內容會 banding。這是零依賴的自覺取捨，不是 bug。
+7. 已知品質上限（GIF）：ImageIO 是單一全域 256 色調色盤、無時域抖色——UI 操作類（大片平色）
+   可接受，漸層/照片內容會 banding。APNG 全彩無此限制，但非通用貼圖格式，因此與 GIF
+   並存而非取代。這是零依賴（內建路徑）的自覺取捨，不是 bug。
 
-### 為什麼不用 gifski / ffmpeg（AGPL 與依賴取捨）
+### 剪裁（timeRange）如何影響匯出
 
-- **gifski 是 AGPL**：不能 vendor 進本專案（本專案是零外部依賴的離線 native app，AGPL 的
-  網路服務條款與這個定位不合，也沒有商業授權預算）。借的是它的**演算法配方**
-  （sample-and-hold、累計捨入、2cs 下限），不是程式碼本身。
-- **ffmpeg**：需要外部二進位或動態連結，違反零外部依賴定位；`AVAssetReader` +
-  `CGImageDestination` 都是系統框架，換不到更好的畫質但換到「不需要額外安裝任何東西」。
-- 代價很明確：全域調色盤、無抖色，畫質上限低於 gifski/ffmpeg palettegen 路線。
-  這是本專案「簡單、零依賴」優先於「畫質最優」的產品裁決，寫在這裡讓日後不會有人
-  想「順手」引入 gifski 又踩到授權問題。
+預覽視窗「剪裁」鈕（原生 `AVPlayerView.beginTrimming`）產生的 `CMTimeRange`（母帶絕對時間軸，
+見 `RecordPreviewWindow.trimAction`）往下傳到 `GifExporter.prepareReader`：
+
+- `reader.timeRange = timeRange` 必須在 `startReading()` 之前設（`AVAssetReader.h`：之後設值
+  會丟例外）。
+- **duration 要 clamp 到母帶實際長度**：`AVAssetReader.h` 對 `timeRange` 的說明是「與
+  `[0, asset 實際時長]` 取交集後」才是真正讀到的範圍——呼叫端傳超出母帶尾端的範圍不會報錯，
+  只會默默少讀；若這裡的 `duration` 不 clamp，grid／delay 會以「請求的長度」為準，吐出一支
+  尾端補滿靜止格、比實際內容更長的動畫。做法：
+  `duration = min(timeRange.duration.seconds, assetDuration − rangeStartSeconds)`。
+- **PTS 要歸零**：reader 在 `timeRange` 限制下吐出的樣本，PTS 仍是整支母帶的絕對時間軸
+  （`timeRange` 只篩選讀哪一段，不會重新歸零），但 grid／sample-and-hold 全部假設「首格 PTS
+  對應時間 0」——`decodeNext` 讀出當下立刻減去 `rangeStartSeconds`，不歸零會讓整段輸出跟著
+  剪裁範圍的起點平移。
+- 存 MP4 的剪裁走完全不同的路：`AVAssetExportSession` + `AVAssetExportPresetPassthrough`
+  （不重編碼，只切 `timeRange`），跟 GIF/APNG 的 `AVAssetReader.timeRange` 是兩條獨立路徑，
+  細節見 `RecordPreviewWindow.saveMp4Action` 的 header 引用。
+- 拍快照、拖曳出檔案**都不受 `trimRange` 影響**（拍快照對「目前播放位置」出手；拖曳一律給
+  整段母帶，見 §8）。
+
+### 外部引擎：gifski（GIF）／img2webp（WebP）
+
+本專案仍是零外部依賴、離線 native app；下面兩個外部引擎是**可選加值路徑**，不是預設依賴——
+使用者不裝，行為完全等同 r1（GIF 走內建 CGImageDestination；沒有 WebP 匯出）。
+
+- **偵測**：固定路徑 `/opt/homebrew/bin/<工具>`、`/usr/local/bin/<工具>` 依序檢查、
+  `isExecutableFile` 驗證——**不 shell `which`**（launchd 環境 PATH 不可靠，CLAUDE.md
+  既有教訓）。`GifskiEngine.detect()`／`Img2webpEngine.detect()`。
+- **呼叫方式**：`Process` 直接指定 `executableURL`，引數逐一列舉（不靠 shell glob），
+  不經過 shell——跟 vendor 程式碼或動態連結完全不同，是「呼叫使用者自行安裝的系統二進位」，
+  無授權疑慮（gifski 是 AGPL，見下）。
+- **共用管線**：兩者都靠 `GifExporter.extractFramesAsPNG` 把同一份解碼／縮圖／sample-and-hold
+  結果逐格寫成零填充檔名的 PNG（`frame-0001.png…`，確保外部工具讀到正確順序），存到
+  `anypaint-record-frames-<uuid>/` 暫存目錄，用畢 `defer` 刪除（殘留由啟動清掃兜底，
+  `anypaint-record-` 前綴）。進度切兩段：抽格 0→0.7，子程序執行 0.7→1.0。
+- **gifski（GIF，`GifEngine.auto`）**：存 GIF 時若偵測到，先走這條路；**任何失敗**（reader
+  中途壞掉、spawn 失敗、exit code ≠ 0、輸出檔不存在）都 catch 起來回退內建
+  CGImageDestination 路徑，回退會寫一行診斷進 `/tmp/anypaint-record-session.log`
+  （`RecordSessionLog`）。`--width` 引數**必傳**（實機驗證：`gifski -h` 記載預設限制約
+  800×600，1200×900 來源不傳 `--width` 會被悄悄縮到 600×450）；傳來源寬度後原尺寸不變。
+  另外實機測出 **gifski 會把相同的連續格合併**（跟內建路徑逐格輸出不同），因此
+  `RecordSelfCheck` 的格數判準（檢查 C）**顯式傳 `engine: .builtin`**，不受本機是否裝 gifski
+  影響（見 §8）。設定頁動畫截圖小節有唯讀 hint 顯示目前是否偵測到 gifski。
+- **img2webp（WebP，無 GIF 對應的內建回退）**：本機 `CGImageDestinationCopyTypeIdentifiers()`
+  探測不到 webp——ImageIO 沒有零依賴的 WebP 編碼路可走。因此「存 WebP」鈕**只在偵測到
+  img2webp 時才出現**（不是灰鈕、不是先出現再報錯），失敗直接顯示錯誤，不像 gifski 那樣
+  回退。`-d`（per-frame delay，套用到之後所有 frame 直到下一個 `-d`）語法照 libwebp 官方文件
+  寫入、**本機未裝 img2webp，尚未實機驗證**（見 §7 手動清單）；本專案固定 fps 抽格＝等長
+  delay，`Img2webpEngine.arguments` 會自動把連續相同 delay 摺疊成單一 `-d`。
+- **仍不 vendor gifski 本體或連結 ffmpeg**：gifski 是 AGPL，跟零外部依賴、離線 native app
+  的定位不合（也沒有商業授權預算）；ffmpeg 需要外部二進位/動態連結，同樣違反定位。內建
+  CGImageDestination 路徑借的是 gifski 的**演算法配方**（sample-and-hold、累計捨入、2cs
+  下限），不是程式碼本身；呼叫外部 gifski/img2webp 子程序是使用者自主安裝、Process 邊界乾淨
+  的另一回事，兩者不衝突。全域調色盤、無抖色是內建路徑（沒裝外部引擎時）的自覺取捨，
+  裝了 gifski 之後這個限制就解除了。
 
 ### 預覽視窗：匯出中關閉的強制關閉逃生口
 
@@ -215,15 +287,16 @@ RecordSelfCheck.swift 內建自檢工具（見 §7），不參與正式流程
 像素尺寸，讀 `naturalSize` 只有 async API（載入完才建窗，不是「先開預設尺寸再 resize」——
 避免使用者看到視窗尺寸跳動一次）。
 
-`RecordPreviewWindow.close()`（`RecordPreviewWindow.swift:156-192`）在 GIF 匯出中被呼叫
-（紅鈕或「丟棄」）時，`GifExporter` 沒有 cancel/timeout，背景 `Task.detached` 可能卡死
-（例如母帶損毀導致 reader 卡住），若只「擋下關閉、要求等待」而不給逃生口，使用者除了強制
-砍掉整個 app 別無他法。因此提供兩顆鈕：「繼續等待」（**預設鈕**，Enter 觸發，避免誤觸）與
-「強制關閉」。
+`RecordPreviewWindow.close()`（`RecordPreviewWindow.swift:156-192`）在匯出中（GIF／APNG／
+WebP，`isExporting` 統一標記）被呼叫（紅鈕或「丟棄」）時，`GifExporter` 沒有 cancel/timeout，
+背景 `Task.detached` 可能卡死（例如母帶損毀導致 reader 卡住），若只「擋下關閉、要求等待」而不
+給逃生口，使用者除了強制砍掉整個 app 別無他法。因此提供兩顆鈕：「繼續等待」（**預設鈕**，
+Enter 觸發，避免誤觸）與「強制關閉」。
 
 強制關閉的安全性（三點都已個別確認，不是假設）：
-1. 被拋下的 `GifExporter.export` 背景 Task 會繼續跑到完成或失敗——它的 completion closure
-   用 `[weak self]`，視窗這時已 forget／可能已釋放，`self` 為 nil 時直接 no-op，不會 crash。
+1. 被拋下的 `GifExporter.export`／`exportWebP` 背景 Task 會繼續跑到完成或失敗——它的
+   completion closure 用 `[weak self]`，視窗這時已 forget／可能已釋放，`self` 為 nil 時直接
+   no-op，不會 crash。
 2. `movieURL` 在強制關閉時會被 `removeItem` 刪掉，但 `AVAssetReader` 對它的檔案描述符已經
    開啟——APFS／POSIX 的 unlink 語意是「目錄項目消失，已開啟的 fd 仍可讀到刪除前的內容」，
    reader 不會因此中途壞掉；最壞頂多是提前 EOF 或 `reader.status` 轉 `.failed` →
@@ -279,6 +352,13 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
 | 4 | 游標／點擊圈開關生效 | 設定分頁關閉游標後，點擊圈選項變灰且不可勾；分別開關兩者錄製，實際行為與設定一致 |
 | 5 | 長時間中段靜止 | 錄 10 秒、中間靜止 5 秒 → 收到的 mp4 時長仍 ~10s（不因 SCK 靜止不供格而變短），匯出的 GIF 靜止段播放不跳格 |
 | 6 | armed HUD 秒數欄可打字 | 選區框好、HUD 進入 armed 後，滑鼠點進秒數欄能正常打字並在「開始」後生效（nonactivating panel 的鍵盤路由是 CLAUDE.md 點名的高風險區） |
+| 7 | 通知點擊開位置 | 截圖／滾動截圖／動畫截圖存檔通知點擊後，Finder 開啟並選取該檔案；檔案已被移走時點擊安靜無反應（不報錯） |
+| 8 | HEVC 可播＋奇數像素邊長選區 | 設定開啟 HEVC 後錄製匯出的 MP4 能在 QuickTime／預覽 正常播放；框選邊長換算成奇數像素時仍能正常編碼、播放不歪 |
+| 9 | 剪裁全流程（六項） | `canBeginTrimming` 在 `AVPlayerLooper` 播放下為 true 且 trim UI 正常顯示（若否需走 §1.6 提到的 fallback：暫停 looper 改單曲播放）；OK 後 `reversePlaybackEndTime`/`forwardPlaybackEndTime` 確實反映使用者選取範圍；剪裁後首格是選取起點附近的畫面（非黑格或範圍外內容）；GIF／APNG／MP4 三種格式在同一個 `trimRange` 下匯出，時長一致且符合預期；重剪（再按「剪裁」）與取消（trim UI 選 Cancel）後 `trimRange` 維持/更新正確；trim overlay 顯示中關閉預覽視窗行為正常（不 crash、不留孤兒暫存檔） |
+| 10 | 拖曳出 MP4 | 播放器影像區拖曳到 Finder／瀏覽器能收到完整母帶 MP4；`DragOriginView` 疊加的透明拖曳層是否吞掉 `AVPlayerView` 原生的 click-to-pause 手勢（點擊影像區能否正常暫停/續播） |
+| 11 | gifski 兩況 | 裝 gifski（`brew install gifski`）：存 GIF 走外部引擎，畫質明顯優於內建（無明顯調色盤 banding）；不裝（或暫時改名模擬移除）：存 GIF 正常回退內建路徑，行為與第一輪相同 |
+| 12 | img2webp（三項） | `-d`（per-frame delay）語法在真實 img2webp 上行為與 libwebp 官方文件描述一致（本機未裝，尚未實測，見 §6）；產出的 WebP 讀回檢視畫面/fps/循環都正確；「存 WebP」鈕從偵測到匯出到開啟位置的預覽全流程正常 |
+| 13 | APNG 在目標平台可動 | 匯出的 APNG 在預期會用到的平台/軟體（macOS 預覽、瀏覽器、聊天軟體等）上正確播放動畫而非靜態單張（支援度因軟體而異，是已知風險不是 bug） |
 
 ---
 
@@ -299,3 +379,6 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
 | GifExporter 遇到 `copyNextSampleBuffer()` 回 nil 就直接當成讀完 | 母帶中途損毀（reader 轉 `.failed`）會被誤判成「畫面靜止」，靜默補滿剩餘格數、`Finalize` 照樣成功——必須顯式檢查 `reader.status == .failed` | §6 |
 | vendor gifski 或連結 ffmpeg 換更好的 GIF 畫質 | gifski 是 AGPL，跟零外部依賴、離線 native app 的定位不合；ffmpeg 需要外部二進位/動態連結，同樣違反定位。畫質上限是自覺取捨，不是待修的 bug | §6 |
 | 拿掉預覽視窗匯出中「強制關閉」逃生口，只擋下關閉要求等待 | `GifExporter` 沒有 cancel/timeout，背景 Task 卡死時（例如母帶損毀）使用者除了強制砍掉整個 app 別無他法；三點安全性已個別確認才敢給這個逃生口，不是隨手加的鈕 | §6 |
+| `RecordSelfCheck` 的 fps／format／engine／useHEVC 改成跟著 `AppSettings` 走 | 判準必須確定性：自檢跑出的期望值（時長×fps 的格數、GIF 是否合併相同格、HEVC 位元率）若隨使用者這台機器的設定值或是否裝了 gifski 而變動，同一份程式碼在不同機器/不同時間跑出不同「應該通過」的數字，自檢就不再是可重現的回歸網——因此四處都顯式傳常數（fps 12、`.gif`、`.builtin`、`false`），不吃設定 | §6 |
+| gifski 失敗時不回退內建、直接顯示錯誤或跳過 GIF | 使用者體驗會因為「這台機器有沒有裝 gifski」「這次子程序有沒有剛好失敗」而不一致地失敗；內建 CGImageDestination 路徑對同一支母帶一定能成功產生 GIF（本節前 7 點就是回歸網），gifski 是加值不是必要條件，沒有回退等於把「加值」變成「地雷」 | §6 |
+| 讓拖曳出的 MP4 套用 `trimRange`（跟到三種匯出格式一樣剪裁後的範圍） | 設計決定（brief／spec 已核）：v1 語意刻意單純化為「一律整段母帶」——拖曳走的是檔案系統複製，不是重新編碼；要套用剪裁得比照 `saveMp4Action` 走 `AVAssetExportSession` 匯到暫存檔再供 promise 讀取，複雜度陡增，而拖曳的使用情境本來就是「快速丟出整段」，跟剪裁後只要片段的匯出情境不同 | §1、§6 |
