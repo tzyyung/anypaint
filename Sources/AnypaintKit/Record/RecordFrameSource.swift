@@ -142,11 +142,16 @@ public final class RecordFrameSource: NSObject {
     private var outputURL: URL?
     private let sampleQueue = DispatchQueue(label: "anypaint.record.frames")
     /// nonisolated：handler 在 sampleQueue 上直接讀（同 ScrollFrameSource.ciContext 的編譯器限制
-    /// 說明，但這裡是可變的 var，多一條額外保證要記清楚）。**豁免理由**：寫入只發生在 MainActor 的
-    /// start/stopAndFinish/abort（彼此天然序列化，MainActor 一次只跑一段）；讀取只發生在
-    /// sampleQueue 上的 stream(_:didOutputSampleBuffer:)。停止路徑一律先 `await stream.stopCapture()`
-    /// 拿到「SCK 保證不再派發 handler」之後才把 box 設 nil——因此不存在「MainActor 正在改 box、
-    /// sampleQueue 同時在讀」的窗口；GCD `async` 派工與 `await` 的掛起點本身即是記憶體同步點。
+    /// 說明，但這裡是可變的 var，多一條額外保證要記清楚）。**豁免理由（fix round 2 改寫過，
+    /// 之前的版本過度宣稱）**：真正成立的不變式是「`self.box` 只在『這次呼叫自己手上有一個
+    /// 已經 `await stream.stopCapture()` 過的 stream』時才會被清 nil」——寫入者必須先親自
+    /// 確認過 SCK 不再派發 handler，才能碰 box。`start()` 的 pendingStop 分支、`stopAndFinish()`
+    /// 都遵守這條；`abort()` 也遵守，但反過來說：如果呼叫 `abort()` 時 `self.stream` 還是 nil
+    /// （代表 `start()` 還在飛，尚未走到賦值 `self.stream` 那步——這正是 `self.box` 可能已經
+    /// 存在、handler 也可能已經在 sampleQueue 上跑的窗口），`abort()` 手上沒有可以自己
+    /// `stopCapture()` 的 stream，這時它完全不碰 `self.box`（見 `abort()` 內的早退分支），
+    /// 把清理完全交給 `start()` 自己的 pendingStop 分支收尾。沒有這條規則以前，`abort()`
+    /// 會在這個窗口對 `self.box` 做無同步的跨執行緒寫，跟 sampleQueue 上的讀是真的資料競爭。
     private nonisolated(unsafe) var box: WriterBox?
 
     /// - Parameters:
@@ -154,6 +159,10 @@ public final class RecordFrameSource: NSObject {
     ///   - showsCursor: 游標交給 SCK 畫（實戰專案一致做法）。
     ///   - ringWindowNumber: 點擊圈視窗的 windowNumber；非 nil 時把它放進 exceptingWindows
     ///     白名單（app 整體排除、唯獨它被拍——設計文件 §3 filter）。
+    ///
+    /// 契約：`start()` 拋錯（TCC 拒絕、`CaptureError.noDisplays` 都是實機常見狀況）之後，
+    /// 物件已經自己清乾淨（`self.box`／`self.stream`／`self.outputURL` 全部回到 nil）——
+    /// 呼叫端可以直接重試，不需要先呼叫 `abort()` 才能再 `start()`。
     public func start(selectionGlobal: CGRect, screen: NSScreen,
                       showsCursor: Bool, ringWindowNumber: Int?, outputURL: URL) async throws {
         // 防重入：呼叫端若在前一段 session 收尾（stopAndFinish/abort）完成前又呼叫 start()，
@@ -197,8 +206,25 @@ public final class RecordFrameSource: NSObject {
                                      pixelWidth: geo.pixelWidth, pixelHeight: geo.pixelHeight)
         self.box = boxLocal
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
-        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
-        try await stream.startCapture()
+        do {
+            try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
+            try await stream.startCapture()
+        } catch {
+            // 這兩步任一步失敗（TCC 拒絕、noDisplays 類錯誤實機都常見）都要在丟出去之前自己
+            // 清乾淨：不然 self.box 留著非 nil，之後每次 start() 都會被上面的防重入 guard
+            // 擋成 alreadyRecording，永久卡死；孤兒 WriterBox 也扣著一張 IOSurface 與一個
+            // 暫存檔不放。先 `stopCapture()` 才清 box，理由同 pendingStop 分支與
+            // `box` 的豁免註解——即使 startCapture() 本身失敗，也用同一套「先確認 SCK
+            // 收手、才碰 box」紀律，不因為是錯誤路徑就破例。
+            try? await stream.stopCapture()
+            self.box = nil
+            self.outputURL = nil
+            sampleQueue.async {
+                boxLocal.cancel()
+                try? FileManager.default.removeItem(at: outputURL)
+            }
+            throw error
+        }
         if pendingStop {                     // start 的 await 期間被取消（同 ScrollFrameSource 慣例）
             try? await stream.stopCapture()
             // 只有在 self.box 仍然是「我剛剛建的那個」時才由這裡清理：await 這段期間
@@ -209,6 +235,7 @@ public final class RecordFrameSource: NSObject {
             // 這件事在 MainActor 上就講清楚，不只靠 WriterBox 內部冪等兜底）。
             if self.box === boxLocal {
                 self.box = nil
+                self.outputURL = nil   // 所有權轉交同一套心智模型：box 清了，outputURL 也一併清
                 sampleQueue.async {
                     boxLocal.cancel()
                     try? FileManager.default.removeItem(at: outputURL)
@@ -249,7 +276,19 @@ public final class RecordFrameSource: NSObject {
     /// 取消：停 stream、丟母帶、刪暫存檔。
     public func abort() async {
         pendingStop = true
-        if let stream { self.stream = nil; try? await stream.stopCapture() }
+        guard let stream else {
+            // self.stream 還是 nil：要嘛從來沒有 session 在跑（什麼都不用做），要嘛
+            // start() 還在飛、尚未走到賦值 self.stream 那步——這種情況下 self.box 可能已經
+            // 存在、handler 也可能已經在 sampleQueue 上讀它，但這裡手上沒有自己的 stream
+            // 可以先 `await stopCapture()` 確認 SCK 收手，所以完全不碰 self.box／
+            // self.outputURL（見 box 的豁免註解）。上面已經設好 pendingStop = true，
+            // 收尾交給 start() 自己的 pendingStop 分支：它手上有真正的 stream，能先
+            // stopCapture() 才清 box。這裡直接回傳，是刻意的「盡力而為、延後生效」，
+            // 不是漏掉——比照 ScrollFrameSource.stop() 對同一種情境的處理方式。
+            return
+        }
+        self.stream = nil
+        try? await stream.stopCapture()
         let box = self.box
         self.box = nil
         let url = outputURL
