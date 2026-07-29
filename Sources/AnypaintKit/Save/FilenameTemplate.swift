@@ -59,9 +59,14 @@ public enum FilenameTemplate {
         s.lowercased().hasSuffix(".png")
     }
 
+    /// 結尾非指定副檔名（大小寫不拘）時補上。ext 不含點（"mp4"/"gif"/"png"）。
+    public static func ensuringExtension(_ s: String, ext: String) -> String {
+        s.lowercased().hasSuffix("." + ext.lowercased()) ? s : s + "." + ext
+    }
+
     /// 展開結果補正：結尾非 .png 時補上。
     public static func ensuringPNGExtension(_ s: String) -> String {
-        hasPNGExtension(s) ? s : s + ".png"
+        ensuringExtension(s, ext: "png")
     }
 
     /// 檔名段（最後路徑段）為空或僅剩清洗替代字/空白/點 → 以 fallbackName 取代檔名段（spec 邊界）。

@@ -1234,4 +1234,10 @@ checkEq("hudClock 正數", RecordMath.hudClockText(elapsedSeconds: 65, limitSeco
 checkEq("hudClock 倒數", RecordMath.hudClockText(elapsedSeconds: 3, limitSeconds: 10), "00:07")
 checkEq("hudClock 倒數不出現負值", RecordMath.hudClockText(elapsedSeconds: 12, limitSeconds: 10), "00:00")
 
+// 39) FilenameTemplate.ensuringExtension（動畫截圖 mp4/gif 命名共用）
+checkEq("ensuringExtension 補 mp4", FilenameTemplate.ensuringExtension("a", ext: "mp4"), "a.mp4")
+checkEq("ensuringExtension 已有（大小寫不拘）", FilenameTemplate.ensuringExtension("a.MP4", ext: "mp4"), "a.MP4")
+checkEq("ensuringExtension gif", FilenameTemplate.ensuringExtension("b.png", ext: "gif"), "b.png.gif")
+checkEq("ensuringPNGExtension 行為不變", FilenameTemplate.ensuringPNGExtension("c"), "c.png")
+
 T.finish()
