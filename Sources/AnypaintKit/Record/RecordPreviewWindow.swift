@@ -2,18 +2,22 @@ import AppKit
 import AVKit
 import UniformTypeIdentifiers
 
-/// 動畫截圖預覽：AVPlayerView 循環播放母帶＋〔存 GIF〕〔存 APNG〕〔存 MP4〕〔拍快照〕
-/// 〔開啟位置〕〔丟棄〕。
+/// 動畫截圖預覽：AVPlayerView 循環播放母帶＋〔存 GIF〕〔存 APNG〕〔存 MP4〕〔存 WebP，僅偵測到
+/// img2webp 時〕〔拍快照〕〔開啟位置〕〔丟棄〕。
 /// 視窗骨架/持有慣例對照 `ScrollPreviewWindow`（該檔 5-45 行的骨架、174-216 行的
 /// controller 持有／forget／present 慣例）——這裡不重複解釋，只記差異。
 final class RecordPreviewWindow: NSWindow {
-    /// 內容區最小尺寸：底部「狀態列＋剪裁＋存 GIF＋存 APNG＋存 MP4＋拍快照＋開啟位置＋丟棄」
-    /// 放得下、影片區也留得下基本可視面積。實測（一次性量測，同 ScrollPreviewWindow.minContentWidth
-    /// 的量法——NSButton.sizeToFit() 量真實寬度，不是憑印象估）：加「剪裁」後七顆鈕依序寬
-    /// 50/61/77/68/63/76/50pt，加 stack spacing 6×8pt 與左右邊距 12×2，button row 本身需要
-    /// ~517pt——比舊值 480（六顆鈕時代）已經不夠，因此把下限重新調到 540，留 ~23pt 安全邊際
-    /// （同等級於先前 400→480 的 21pt 裕度）。
-    static let minContentWidth: CGFloat = 540
+    /// 內容區最小尺寸：鈕數量隨環境變（有沒有偵測到 img2webp）——量**最多鈕**的情況（設計文件
+    /// §1.7b）。實測（同 ScrollPreviewWindow.minContentWidth 的量法——NSButton.sizeToFit() 量
+    /// 真實寬度，不是憑印象估）：
+    /// - 7 顆鈕（無 img2webp）：剪裁/存GIF/存APNG/存MP4/拍快照/開啟位置/丟棄，依序寬
+    ///   50/61/77/68/63/76/50pt，button row 本身需要 ~517pt。
+    /// - 8 顆鈕（有 img2webp，多一顆「存 WebP」76pt）：依序寬
+    ///   50/61/77/68/76/63/76/50pt，加 stack spacing 7×8pt 與左右邊距 12×2，button row 本身
+    ///   需要 601pt——這是較大的那個情況，下限跟著它調。
+    /// 把下限調到 624，留 ~23pt 安全邊際（同等級於先前 480→540 的 23pt 裕度）；7 顆鈕情境下
+    /// 這個下限比它本身需要的還寬，不影響顯示（只是空按鈕列右側多一點留白）。
+    static let minContentWidth: CGFloat = 624
     static let minContentHeight: CGFloat = 240
 
     private let movieURL: URL
@@ -24,7 +28,11 @@ final class RecordPreviewWindow: NSWindow {
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?    // 循環播放：AVPlayerLooper 官方做法，必須持有否則不循環
     private var playerView: AVPlayerView?  // 剪裁鈕要問 canBeginTrimming／呼叫 beginTrimming，需持有
-    private var isExporting = false        // 見 close() 的說明：匯出（GIF 或 APNG）中擋下關閉
+    // img2webp 偵測結果：視窗建構時偵測一次（不是每次按鈕都重新掃檔案系統），非 nil 才會在
+    // buildUI() 加入「存 WebP」鈕——沒偵測到就不出現任何東西（不出灰鈕不出錯誤，設計文件
+    // §1.7b：沒有內建 WebP 編碼器可退，跟 gifski 的「找不到就回退內建」語意不同）。
+    private let img2webpPath: String?
+    private var isExporting = false        // 見 close() 的說明：匯出（GIF 或 APNG 或 WebP）中擋下關閉
     private var lastSavedURL: URL?         // 最近一次存 GIF/APNG/MP4 成功的路徑；「開啟位置」用
     // 剪裁範圍：nil＝未剪裁（匯出整段母帶，行為不變）；非 nil＝三種匯出格式都套用這段範圍
     // （設計文件 §1.6）。母帶絕對時間軸座標（與 player.currentItem 的
@@ -42,6 +50,7 @@ final class RecordPreviewWindow: NSWindow {
         self.output = output
         self.pinboard = pinboard
         self.captureScale = captureScale
+        self.img2webpPath = Img2webpEngine.detect()
         super.init(
             contentRect: contentRect,
             styleMask: [.titled, .closable, .resizable],
@@ -105,6 +114,13 @@ final class RecordPreviewWindow: NSWindow {
         saveApngButton.toolTip = "匯出為全彩 APNG 並存到預設資料夾（檔案較大，通用貼圖支援度不一）"
         let saveMp4Button = NSButton(title: "存 MP4", target: self, action: #selector(saveMp4Action))
         saveMp4Button.toolTip = "複製母帶存成 MP4（不影響之後再匯出 GIF/APNG）"
+        // 「存 WebP」只在偵測到 img2webp 時才建立、才加進 buttons/buttonRow（設計文件 §1.7b：
+        // 沒有內建 WebP 編碼器可退，沒裝就不出現，不是灰鈕）。
+        let saveWebpButton: NSButton? = img2webpPath.map { _ in
+            let b = NSButton(title: "存 WebP", target: self, action: #selector(saveWebpAction))
+            b.toolTip = "匯出為 WebP 並存到預設資料夾（需要外部 img2webp，已偵測到）"
+            return b
+        }
         let snapshotButton = NSButton(title: "拍快照", target: self, action: #selector(snapshotAction))
         snapshotButton.toolTip = "把目前播放位置的畫面複製到剪貼簿（⌘⇧V 可貼成浮動貼圖）"
         openLocationButton.target = self
@@ -113,8 +129,8 @@ final class RecordPreviewWindow: NSWindow {
         openLocationButton.isEnabled = false   // 還沒存過檔前無路徑可開
         let discardButton = NSButton(title: "丟棄", target: self, action: #selector(discardAction))
         discardButton.toolTip = "丟掉這段動畫截圖並關窗（需確認）"
-        buttons = [trimButton, saveGifButton, saveApngButton, saveMp4Button, snapshotButton,
-                   openLocationButton, discardButton]
+        buttons = [trimButton, saveGifButton, saveApngButton, saveMp4Button] + [saveWebpButton].compactMap { $0 }
+            + [snapshotButton, openLocationButton, discardButton]
         for b in buttons {
             b.bezelStyle = .rounded
             b.translatesAutoresizingMaskIntoConstraints = false
@@ -125,8 +141,7 @@ final class RecordPreviewWindow: NSWindow {
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .secondaryLabelColor
 
-        let buttonRow = NSStackView(views: [trimButton, saveGifButton, saveApngButton, saveMp4Button,
-                                            snapshotButton, openLocationButton, discardButton])
+        let buttonRow = NSStackView(views: buttons)
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
         buttonRow.translatesAutoresizingMaskIntoConstraints = false
@@ -213,6 +228,43 @@ final class RecordPreviewWindow: NSWindow {
     /// 存 APNG：與存 GIF 共用同一套匯出／存檔骨架，差別只在 format／副檔名／文案
     /// （設計文件 §1.5：APNG 全彩、無 256 色調色盤損失，檔案通常較小但通用貼圖支援度不一）。
     @objc private func saveApngAction() { exportAndSave(format: .apng, label: "APNG") }
+
+    /// 存 WebP：只有偵測到 img2webp 才會建到按鈕列上，因此這裡呼叫得到代表 `img2webpPath`
+    /// 一定非 nil；guard 仍防禦性寫（同檔案其他 action 的一貫風格），理論上不會走到 else。
+    /// 不共用 `exportAndSave`（那個骨架綁死 `AnimationFormat`／`GifExporter.export`，WebP
+    /// 走的是完全獨立的 `GifExporter.exportWebP` 且**沒有回退**，語意分岔點夠多，另外一份
+    /// 更直白，不必為了共用硬塞一層抽象）。
+    @objc private func saveWebpAction() {
+        guard let img2webpPath else { return }
+        isExporting = true
+        setButtonsEnabled(false)
+        statusLabel.stringValue = "WebP 匯出中… 0%"
+        let tmpURL = movieURL.deletingPathExtension().appendingPathExtension("webp")
+        let fps = Double(AppSettings.recordGifFps)
+        GifExporter.exportWebP(movieURL: movieURL, to: tmpURL, pointScale: captureScale,
+                               fps: fps, timeRange: trimRange, img2webpPath: img2webpPath,
+                               progress: { [weak self] p in
+                                   self?.statusLabel.stringValue = "WebP 匯出中… \(Int(p * 100))%"
+                               },
+                               completion: { [weak self] result in
+                                   guard let self else { return }
+                                   self.isExporting = false
+                                   self.setButtonsEnabled(true)
+                                   switch result {
+                                   case .success:
+                                       let saved = self.output.saveCopy(from: tmpURL, ext: "webp", vars: self.vars)
+                                       try? FileManager.default.removeItem(at: tmpURL)
+                                       if let saved { self.lastSavedURL = saved }
+                                       self.statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" }
+                                           ?? "WebP 存檔失敗"
+                                   case .failure(let e):
+                                       // 不回退（設計文件 §1.7b：沒有內建 WebP 編碼器）——直接顯示錯誤，
+                                       // GifExporter.exportWebP 內部已經把同款診斷寫進 RecordSessionLog。
+                                       self.statusLabel.stringValue = "WebP 匯出失敗：\(e)"
+                                   }
+                                   self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
+                               })
+    }
 
     /// GIF／APNG 共用的匯出＋存檔流程：fps 讀 `AppSettings.recordGifFps`（設計文件 §1.2——
     /// 兩種格式共用同一個 fps 設定項，不需要分開的 APNG fps）。`label` 只用於狀態列文案，

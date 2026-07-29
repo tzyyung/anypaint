@@ -129,28 +129,87 @@ public enum GifExporter {
     private static func exportViaGifski(movieURL: URL, to outURL: URL, pointScale: CGFloat,
                                         fps: Double, timeRange: CMTimeRange?, gifskiPath: String,
                                         progress: @escaping @MainActor (Double) -> Void) async throws {
-        let plan = try await prepareReader(movieURL: movieURL, pointScale: pointScale,
-                                           fps: fps, timeRange: timeRange)
-
         let framesDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("anypaint-record-frames-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: framesDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: framesDir) }
-
-        // 零填充排序（frame-0001.png…）確保 gifski 依序吃到正確的畫面順序。
-        var framePaths: [String] = []
-        framePaths.reserveCapacity(plan.grid.count)
-        try await decodeLoop(plan: plan, progress: { done in progress(done * 0.7) }) { gridIndex, image in
-            let path = framesDir.appendingPathComponent(String(format: "frame-%04d.png", gridIndex)).path
-            try writePNG(image, to: path)
-            framePaths.append(path)
-        }
+        let (plan, framePaths) = try await extractFramesAsPNG(movieURL: movieURL, pointScale: pointScale,
+                                                               fps: fps, timeRange: timeRange,
+                                                               framesDir: framesDir,
+                                                               progress: { done in progress(done * 0.7) })
 
         try GifskiEngine.run(gifskiPath: gifskiPath,
                              arguments: GifskiEngine.arguments(fps: Int(fps.rounded()), quality: 90,
                                                                width: plan.outW,
                                                                output: outURL.path, frames: framePaths))
         await progress(1.0)
+    }
+
+    /// WebP 匯出（img2webp 子程序，設計文件 §1.7b）。**沒有回退**——呼叫端（`RecordPreviewWindow`）
+    /// 只在偵測到 img2webp 時才顯示「存 WebP」鈕、才會呼叫這裡；失敗直接丟給呼叫端顯示錯誤，
+    /// 不像 `export(...)` 的 gifski 路徑那樣 catch 起來走內建編碼器——沒有內建 WebP 編碼器可退
+    /// （這台機器 `CGImageDestinationCopyTypeIdentifiers()` 不含 webp，實測見任務報告）。
+    /// 抽格管線與 gifski 共用（`extractFramesAsPNG`）；進度切兩段，同 gifski 路徑的道理。
+    public static func exportWebP(movieURL: URL, to outURL: URL, pointScale: CGFloat, fps: Double,
+                                  timeRange: CMTimeRange? = nil,
+                                  img2webpPath: String,
+                                  progress: @escaping @MainActor (Double) -> Void,
+                                  completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        Task.detached(priority: .userInitiated) {
+            do {
+                try await exportViaImg2webp(movieURL: movieURL, to: outURL, pointScale: pointScale,
+                                            fps: fps, timeRange: timeRange, img2webpPath: img2webpPath,
+                                            progress: progress)
+                await completion(.success(()))
+            } catch {
+                RecordSessionLog.add("img2webp 失敗（\(error)）movieURL=\(movieURL.lastPathComponent)")
+                await completion(.failure(error))
+            }
+        }
+    }
+
+    /// img2webp 路徑本體：抽格寫 PNG → 呼叫 img2webp 子程序組 WebP → frames 目錄一律 `defer` 刪。
+    /// delay 用 grid 的固定 fps 換算成 ms（`RecordMath.gridTimes` 產生的是等間隔格，設計文件
+    /// §1.7b：均勻 fps → 等長 delay，不必逐格算——所有格給同一個值，`Img2webpEngine.arguments`
+    /// 會自動摺疊成單一 `-d`）。
+    private static func exportViaImg2webp(movieURL: URL, to outURL: URL, pointScale: CGFloat,
+                                          fps: Double, timeRange: CMTimeRange?, img2webpPath: String,
+                                          progress: @escaping @MainActor (Double) -> Void) async throws {
+        let framesDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("anypaint-record-frames-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: framesDir) }
+        let (_, framePaths) = try await extractFramesAsPNG(movieURL: movieURL, pointScale: pointScale,
+                                                            fps: fps, timeRange: timeRange,
+                                                            framesDir: framesDir,
+                                                            progress: { done in progress(done * 0.7) })
+
+        let delayMs = Int((1000.0 / fps).rounded())
+        try Img2webpEngine.run(img2webpPath: img2webpPath,
+                               arguments: Img2webpEngine.arguments(
+                                   delaysMs: Array(repeating: delayMs, count: framePaths.count),
+                                   frames: framePaths, output: outURL.path))
+        await progress(1.0)
+    }
+
+    /// 抽格寫 PNG 到暫存目錄（gifski／img2webp 兩條外部子程序路徑共用；「先抽 PNG 再丟外部工具」
+    /// 是同一套管線，抽格本體只留一份，兩個引擎各自只補上自己的子程序呼叫與引數）。
+    /// 呼叫端負責建立/清理 `framesDir`（`defer` 放在呼叫端，這裡只管抽格寫檔）。
+    /// 零填充排序（frame-0001.png…）確保外部工具依序吃到正確的畫面順序。
+    private static func extractFramesAsPNG(movieURL: URL, pointScale: CGFloat, fps: Double,
+                                           timeRange: CMTimeRange?, framesDir: URL,
+                                           progress: @escaping @MainActor (Double) -> Void)
+        async throws -> (plan: FramePlan, framePaths: [String]) {
+        let plan = try await prepareReader(movieURL: movieURL, pointScale: pointScale,
+                                           fps: fps, timeRange: timeRange)
+        try FileManager.default.createDirectory(at: framesDir, withIntermediateDirectories: true)
+
+        var framePaths: [String] = []
+        framePaths.reserveCapacity(plan.grid.count)
+        try await decodeLoop(plan: plan, progress: progress) { gridIndex, image in
+            let path = framesDir.appendingPathComponent(String(format: "frame-%04d.png", gridIndex)).path
+            try writePNG(image, to: path)
+            framePaths.append(path)
+        }
+        return (plan, framePaths)
     }
 
     /// 單張 CGImage → PNG 檔（gifski 路徑逐格寫檔用）。

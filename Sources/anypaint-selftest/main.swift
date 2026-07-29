@@ -1292,4 +1292,30 @@ checkEq("gifski arguments 空frames",
         GifskiEngine.arguments(fps: 8, quality: 90, width: 640, output: "/tmp/out.gif", frames: []),
         ["--fps", "8", "--quality", "90", "--width", "640", "-o", "/tmp/out.gif"])
 
+// 44) Img2webpEngine.detect（注入 isExecutable stub，設計文件 §1.7b；候選順序＝優先序：
+// homebrew 優先，同 GifskiEngine.detect 的道理）
+checkEq("img2webp detect homebrew優先",
+        Img2webpEngine.detect(isExecutable: { _ in true }),
+        "/opt/homebrew/bin/img2webp")
+checkEq("img2webp detect 只有usr/local",
+        Img2webpEngine.detect(isExecutable: { $0 == "/usr/local/bin/img2webp" }),
+        "/usr/local/bin/img2webp")
+checkEq("img2webp detect 都沒有回nil",
+        Img2webpEngine.detect(isExecutable: { _ in false }),
+        nil)
+
+// 45) Img2webpEngine.arguments（純函式：等長 delay 摺疊成單一 -d、-loop 0、-o 置尾，
+// 設計文件 §1.7b）
+checkEq("img2webp arguments 等長delay摺疊成單一-d",
+        Img2webpEngine.arguments(delaysMs: [83, 83, 83],
+                                 frames: ["/tmp/f/frame-0000.png", "/tmp/f/frame-0001.png",
+                                          "/tmp/f/frame-0002.png"],
+                                 output: "/tmp/out.webp"),
+        ["-loop", "0", "-d", "83",
+         "/tmp/f/frame-0000.png", "/tmp/f/frame-0001.png", "/tmp/f/frame-0002.png",
+         "-o", "/tmp/out.webp"])
+checkEq("img2webp arguments 空frames",
+        Img2webpEngine.arguments(delaysMs: [], frames: [], output: "/tmp/out.webp"),
+        ["-loop", "0", "-o", "/tmp/out.webp"])
+
 T.finish()
