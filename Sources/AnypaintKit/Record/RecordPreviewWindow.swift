@@ -154,20 +154,35 @@ final class RecordPreviewWindow: NSWindow {
 
     // 紅鈕（標準關閉）與「丟棄」共用這個 close()（同 ScrollPreviewWindow 慣例）。
     override func close() {
-        // GIF 匯出中關窗的風險：GifExporter 沒有 cancel token，中途砍會讓背景 Task 對著已經
-        // release 的 player／movieURL 繼續讀寫（movieURL 甚至會在下面被刪掉），而且使用者會以為
-        // 視窗真的關掉了、匯出其實還在背景默默跑或默默失敗。兩個選項裡選「擋下關閉、請使用者等
-        // 匯出完成」而非「靜默取消」：GifExporter 沒暴露取消機制，要做到「靜默取消」得另外設計
-        // reader 中止旗標，成本远高於「等幾秒」——這是本檔案唯一沒被 brief 直接指定、需要自己
-        // 判斷的行為，記在這裡以免之後被誤改成「靜默丟棄」。
+        // GIF 匯出中關窗：GifExporter 沒有 cancel/timeout，detached Task 可能卡死（例如母帶
+        // 損毀導致 reader 卡在某個狀態）——若只「擋下關閉、要求等待」而不給逃生口，使用者除了
+        // 強制砍掉整個 app 別無他法。因此提供第二顆「強制關閉」鈕，預設鈕仍是「繼續等待」
+        // （NSAlert 第一顆鈕＝預設、Enter 觸發，避免誤觸強制關閉）。
+        //
+        // 強制關閉的安全性（三點都已個別確認，不是假設）：
+        // 1. 被拋下的 GifExporter.export 背景 Task 會繼續跑到完成或失敗——它的 completion
+        //    closure 用 [weak self]（見 saveGifAction），視窗這時已 forget/可能已釋放，
+        //    self 為 nil 時 guard let self else { return } 直接 no-op，不會 crash。
+        // 2. movieURL 在強制關閉時會被下面的 removeItem 刪掉，但 AVAssetReader 對它的檔案
+        //    描述符已經開啟——APFS／POSIX 的 unlink 語意是「目錄項目消失，已開啟的 fd 仍可讀到
+        //    刪除前的內容」，reader 不會因此中途壞掉；真正會發生的頂多是讀到 EOF 提前結束或
+        //    reader.status 轉 .failed → GifExporter 走 completion(.failure(...))，一樣是
+        //    no-op（見上一點）。
+        // 3. 暫存 GIF（saveGifAction 裡的 tmpGif）殘留不會變成孤兒垃圾：tmpGif 是
+        //    movieURL（RecordOutputService.tempMovieURL() 產出，檔名固定為
+        //    "anypaint-record-<uuid>.mp4"）換副檔名而來，檔名前綴「anypaint-record-」不變，
+        //    落在同一個暫存目錄——app 下次啟動時 RecordOutputService.cleanupStaleTempFiles()
+        //    照前綴掃描刪除，會連同這個殘留 tmpGif 一起清掉（已對照該函式的比對邏輯確認）。
         if isExportingGif {
             let alert = NSAlert()
             alert.messageText = "GIF 匯出中，請稍候完成後再關閉"
-            alert.addButton(withTitle: "好")
-            alert.alertStyle = .informational
+            alert.informativeText = "強制關閉會捨棄這次匯出，母帶也會一併刪除。"
+            alert.addButton(withTitle: "繼續等待")
+            alert.addButton(withTitle: "強制關閉")
+            alert.alertStyle = .warning
             NSApp.activate(ignoringOtherApps: true)
-            alert.runModal()
-            return
+            guard alert.runModal() == .alertSecondButtonReturn else { return }   // 繼續等待：不關窗
+            isExportingGif = false   // 選了強制關閉：解除擋關閉旗標，走下面的正常收尾
         }
         // 順序：先停 player 再刪暫存母帶——AVFoundation 對已開檔案 delete 雖不 crash，
         // 但釋放順序明確化可免平台差異（同 brief 註記）。
