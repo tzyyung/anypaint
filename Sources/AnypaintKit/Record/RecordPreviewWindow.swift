@@ -1,17 +1,18 @@
 import AppKit
 import AVKit
 
-/// 動畫截圖預覽：AVPlayerView 循環播放母帶＋〔存 GIF〕〔存 MP4〕〔拍快照〕〔開啟位置〕〔丟棄〕。
+/// 動畫截圖預覽：AVPlayerView 循環播放母帶＋〔存 GIF〕〔存 APNG〕〔存 MP4〕〔拍快照〕
+/// 〔開啟位置〕〔丟棄〕。
 /// 視窗骨架/持有慣例對照 `ScrollPreviewWindow`（該檔 5-45 行的骨架、174-216 行的
 /// controller 持有／forget／present 慣例）——這裡不重複解釋，只記差異。
 final class RecordPreviewWindow: NSWindow {
-    /// 內容區最小尺寸：底部「狀態列＋存 GIF＋存 MP4＋拍快照＋開啟位置＋丟棄」放得下、影片區
-    /// 也留得下基本可視面積。實測（一次性量測，同 ScrollPreviewWindow.minContentWidth 的量法——
-    /// NSButton.sizeToFit() 量真實寬度，不是憑印象估）：五顆鈕依序寬 61/68/63/76/50pt，加 stack
-    /// spacing 4×8pt 與左右邊距 12×2，button row 本身需要 ~374pt——加「拍快照」這顆鈕後只剩
-    /// 6pt 餘裕（相對舊值 380），比 ScrollPreviewWindow 的字型／語系裕度（345→360，＋15）還窄，
-    /// 因此把下限一併調到 400，維持同等級的安全邊際。
-    static let minContentWidth: CGFloat = 400
+    /// 內容區最小尺寸：底部「狀態列＋存 GIF＋存 APNG＋存 MP4＋拍快照＋開啟位置＋丟棄」放得下、
+    /// 影片區也留得下基本可視面積。實測（一次性量測，同 ScrollPreviewWindow.minContentWidth 的
+    /// 量法——NSButton.sizeToFit() 量真實寬度，不是憑印象估）：加「存 APNG」後六顆鈕依序寬
+    /// 61/77/68/63/76/50pt，加 stack spacing 5×8pt 與左右邊距 12×2，button row 本身需要
+    /// ~459pt——比舊值 400（五顆鈕時代）已經不夠，因此把下限重新調到 480，留 ~21pt 安全邊際
+    /// （同等級於先前 374→400 的 26pt 裕度）。
+    static let minContentWidth: CGFloat = 480
     static let minContentHeight: CGFloat = 240
 
     private let movieURL: URL
@@ -21,8 +22,8 @@ final class RecordPreviewWindow: NSWindow {
     private let captureScale: CGFloat      // 擷取螢幕 backingScaleFactor（GIF 降 1x 用；單位：像素/點）
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?    // 循環播放：AVPlayerLooper 官方做法，必須持有否則不循環
-    private var isExportingGif = false     // 見 close() 的說明：匯出中擋下關閉
-    private var lastSavedURL: URL?         // 最近一次存 GIF/MP4 成功的路徑；「開啟位置」用
+    private var isExporting = false        // 見 close() 的說明：匯出（GIF 或 APNG）中擋下關閉
+    private var lastSavedURL: URL?         // 最近一次存 GIF/APNG/MP4 成功的路徑；「開啟位置」用
     private let statusLabel = NSTextField(labelWithString: "")
     private let openLocationButton = NSButton(title: "開啟位置", target: nil, action: nil)
     private var buttons: [NSButton] = []
@@ -71,8 +72,10 @@ final class RecordPreviewWindow: NSWindow {
 
         let saveGifButton = NSButton(title: "存 GIF", target: self, action: #selector(saveGifAction))
         saveGifButton.toolTip = "匯出為 GIF 並存到預設資料夾"
+        let saveApngButton = NSButton(title: "存 APNG", target: self, action: #selector(saveApngAction))
+        saveApngButton.toolTip = "匯出為全彩 APNG 並存到預設資料夾（檔案較大，通用貼圖支援度不一）"
         let saveMp4Button = NSButton(title: "存 MP4", target: self, action: #selector(saveMp4Action))
-        saveMp4Button.toolTip = "複製母帶存成 MP4（不影響之後再匯出 GIF）"
+        saveMp4Button.toolTip = "複製母帶存成 MP4（不影響之後再匯出 GIF/APNG）"
         let snapshotButton = NSButton(title: "拍快照", target: self, action: #selector(snapshotAction))
         snapshotButton.toolTip = "把目前播放位置的畫面複製到剪貼簿（⌘⇧V 可貼成浮動貼圖）"
         openLocationButton.target = self
@@ -81,7 +84,7 @@ final class RecordPreviewWindow: NSWindow {
         openLocationButton.isEnabled = false   // 還沒存過檔前無路徑可開
         let discardButton = NSButton(title: "丟棄", target: self, action: #selector(discardAction))
         discardButton.toolTip = "丟掉這段動畫截圖並關窗（需確認）"
-        buttons = [saveGifButton, saveMp4Button, snapshotButton, openLocationButton, discardButton]
+        buttons = [saveGifButton, saveApngButton, saveMp4Button, snapshotButton, openLocationButton, discardButton]
         for b in buttons {
             b.bezelStyle = .rounded
             b.translatesAutoresizingMaskIntoConstraints = false
@@ -92,7 +95,7 @@ final class RecordPreviewWindow: NSWindow {
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .secondaryLabelColor
 
-        let buttonRow = NSStackView(views: [saveGifButton, saveMp4Button, snapshotButton,
+        let buttonRow = NSStackView(views: [saveGifButton, saveApngButton, saveMp4Button, snapshotButton,
                                             openLocationButton, discardButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
@@ -127,28 +130,40 @@ final class RecordPreviewWindow: NSWindow {
     // MARK: - 按鈕語意
 
     /// 存 GIF：匯出中停用所有按鈕＋statusLabel 顯示進度；完成後存到快速儲存路徑。
-    @objc private func saveGifAction() {
-        isExportingGif = true
+    @objc private func saveGifAction() { exportAndSave(format: .gif, label: "GIF") }
+
+    /// 存 APNG：與存 GIF 共用同一套匯出／存檔骨架，差別只在 format／副檔名／文案
+    /// （設計文件 §1.5：APNG 全彩、無 256 色調色盤損失，檔案通常較小但通用貼圖支援度不一）。
+    @objc private func saveApngAction() { exportAndSave(format: .apng, label: "APNG") }
+
+    /// GIF／APNG 共用的匯出＋存檔流程：fps 讀 `AppSettings.recordGifFps`（設計文件 §1.2——
+    /// 兩種格式共用同一個 fps 設定項，不需要分開的 APNG fps）。`label` 只用於狀態列文案，
+    /// 副檔名／UTType 由 `format.fileExtension` 與 `GifExporter` 內部決定。
+    private func exportAndSave(format: AnimationFormat, label: String) {
+        isExporting = true
         setButtonsEnabled(false)
-        statusLabel.stringValue = "GIF 匯出中… 0%"
-        let tmpGif = movieURL.deletingPathExtension().appendingPathExtension("gif")
-        GifExporter.export(movieURL: movieURL, to: tmpGif, pointScale: captureScale,
+        statusLabel.stringValue = "\(label) 匯出中… 0%"
+        let ext = format.fileExtension
+        let tmpURL = movieURL.deletingPathExtension().appendingPathExtension(ext)
+        let fps = Double(AppSettings.recordGifFps)
+        GifExporter.export(movieURL: movieURL, to: tmpURL, pointScale: captureScale,
+                           fps: fps, format: format,
                            progress: { [weak self] p in
-                               self?.statusLabel.stringValue = "GIF 匯出中… \(Int(p * 100))%"
+                               self?.statusLabel.stringValue = "\(label) 匯出中… \(Int(p * 100))%"
                            },
                            completion: { [weak self] result in
                                guard let self else { return }
-                               self.isExportingGif = false
+                               self.isExporting = false
                                self.setButtonsEnabled(true)
                                switch result {
                                case .success:
-                                   let saved = self.output.saveCopy(from: tmpGif, ext: "gif", vars: self.vars)
-                                   try? FileManager.default.removeItem(at: tmpGif)
+                                   let saved = self.output.saveCopy(from: tmpURL, ext: ext, vars: self.vars)
+                                   try? FileManager.default.removeItem(at: tmpURL)
                                    if let saved { self.lastSavedURL = saved }
                                    self.statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" }
-                                       ?? "GIF 存檔失敗"
+                                       ?? "\(label) 存檔失敗"
                                case .failure(let e):
-                                   self.statusLabel.stringValue = "GIF 匯出失敗：\(e)"
+                                   self.statusLabel.stringValue = "\(label) 匯出失敗：\(e)"
                                }
                                // 「開啟位置」不是跟著上面 setButtonsEnabled(true) 無條件打開：
                                // 還沒存過檔（lastSavedURL 是 nil）就不該讓使用者按得下去——
@@ -218,35 +233,35 @@ final class RecordPreviewWindow: NSWindow {
 
     // 紅鈕（標準關閉）與「丟棄」共用這個 close()（同 ScrollPreviewWindow 慣例）。
     override func close() {
-        // GIF 匯出中關窗：GifExporter 沒有 cancel/timeout，detached Task 可能卡死（例如母帶
-        // 損毀導致 reader 卡在某個狀態）——若只「擋下關閉、要求等待」而不給逃生口，使用者除了
-        // 強制砍掉整個 app 別無他法。因此提供第二顆「強制關閉」鈕，預設鈕仍是「繼續等待」
-        // （NSAlert 第一顆鈕＝預設、Enter 觸發，避免誤觸強制關閉）。
+        // 匯出中（GIF 或 APNG）關窗：GifExporter 沒有 cancel/timeout，detached Task 可能卡死
+        // （例如母帶損毀導致 reader 卡在某個狀態）——若只「擋下關閉、要求等待」而不給逃生口，
+        // 使用者除了強制砍掉整個 app 別無他法。因此提供第二顆「強制關閉」鈕，預設鈕仍是
+        // 「繼續等待」（NSAlert 第一顆鈕＝預設、Enter 觸發，避免誤觸強制關閉）。
         //
         // 強制關閉的安全性（三點都已個別確認，不是假設）：
         // 1. 被拋下的 GifExporter.export 背景 Task 會繼續跑到完成或失敗——它的 completion
-        //    closure 用 [weak self]（見 saveGifAction），視窗這時已 forget/可能已釋放，
+        //    closure 用 [weak self]（見 exportAndSave），視窗這時已 forget/可能已釋放，
         //    self 為 nil 時 guard let self else { return } 直接 no-op，不會 crash。
         // 2. movieURL 在強制關閉時會被下面的 removeItem 刪掉，但 AVAssetReader 對它的檔案
         //    描述符已經開啟——APFS／POSIX 的 unlink 語意是「目錄項目消失，已開啟的 fd 仍可讀到
         //    刪除前的內容」，reader 不會因此中途壞掉；真正會發生的頂多是讀到 EOF 提前結束或
         //    reader.status 轉 .failed → GifExporter 走 completion(.failure(...))，一樣是
         //    no-op（見上一點）。
-        // 3. 暫存 GIF（saveGifAction 裡的 tmpGif）殘留不會變成孤兒垃圾：tmpGif 是
+        // 3. 暫存檔（exportAndSave 裡的 tmpURL，GIF 或 APNG）殘留不會變成孤兒垃圾：tmpURL 是
         //    movieURL（RecordOutputService.tempMovieURL() 產出，檔名固定為
         //    "anypaint-record-<uuid>.mp4"）換副檔名而來，檔名前綴「anypaint-record-」不變，
         //    落在同一個暫存目錄——app 下次啟動時 RecordOutputService.cleanupStaleTempFiles()
-        //    照前綴掃描刪除，會連同這個殘留 tmpGif 一起清掉（已對照該函式的比對邏輯確認）。
-        if isExportingGif {
+        //    照前綴掃描刪除，會連同這個殘留 tmpURL 一起清掉（已對照該函式的比對邏輯確認）。
+        if isExporting {
             let alert = NSAlert()
-            alert.messageText = "GIF 匯出中，請稍候完成後再關閉"
+            alert.messageText = "匯出中，請稍候完成後再關閉"
             alert.informativeText = "強制關閉會捨棄這次匯出，母帶也會一併刪除。"
             alert.addButton(withTitle: "繼續等待")
             alert.addButton(withTitle: "強制關閉")
             alert.alertStyle = .warning
             NSApp.activate(ignoringOtherApps: true)
             guard alert.runModal() == .alertSecondButtonReturn else { return }   // 繼續等待：不關窗
-            isExportingGif = false   // 選了強制關閉：解除擋關閉旗標，走下面的正常收尾
+            isExporting = false   // 選了強制關閉：解除擋關閉旗標，走下面的正常收尾
         }
         // 順序：先停 player 再刪暫存母帶——AVFoundation 對已開檔案 delete 雖不 crash，
         // 但釋放順序明確化可免平台差異（同 brief 註記）。

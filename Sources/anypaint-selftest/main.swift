@@ -1256,4 +1256,17 @@ checkEq("gifFps 正規化 下界", AppSettings.normalizedRecordGifFps(7), 8)
 checkEq("gifFps 正規化 上界", AppSettings.normalizedRecordGifFps(99), 20)
 checkEq("gifFps 正規化 零", AppSettings.normalizedRecordGifFps(0), 8)
 
+// 41) RecordMath：APNG delay（秒，無 cs 捨入——與 GIF 累計捨入是兩套規則，見設計文件 §1.5）
+do {
+    let d = RecordMath.apngDelaysSeconds(frameStartTimes: [0, 0.5, 3.0], duration: 5.0)
+    checkEq("apngDelays VFR", d, [0.5, 2.5, 2.0])
+}
+do {
+    let times = (0..<120).map { Double($0) / 12.0 }
+    let d = RecordMath.apngDelaysSeconds(frameStartTimes: times, duration: 10.0)
+    checkTrue("apngDelays 總和=時長", abs(d.reduce(0, +) - 10.0) < 1e-9)
+    checkEq("apngDelays 格數", d.count, 120)
+}
+checkEq("apngDelays 空輸入", RecordMath.apngDelaysSeconds(frameStartTimes: [], duration: 1.0), [Double]())
+
 T.finish()

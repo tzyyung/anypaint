@@ -27,6 +27,22 @@ public enum RecordMath {
         return out
     }
 
+    /// APNG 每格 delay（秒）。與 `gifDelaysCentiseconds` **不同規則**：APNG 沒有 GIF 的
+    /// 2cs（50fps）下限，`kCGImagePropertyAPNGDelayTime` 直接吃秒數 Double，因此逐格用
+    /// 「下一格起點 − 本格起點」即可、不需要累計捨入去消化取整誤差（那是 GIF 特有的問題）。
+    ///
+    /// 前置條件：`duration ≤ 0` 或早於最後一格起點時，末格 delay 可能為負——呼叫端保證
+    /// `frameStartTimes` 遞增且 `duration` 涵蓋最後一格（與 `gifDelaysCentiseconds` 同前提）。
+    /// - Parameters:
+    ///   - frameStartTimes: 每格開始顯示的秒數（遞增，首格 0）。
+    ///   - duration: 總長（秒）＝最後一格顯示到此為止。
+    public static func apngDelaysSeconds(frameStartTimes: [Double], duration: Double) -> [Double] {
+        frameStartTimes.indices.map { i in
+            let end = i + 1 < frameStartTimes.count ? frameStartTimes[i + 1] : duration
+            return end - frameStartTimes[i]
+        }
+    }
+
     /// 均勻目標時間網格（秒）。至少 2 格（GIF 最少兩格才有動畫意義）。
     ///
     /// 前置條件：`fps > 0`。
