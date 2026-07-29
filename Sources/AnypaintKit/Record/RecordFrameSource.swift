@@ -185,7 +185,12 @@ public final class RecordFrameSource: NSObject {
             // 事實依據，不需要平行維護第二個布林值）。
             if box == nil { self.outputURL = nil }
         }
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        // onScreenWindowsOnly: false——點擊圈視窗是 alpha 0（純粹借位給 exceptingWindows 白名單用，
+        // 不需要真的被使用者看見），`true` 只列「畫面上看得見」的視窗，alpha 0 的視窗很可能被排除在
+        // 外，讓 exceptingWindows 放空、點擊圈隨整個 app 一起被排除（review 判定為真缺陷，見
+        // ClickRingOverlay.prepare(near:) 的對應註解）。app 本身排除靠 `excludingApplications`
+        // （bundleID 比對），不受這個參數影響，改 false 不會多拍到不該拍的視窗。
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         guard let displayID = screen.deviceDescription[key] as? CGDirectDisplayID,
               let display = content.displays.first(where: { $0.displayID == displayID }) else {

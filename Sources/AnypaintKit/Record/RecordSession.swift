@@ -18,6 +18,11 @@ public final class RecordSession {
     static let maxRecordingSeconds: Double = 600
     /// 最小選區邊長（**點**——CLAUDE.md 單位教訓；錄製無匹配需求，64pt 足夠）。
     static let minSelectionEdgePt: CGFloat = 64
+    /// `.finishing` 的逃生繩：`stopAndFinish()` 鏈（`finishWriting` 不回呼／`stopCapture` 卡住
+    /// SCK）萬一卡死，這是唯一救得回來的看門狗（review fix round 1 Important 1——`.finishing`
+    /// 原本是狀態機裡唯一沒有看門狗的狀態，卡住就永久卡死：`cancelIfActive` 被 guard 擋死、
+    /// 再按快鍵沒反應，只能重啟 app）。30 秒遠大於正常 `finishWriting` 所需時間。
+    static let finishingWatchdogSeconds: Double = 30
 
     private let overlay = ScrollSelectionOverlayController()   // 選區框選直接重用（公開、無滾動耦合）
     private let hud = RecordHUDController()
@@ -91,7 +96,10 @@ public final class RecordSession {
         // 點擊圈：**建 filter 前先 prepare**（exceptingWindows 是靜態快照——設計文件 §3）。
         var ringNumber: Int?
         if AppSettings.recordClickRing, AppSettings.recordShowsCursor {
-            ringNumber = clickRing.prepare()
+            // near: 選區中心——必須落在實際螢幕內，見 ClickRingOverlay.prepare(near:) 的註解
+            // （review 判定為真缺陷：螢幕外＋alpha 0 的視窗可能不被 SCShareableContent 列到）。
+            ringNumber = clickRing.prepare(near: CGPoint(x: overlay.selectionGlobal.midX,
+                                                          y: overlay.selectionGlobal.midY))
             clickRing.startMonitoring()
         }
         // 可能遲到或不只一次——guard state == .recording 讓重覆/遲到呼叫變 no-op（契約要求冪等）。
@@ -110,6 +118,11 @@ public final class RecordSession {
                 // state != .recording 代表 await 期間已經被 cancel()／stopRecording() 处理過
                 // （各自的路徑已經 teardown＋發過 onFinished，不能在這裡重發第二次）。
                 if self.state == .recording {
+                    // 最可能撞到的實機失敗是 TCC 拒絕（使用者第一次用）——此時框與 HUD 會憑空
+                    // 消失，但 NSLog 在未公證自簽 app 撈不到（CLAUDE.md 診斷原則），使用者拿不到
+                    // 任何回饋。至少給一聲 beep（TCC 權限 alert 的完整流程屬 AppDelegate 層，
+                    // 不在這裡做）。
+                    NSSound.beep()
                     self.teardown()
                     self.onFinished?(nil, screen.backingScaleFactor)
                     NSLog("anypaint: 動畫截圖 stream 啟動失敗 %@", String(describing: error))
@@ -146,9 +159,11 @@ public final class RecordSession {
     private func stopRecording() {
         guard state == .recording else { return }
         state = .finishing
-        watchdog?.cancel(); watchdog = nil
         clock?.invalidate(); clock = nil
         clickRing.teardown()
+        // 不是單純取消看門狗——重新 arm 一顆 finishing 專用的（見 armWatchdog 的 .finishing
+        // 分支與 Self.finishingWatchdogSeconds 的註解）。
+        armWatchdog(seconds: Self.finishingWatchdogSeconds)
         let scale = screen?.backingScaleFactor ?? 2
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -182,8 +197,22 @@ public final class RecordSession {
         guard seconds > 0 else { watchdog = nil; return }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            if self.state == .recording { self.stopRecording() }    // 錄製逾時＝收檔保留
-            else { self.cancel() }                                  // selecting/armed 逾時＝取消
+            switch self.state {
+            case .recording:
+                self.stopRecording()             // 錄製逾時＝收檔保留
+            case .finishing:
+                // stopAndFinish() 卡死時的最後防線（review fix round 1 Important 1）。
+                // teardown() 把 state 設回 idle：稍後 stopRecording() 裡那個 Task 若真的等到
+                // stopAndFinish() 回來（成功或失敗），各自的 `guard self.state == .finishing`
+                // 會擋下，不會二次觸發 onFinished——與現有守衛完全相容，不必額外加旗標。
+                // 若母帶其實已經寫完只是回呼卡住，半成品/完成檔留在暫存目錄，交給下次啟動的
+                // `RecordOutputService.cleanupStaleTempFiles()` 掃掉，這裡不等也不主動刪
+                // （沒有安全的方式在不確定 writer 是否還在寫的情況下去動那個檔案）。
+                self.teardown()
+                self.onFinished?(nil, self.screen?.backingScaleFactor ?? 2)
+            default:
+                self.cancel()                    // selecting/armed 逾時＝取消
+            }
         }
         watchdog = work
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)

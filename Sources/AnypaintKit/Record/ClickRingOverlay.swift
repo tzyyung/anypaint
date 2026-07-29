@@ -11,8 +11,15 @@ public final class ClickRingOverlay: NSObject {
 
     /// 建視窗並以 alpha 0 orderFront（**視窗必須存在且 on-screen，SCShareableContent 才列得到、
     /// filter 的 exceptingWindows 靜態快照才收得進**——設計文件 §3）。回傳 windowNumber。
-    public func prepare() -> Int {
-        let p = NSPanel(contentRect: NSRect(x: -100, y: -100, width: Self.size, height: Self.size),
+    ///
+    /// - Parameter point: 初始位置（全域座標、點），**必須落在某個實際螢幕內**——舊版固定擺
+    ///   `(-100, -100)`（螢幕外）被 review 判定為真缺陷：`RecordFrameSource` 用
+    ///   `onScreenWindowsOnly: true` 列舉視窗，完全在畫面外＋alpha 0 的視窗很可能列不到，
+    ///   `exceptingWindows` 白名單就會放空，點擊圈視窗隨整個 app 一起被排除、功能靜默失效。
+    ///   呼叫端（`RecordSession`）傳選區中心；alpha 0 保證使用者看不到這次借位。
+    public func prepare(near point: CGPoint) -> Int {
+        let origin = CGPoint(x: point.x - Self.size / 2, y: point.y - Self.size / 2)
+        let p = NSPanel(contentRect: NSRect(origin: origin, size: NSSize(width: Self.size, height: Self.size)),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.level = .screenSaver
         p.isOpaque = false
