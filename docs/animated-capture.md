@@ -17,14 +17,17 @@
 `⌘⇧R`（設定可改）→ 拉框圈住要錄的區域 → HUD 待命（可設錄製秒數，空白＝不限）→
 按「開始」→ 錄製（HUD 顯示計時／倒數）→ 停止（手動鈕／倒數到／看門狗／stream error 共用
 同一條路徑）→ 預覽視窗（AVPlayerView 循環播放）→〔存 GIF〕〔存 MP4〕〔丟棄〕。
+「丟棄」與紅鈕關閉共用同一個 `close()`；GIF 匯出中關閉會先跳警示，需要選「強制關閉」才會
+真正關窗並刪除母帶（見 §6 的逃生口說明）。
 
 定位是「會動的截圖」，不是螢幕錄影機：不錄音訊、不能暫停續錄、不做 webcam。
 
 | 行為 | 說明 |
 |---|---|
-| 取消三保險 | HUD 取消鈕 ＋ 再按同一顆全域快鍵（Carbon，不受 app 前景狀態影響）＋ stream error 兜底 |
+| 逃生路徑：取消（丟棄） | Esc（僅 selecting/armed）、HUD 取消鈕、armed 中再按同一顆全域快鍵（Carbon，不受 app 前景狀態影響） |
+| 逃生路徑：停止（收檔保留） | recording 中再按同一顆全域快鍵、HUD 停止鈕、倒數到、看門狗、stream error 兜底——五者共用同一條停止程序（§4） |
 | 不限時看門狗 | 10 分鐘自動走正常停止路徑（防忘記停吃光磁碟） |
-| 錄製中顯示游標／點擊高亮圈 | 設定可各自關；點擊圈設定關閉時**連動**要求游標也開（Kap 的 UX 細節，設定 → 控制/截圖分頁） |
+| 錄製中顯示游標／點擊高亮圈 | 設定可各自關；**游標關閉時點擊圈勾選框連動停用**（`CaptureSettingsViewController.updateClickRingEnabledState`）——點擊圈要開，游標必須先開（Kap 的 UX 細節，設定 → 控制/截圖分頁） |
 | 最小選區 | 64 **點**（`RecordSession.minSelectionEdgePt`；錄製無匹配需求，門檻遠低於滾動截圖的 320px） |
 | 匯出 MP4 | 搬移母帶（copy，非 move——之後可能還要匯 GIF）；零轉檔，母帶本身即最終品質 |
 | 匯出 GIF | 12fps、1x（點）尺寸，背景 queue 解碼，預覽窗顯示進度 |
@@ -154,9 +157,12 @@ RecordSelfCheck.swift 內建自檢工具（見 §7），不參與正式流程
   舊版固定擺 `(-100, -100)`（螢幕外）被 review 判定為真缺陷——`onScreenWindowsOnly: false`
   雖然讓 alpha 0 的視窗仍可能被列到，但螢幕外＋alpha 0 疊加起來風險更高，索性直接把視窗擺在
   選區中心、只靠 alpha 0 保證使用者看不到這次借位。
-- 視覺（Screenity 參數）：按下瞬間在游標處顯示 40pt 圈、3pt 系統 accent 描邊，疊 1pt 深色
-  外描邊保對比（CLAUDE.md「疊色描邊」教訓——單色描邊在同色背景會消失）；按住拖曳跟隨游標；
-  放開後 350ms 縮小＋淡出。
+- 視覺（Screenity 參數）：按下瞬間在游標處顯示 40pt 圈、**寫死 `NSColor.systemOrange`**
+  （不是系統 accent 色）3pt 實色描邊為主視覺；疊一層同心、半徑微放大（+0.5pt）、4pt
+  半透明黑（35% alpha）描邊在下——半徑與線寬都比橘圈大，因此會在橘圈外緣每側露出約 0.5pt
+  深色輪廓保對比（CLAUDE.md「疊色描邊」教訓的實作方式：這裡用「同心微放大」達成同樣的
+  「任一背景都留得下對比」效果，不是該教訓描述的「同寬黑白交錯」手法）；按住拖曳跟隨游標；
+  放開後 350ms **淡出**（`ClickRingView.fadeOut` 只動 `alphaValue`，不縮放尺寸）。
 
 ---
 
@@ -202,6 +208,30 @@ RecordSelfCheck.swift 內建自檢工具（見 §7），不參與正式流程
   這是本專案「簡單、零依賴」優先於「畫質最優」的產品裁決，寫在這裡讓日後不會有人
   想「順手」引入 gifski 又踩到授權問題。
 
+### 預覽視窗：匯出中關閉的強制關閉逃生口
+
+`RecordPreviewWindowController.present(...)` 本身是 **async**：視窗尺寸公式需要母帶的實際
+像素尺寸，讀 `naturalSize` 只有 async API（載入完才建窗，不是「先開預設尺寸再 resize」——
+避免使用者看到視窗尺寸跳動一次）。
+
+`RecordPreviewWindow.close()`（`RecordPreviewWindow.swift:156-192`）在 GIF 匯出中被呼叫
+（紅鈕或「丟棄」）時，`GifExporter` 沒有 cancel/timeout，背景 `Task.detached` 可能卡死
+（例如母帶損毀導致 reader 卡住），若只「擋下關閉、要求等待」而不給逃生口，使用者除了強制
+砍掉整個 app 別無他法。因此提供兩顆鈕：「繼續等待」（**預設鈕**，Enter 觸發，避免誤觸）與
+「強制關閉」。
+
+強制關閉的安全性（三點都已個別確認，不是假設）：
+1. 被拋下的 `GifExporter.export` 背景 Task 會繼續跑到完成或失敗——它的 completion closure
+   用 `[weak self]`，視窗這時已 forget／可能已釋放，`self` 為 nil 時直接 no-op，不會 crash。
+2. `movieURL` 在強制關閉時會被 `removeItem` 刪掉，但 `AVAssetReader` 對它的檔案描述符已經
+   開啟——APFS／POSIX 的 unlink 語意是「目錄項目消失，已開啟的 fd 仍可讀到刪除前的內容」，
+   reader 不會因此中途壞掉；最壞頂多是提前 EOF 或 `reader.status` 轉 `.failed` →
+   `GifExporter` 走 `completion(.failure(...))`，一樣是上一點的 no-op。
+3. 暫存 GIF（`saveGifAction` 裡的 `tmpGif`）不會變孤兒垃圾：它是 `movieURL`
+   （`RecordOutputService.tempMovieURL()` 產出，檔名前綴固定 `anypaint-record-`）換副檔名
+   而來，落在同一個暫存目錄，app 下次啟動時 `RecordOutputService.cleanupStaleTempFiles()`
+   照前綴掃描會一併清掉。
+
 ---
 
 ## 7. 驗證
@@ -227,8 +257,8 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
 
    啟動：`open -n -a <bundle> --args --record-selfcheck`（**必須 `open -n`**——既有實例會吃掉
    `--args`，症狀是「啟動了卻不寫 log」，同滾動截圖既有教訓）。結果寫
-   `/tmp/anypaint-record-selfcheck.log`，跑完自動 exit。首跑全過：時長 6.00s、71 格、
-   寬 360（對應 6s×12fps）。
+   `/tmp/anypaint-record-selfcheck.log`，跑完自動 exit。首跑全過：時長 6.00s、
+   格數＝`Int(實測時長×12)`＝71（粗估 72±2 一併過關）、寬 360（對應 6s×12fps）。
 
    與正式流程唯一差異：`excludeSelf: false`（自檢要拍的正是自家測試視窗）。其餘（filter／
    sourceRect 座標鏈／queueDepth／WriterBox 補尾格／GifExporter 取樣）完全相同。
@@ -236,6 +266,11 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
 合成測試通過 ≠ 實機可用（CLAUDE.md）：`RecordFrameSource` 的收尾早退紀律、`WriterBox`
 的 `isTerminal` 冪等化、`reader.status` 檢查，全部是純邏輯 selftest 測不到、只在把整條管線
 接起來跑（app 內自檢或實機手動操作）才會現形的坑。
+
+**尚未自動化、仍在手動清單上**：點擊圈是否真的入鏡（HUD/預覽視窗不入鏡有 app 整體排除
+兜底，點擊圈的 `exceptingWindows` 白名單只有靜態推理＋windowID 比對邏輯的正確性，沒有
+自動化驗證會去真的解碼母帶確認圈有沒有拍進去）——`RecordSelfCheck` 目前不模擬滑鼠點擊，
+這條仍要實機手動驗證。
 
 ---
 
@@ -255,3 +290,4 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
 | 跨執行緒呼叫 `reader.cancelReading()` | Gifski.app 遷移警告：觸發 MediaToolbox `EXC_BAD_ACCESS`；本專案靠「全程單一 `Task.detached`、await 只是暫停點」規避，不是靠 cooperative check | §6 |
 | GifExporter 遇到 `copyNextSampleBuffer()` 回 nil 就直接當成讀完 | 母帶中途損毀（reader 轉 `.failed`）會被誤判成「畫面靜止」，靜默補滿剩餘格數、`Finalize` 照樣成功——必須顯式檢查 `reader.status == .failed` | §6 |
 | vendor gifski 或連結 ffmpeg 換更好的 GIF 畫質 | gifski 是 AGPL，跟零外部依賴、離線 native app 的定位不合；ffmpeg 需要外部二進位/動態連結，同樣違反定位。畫質上限是自覺取捨，不是待修的 bug | §6 |
+| 拿掉預覽視窗匯出中「強制關閉」逃生口，只擋下關閉要求等待 | `GifExporter` 沒有 cancel/timeout，背景 Task 卡死時（例如母帶損毀）使用者除了強制砍掉整個 app 別無他法；三點安全性已個別確認才敢給這個逃生口，不是隨手加的鈕 | §6 |
