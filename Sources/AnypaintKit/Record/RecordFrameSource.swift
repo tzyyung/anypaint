@@ -33,12 +33,16 @@ final class WriterBox: @unchecked Sendable {
     /// ObjC exception（Swift 攔不到，直接 crash）。這面旗子讓兩次呼叫中只有先到的那次生效。
     private var isTerminal = false
 
-    init(outputURL: URL, pixelWidth: Int, pixelHeight: Int) throws {
+    /// - Parameter useHEVC: false＝H.264（預設）、true＝HEVC。檔案仍是 .mp4（hevc-in-mp4 合法）。
+    ///   位元率因子隨 codec 切換：H.264 沿用 Azayaka 原公式 0.9；HEVC 用 0.9×0.5＝0.45
+    ///   （同款 Azayaka 公式的 hevc 因子，設計文件 §1.8）。
+    init(outputURL: URL, pixelWidth: Int, pixelHeight: Int, useHEVC: Bool) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        // Azayaka 位元率公式 + QuickRecorder 20 萬下限；30fps、H.264、Rec.709
-        let bitrate = max(200_000, Int(Double(pixelWidth * pixelHeight) * (30.0 / 8.0) * 0.9))
+        // Azayaka 位元率公式 + QuickRecorder 20 萬下限；30fps、Rec.709
+        let bitrateFactor = useHEVC ? 0.45 : 0.9
+        let bitrate = max(200_000, Int(Double(pixelWidth * pixelHeight) * (30.0 / 8.0) * bitrateFactor))
         let settings: [String: Any] = [
-            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoCodecKey: useHEVC ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
             AVVideoWidthKey: pixelWidth,
             AVVideoHeightKey: pixelHeight,
             AVVideoCompressionPropertiesKey: [
@@ -165,13 +169,17 @@ public final class RecordFrameSource: NSObject {
     ///     選區框／HUD／點擊圈以外的自家視窗拍進母帶）。**僅內建自檢模式**傳 false——
     ///     自檢要拍的正是自家那個會動的測試視窗，其餘管線與正式流程完全相同
     ///     （比照 `ScrollFrameSource.start` 同名參數）。
+    ///   - useHEVC: 傳給 `WriterBox` 的 codec 選擇。預設 false（H.264）——呼叫端（`RecordSession`）
+    ///     顯式傳 `AppSettings.recordUseHEVC`；`RecordSelfCheck` 顯式傳 false（判準確定性，
+    ///     不吃設定，設計文件 §1.8）。**刻意不在這裡讀 `AppSettings`**：`WriterBox` 與這個類別
+    ///     都不該認識全域設定，所有選項由呼叫端決定並顯式傳入。
     ///
     /// 契約：`start()` 拋錯（TCC 拒絕、`CaptureError.noDisplays` 都是實機常見狀況）之後，
     /// 物件已經自己清乾淨（`self.box`／`self.stream`／`self.outputURL` 全部回到 nil）——
     /// 呼叫端可以直接重試，不需要先呼叫 `abort()` 才能再 `start()`。
     public func start(selectionGlobal: CGRect, screen: NSScreen,
                       showsCursor: Bool, ringWindowNumber: Int?, outputURL: URL,
-                      excludeSelf: Bool = true) async throws {
+                      excludeSelf: Bool = true, useHEVC: Bool = false) async throws {
         // 防重入：呼叫端若在前一段 session 收尾（stopAndFinish/abort）完成前又呼叫 start()，
         // 絕不能無條件覆寫 stream/box——舊 stream 會變孤兒、舊 WriterBox 永久扣住一張
         // IOSurface（queueDepth 張裡的一張）不放。stopAndFinish/abort 都會在真正收尾前把
@@ -228,7 +236,8 @@ public final class RecordFrameSource: NSObject {
         config.colorSpaceName = CGColorSpace.sRGB
 
         let boxLocal = try WriterBox(outputURL: outputURL,
-                                     pixelWidth: geo.pixelWidth, pixelHeight: geo.pixelHeight)
+                                     pixelWidth: geo.pixelWidth, pixelHeight: geo.pixelHeight,
+                                     useHEVC: useHEVC)
         self.box = boxLocal
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         do {

@@ -7,6 +7,8 @@ final class CaptureSettingsViewController: NSViewController {
     private let scrollMaxHeightPopup = NSPopUpButton()
     private let recordCursorCheckbox = NSButton(checkboxWithTitle: "錄製時顯示滑鼠游標", target: nil, action: nil)
     private let recordClickRingCheckbox = NSButton(checkboxWithTitle: "點擊時顯示高亮圈", target: nil, action: nil)
+    private let recordGifFpsPopup = NSPopUpButton()
+    private let recordUseHEVCCheckbox = NSButton(checkboxWithTitle: "MP4 使用 HEVC（檔案較小，舊裝置相容性較差）", target: nil, action: nil)
 
     override func loadView() {
         let watchdogHint = NSTextField(labelWithString:
@@ -48,11 +50,46 @@ final class CaptureSettingsViewController: NSViewController {
         recordClickRingCheckbox.action = #selector(recordClickRingToggled)
         updateClickRingEnabledState()   // 初始態也要連動，不只是之後切換時
 
-        let stack = NSStackView(views: [heading, recordCursorCheckbox, recordClickRingCheckbox])
+        recordUseHEVCCheckbox.state = AppSettings.recordUseHEVC ? .on : .off
+        recordUseHEVCCheckbox.target = self
+        recordUseHEVCCheckbox.action = #selector(recordUseHEVCToggled)
+
+        let stack = NSStackView(views: [heading, recordCursorCheckbox, recordClickRingCheckbox,
+                                        buildRecordGifFpsRow(), recordUseHEVCCheckbox])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         return stack
+    }
+
+    /// GIF 編碼幀率（沿用上方 watchdog popup 的建構/選中/action 模式，設計文件 §1.2）。
+    private func buildRecordGifFpsRow() -> NSView {
+        let label = NSTextField(labelWithString: "GIF 幀率：")
+        label.alignment = .right
+        label.setContentHuggingPriority(.required, for: .horizontal)
+        label.widthAnchor.constraint(equalToConstant: 92).isActive = true   // 92：對齊上方幾列的標籤寬
+
+        for fps in AppSettings.recordGifFpsOptions {
+            recordGifFpsPopup.addItem(withTitle: "\(fps) fps")
+            recordGifFpsPopup.lastItem?.tag = fps
+        }
+        let current = AppSettings.recordGifFps
+        _ = recordGifFpsPopup.selectItem(withTag: current)   // recordGifFps 的 getter 已正規化過，必落在選項內
+        recordGifFpsPopup.target = self
+        recordGifFpsPopup.action = #selector(recordGifFpsChanged)
+
+        let row = NSStackView(views: [label, recordGifFpsPopup])
+        row.orientation = .horizontal
+        row.spacing = 8
+        return row
+    }
+
+    @objc private func recordGifFpsChanged() {
+        AppSettings.recordGifFps = recordGifFpsPopup.selectedTag()
+    }
+
+    @objc private func recordUseHEVCToggled() {
+        AppSettings.recordUseHEVC = (recordUseHEVCCheckbox.state == .on)
     }
 
     @objc private func recordCursorToggled() {
