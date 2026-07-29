@@ -23,18 +23,23 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let scrollSession = ScrollCaptureSession()
     private var previewController: ScrollPreviewWindowController?
 
+    private let recordOutput = RecordOutputService()
+    private lazy var recordSession = RecordSession(output: recordOutput)
+    private var recordPreviewController: RecordPreviewWindowController?
+
     /// 框選 OCR 的結果窗（lazy、重用）與辨識中旗標（不疊請求，比照 PinWindowController）。
     private var ocrController: OCRResultWindowController?
     private var ocrInFlight = false
 
     private var settingsWindowController: SettingsWindowController?
 
-    /// 三入口互斥（spec §9.1）：任一 capture mode active 時其他入口 guard-return。
+    /// 四入口互斥（spec §9.1）：任一 capture mode active 時其他入口 guard-return。
     /// preview 不佔 mode（session 已結束，開著可以再截）。
-    private enum ActiveMode { case none, freeze, scroll }
+    private enum ActiveMode { case none, freeze, scroll, record }
     private var activeMode: ActiveMode {
         if overlayController.isActive || captureInFlight { return .freeze }
         if scrollSession.isActive { return .scroll }
+        if recordSession.isActive { return .record }
         return .none
     }
 
@@ -54,10 +59,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             check.run()
             return
         }
+        // app 啟動時清一次殘留暫存母帶（上次 crash/強退遺留）。只能在真正的啟動路徑呼叫一次：
+        // 若放進上面 selfcheck 分支或任何其他路徑，`open -n` 開的第二個實例可能在另一個實例
+        // 錄製中途把它的暫存母帶當「殘留」刪掉。
+        recordOutput.cleanupStaleTempFiles()
+
         // 選單列動作
         menuBar.onCapture = { [weak self] in self?.beginCapture() }
         menuBar.onPin = { [weak self] in self?.pinFromClipboard() }
         menuBar.onScrollCapture = { [weak self] in self?.beginScrollCapture() }
+        menuBar.onAnimatedCapture = { [weak self] in self?.beginAnimatedCapture() }
         menuBar.onCloseAllPins = { [weak self] in self?.pinController.closeAll() }
         menuBar.onOpenSettings = { [weak self] in self?.openSettings() }
 
@@ -69,12 +80,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         KeyboardShortcuts.onKeyDown(for: .capture) { [weak self] in self?.beginCapture() }
         KeyboardShortcuts.onKeyDown(for: .pin) { [weak self] in self?.pinFromClipboard() }
         KeyboardShortcuts.onKeyDown(for: .scrollCapture) { [weak self] in self?.beginScrollCapture() }
+        KeyboardShortcuts.onKeyDown(for: .animatedCapture) { [weak self] in self?.beginAnimatedCapture() }
     }
 
     // MARK: - 截圖：凍結 → 框選 → 複製到剪貼簿
 
     private func beginCapture() {
         guard !scrollSession.isActive else { return }   // 滾動中不疊凍結（spec §9.1）
+        guard !recordSession.isActive else { return }   // 動畫截圖中不疊凍結（spec §9.1）
         // 已在框選中 → 再按一次截圖快鍵視為「取消/逃生」。
         if overlayController.isActive {
             overlayController.cancelIfActive()
@@ -187,6 +200,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func pinFromClipboard() {
         guard !scrollSession.isActive else { return }   // 滾動中不疊貼圖（spec §9.1）
+        guard !recordSession.isActive else { return }   // 動畫截圖中不疊貼圖（spec §9.1）
         guard let image = pinboard.imageFromPasteboard() else {
             NSSound.beep()
             return
@@ -200,6 +214,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         switch activeMode {
         case .scroll: scrollSession.cancelIfActive(); return   // 再按 = 取消（保證退出，spec §6）
         case .freeze: return                                    // 凍結框選中 → 不疊加
+        case .record: return                                    // 動畫截圖中 → 不疊加（spec §9.1）
         case .none: break
         }
         KeyboardShortcuts.disable(.capture, .pin)               // 滾動中擋另外兩入口（spec §9.1）
@@ -222,6 +237,41 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         guard scrollSession.isActive else {
             KeyboardShortcuts.enable(.capture, .pin)
             menuBar.setScrollCapturing(false)
+            return
+        }
+    }
+
+    // MARK: - 動畫截圖：拉框 → 錄製 → 預覽
+
+    private func beginAnimatedCapture() {
+        switch activeMode {
+        case .record: recordSession.cancelIfActive(); return   // 再按＝armed 取消／recording 停止收檔
+        case .freeze, .scroll: return                            // 凍結／滾動中 → 不疊加
+        case .none: break
+        }
+        KeyboardShortcuts.disable(.capture, .pin, .scrollCapture)   // 錄製中擋其他三入口（spec §9.1）
+        menuBar.setRecording(true)
+        // %title% 於按下快鍵當下凍結（spec，同 beginScrollCapture 理由）。
+        let vars = CaptureVars.makeVars(title: CaptureVars.currentFrontTitle())
+        recordSession.onFinished = { [weak self] url, captureScale in
+            guard let self else { return }
+            KeyboardShortcuts.enable(.capture, .pin, .scrollCapture)   // 恢復點集中在單一出口
+            self.menuBar.setRecording(false)
+            guard let url else { return }                              // 取消或失敗 → 靜默（同 scroll 慣例）
+            if self.recordPreviewController == nil {
+                self.recordPreviewController = RecordPreviewWindowController(output: self.recordOutput)
+            }
+            Task { @MainActor in
+                // present(movieURL:vars:captureScale:) 是 async（需先讀母帶 naturalSize）。
+                await self.recordPreviewController?.present(movieURL: url, vars: vars, captureScale: captureScale)
+            }
+        }
+        recordSession.begin()
+        // begin() 在無主螢幕時會靜默 no-op（onFinished 永不 fire）——
+        // 若沒真的進場就立刻把剛 disable 的快鍵/選單恢復，否則其餘三入口永久失效需重啟。
+        guard recordSession.isActive else {
+            KeyboardShortcuts.enable(.capture, .pin, .scrollCapture)
+            menuBar.setRecording(false)
             return
         }
     }

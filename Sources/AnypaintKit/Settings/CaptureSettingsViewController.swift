@@ -5,6 +5,8 @@ final class CaptureSettingsViewController: NSViewController {
     private let watchdogPopup = NSPopUpButton()
     private let scrollWatchdogPopup = NSPopUpButton()
     private let scrollMaxHeightPopup = NSPopUpButton()
+    private let recordCursorCheckbox = NSButton(checkboxWithTitle: "錄製時顯示滑鼠游標", target: nil, action: nil)
+    private let recordClickRingCheckbox = NSButton(checkboxWithTitle: "點擊時顯示高亮圈", target: nil, action: nil)
 
     override func loadView() {
         let watchdogHint = NSTextField(labelWithString:
@@ -24,11 +26,48 @@ final class CaptureSettingsViewController: NSViewController {
         scrollHint.textColor = .secondaryLabelColor
 
         let stack = NSStackView(views: [buildWatchdogRow(), watchdogHint,
-                                        buildScrollWatchdogRow(), buildScrollMaxHeightRow(), scrollHint])
+                                        buildScrollWatchdogRow(), buildScrollMaxHeightRow(), scrollHint,
+                                        buildRecordSection()])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
         view = settingsPageView(wrapping: stack)
+    }
+
+    /// 動畫截圖：游標／點擊圈兩個開關（Kap UX 連動，設計文件 §7）。
+    private func buildRecordSection() -> NSView {
+        let heading = NSTextField(labelWithString: "動畫截圖")
+        heading.font = .systemFont(ofSize: 12, weight: .semibold)
+
+        recordCursorCheckbox.state = AppSettings.recordShowsCursor ? .on : .off
+        recordCursorCheckbox.target = self
+        recordCursorCheckbox.action = #selector(recordCursorToggled)
+
+        recordClickRingCheckbox.state = AppSettings.recordClickRing ? .on : .off
+        recordClickRingCheckbox.target = self
+        recordClickRingCheckbox.action = #selector(recordClickRingToggled)
+        updateClickRingEnabledState()   // 初始態也要連動，不只是之後切換時
+
+        let stack = NSStackView(views: [heading, recordCursorCheckbox, recordClickRingCheckbox])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        return stack
+    }
+
+    @objc private func recordCursorToggled() {
+        AppSettings.recordShowsCursor = (recordCursorCheckbox.state == .on)
+        updateClickRingEnabledState()
+    }
+
+    @objc private func recordClickRingToggled() {
+        AppSettings.recordClickRing = (recordClickRingCheckbox.state == .on)
+    }
+
+    /// 游標關閉時點擊圈跟著沒有意義（SCK 沒游標可疊圈）——只停用控件、不動存值，
+    /// 游標重新打開時原本的設定值原樣恢復（Kap 的 UX 慣例）。
+    private func updateClickRingEnabledState() {
+        recordClickRingCheckbox.isEnabled = AppSettings.recordShowsCursor
     }
 
     private func buildWatchdogRow() -> NSView {

@@ -6,6 +6,7 @@ import KeyboardShortcuts
 final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private var scrollCaptureItem: NSMenuItem?
+    private var animatedCaptureItem: NSMenuItem?
 
     /// 使用者點「截圖」時呼叫。
     var onCapture: (() -> Void)?
@@ -13,6 +14,8 @@ final class MenuBarController: NSObject {
     var onPin: (() -> Void)?
     /// 使用者點「滾動截圖」（或其取消態）時呼叫。
     var onScrollCapture: (() -> Void)?
+    /// 使用者點「動畫截圖」（或其取消/停止態）時呼叫。
+    var onAnimatedCapture: (() -> Void)?
     /// 關閉所有貼圖。
     var onCloseAllPins: (() -> Void)?
     /// 開啟設定頁。
@@ -20,7 +23,7 @@ final class MenuBarController: NSObject {
 
     /// 所有全域快鍵——選單開啟時整批 disable（KeyboardShortcuts caveat）。
     /// 共用常數杜絕「加新鍵漏更新這裡」。
-    static let allShortcuts: [KeyboardShortcuts.Name] = [.capture, .pin, .scrollCapture]
+    static let allShortcuts: [KeyboardShortcuts.Name] = [.capture, .pin, .scrollCapture, .animatedCapture]
 
     override init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -40,6 +43,7 @@ final class MenuBarController: NSObject {
         addItem(to: menu, title: "截圖", action: #selector(captureAction), shortcut: .capture)
         addItem(to: menu, title: "貼圖", action: #selector(pinAction), shortcut: .pin)
         scrollCaptureItem = addItem(to: menu, title: "滾動截圖", action: #selector(scrollCaptureAction), shortcut: .scrollCapture)
+        animatedCaptureItem = addItem(to: menu, title: "動畫截圖", action: #selector(animatedCaptureAction), shortcut: .animatedCapture)
         menu.addItem(.separator())
         addItem(to: menu, title: "關閉所有貼圖", action: #selector(closeAllPinsAction))
         menu.addItem(.separator())
@@ -66,9 +70,15 @@ final class MenuBarController: NSObject {
         scrollCaptureItem?.title = capturing ? "取消滾動截圖" : "滾動截圖"
     }
 
+    /// 動畫截圖 recording 中動態改選單項標題（同 setScrollCapturing 慣例）。
+    func setRecording(_ recording: Bool) {
+        animatedCaptureItem?.title = recording ? "停止動畫截圖" : "動畫截圖"
+    }
+
     @objc private func captureAction() { onCapture?() }
     @objc private func pinAction() { onPin?() }
     @objc private func scrollCaptureAction() { onScrollCapture?() }
+    @objc private func animatedCaptureAction() { onAnimatedCapture?() }
     @objc private func closeAllPinsAction() { onCloseAllPins?() }
     @objc private func openSettingsAction() { onOpenSettings?() }
     @objc private func quitAction() { NSApp.terminate(nil) }

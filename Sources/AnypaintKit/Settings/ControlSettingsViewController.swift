@@ -52,6 +52,7 @@ final class ControlSettingsViewController: NSViewController {
         let stack = NSStackView(views: [shortcutRow(title: "截圖：", name: .capture),
                                         shortcutRow(title: "貼圖：", name: .pin),
                                         shortcutRow(title: "滾動截圖：", name: .scrollCapture),
+                                        shortcutRow(title: "動畫截圖：", name: .animatedCapture),
                                         shortcutHint])
         stack.orientation = .vertical
         stack.alignment = .leading
