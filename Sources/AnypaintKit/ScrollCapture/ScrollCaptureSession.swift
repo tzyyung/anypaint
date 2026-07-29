@@ -87,7 +87,9 @@ public final class ScrollCaptureSession {
     /// 滾動截圖要開在**滑鼠所在的螢幕**——見 `ScrollCoords.screenIndex(containing:screenFrames:)`
     /// 的說明（`NSScreen.main` 對 accessory app 不可靠，副螢幕會落錯或回 nil）。
     /// 退路依序是：滑鼠所在 → `NSScreen.main` → 第一個螢幕。
-    static func screenUnderMouse() -> NSScreen? {
+    /// public：動畫截圖的 `RecordSession` 共用同一套「滑鼠所在螢幕」判定（見該檔案），
+    /// 不重複實作一份 NSScreen.main 退路邏輯。
+    public static func screenUnderMouse() -> NSScreen? {
         let screens = NSScreen.screens
         if let i = ScrollCoords.screenIndex(containing: NSEvent.mouseLocation,
                                            screenFrames: screens.map(\.frame)) {
