@@ -2,50 +2,22 @@ import AppKit
 import AVKit
 import UniformTypeIdentifiers
 
-/// 動畫截圖預覽：AVPlayerView 循環播放母帶＋〔存 GIF〕〔存 APNG〕〔存 MP4〕〔存 WebP，僅偵測到
-/// img2webp 時〕〔拍快照〕〔開啟位置〕〔丟棄〕。
+/// 動畫截圖預覽：AVPlayerView 循環播放母帶。按鈕列分兩群，中間彈性空白撐開（使用者核可的
+/// 佈局）：左＝編輯〔剪裁〕〔還原剪裁〕〔拍快照〕，右＝輸出〔存檔▾：存 GIF／存 APNG／存 MP4／
+/// 存 WebP（僅偵測到 img2webp 時在選單多這項）〕〔開啟位置〕〔丟棄〕。
 /// 視窗骨架/持有慣例對照 `ScrollPreviewWindow`（該檔 5-45 行的骨架、174-216 行的
 /// controller 持有／forget／present 慣例）——這裡不重複解釋，只記差異。
-/// 剪裁完成回呼實機讀值失敗排查用的診斷（team-lead 交辦，暫時性：拿到證據修完問題後拔掉，
-/// 或收斂成 `RecordSessionLog` 那種常駐精簡診斷）。獨立檔案、獨立於 `RecordSessionLog`——
-/// 這輪只想專注看 trim 完成回呼那一刻的狀態，不跟其他既有診斷混在一起看。
-/// 寫法同 `ScrollSessionLog`/`RecordSessionLog` 的 append 慣例：找不到既有檔就新建，找得到就
-/// seek 到底 append，非熱路徑（只在使用者按「剪裁」時觸發）、無效能影響。
-private enum TrimDebugLog {
-    static let path = "/tmp/anypaint-trim-debug.log"
-    static func add(_ line: String) {
-        guard let data = "\(Date()) \(line)\n".data(using: .utf8) else { return }
-        if let h = FileHandle(forWritingAtPath: path) {
-            h.seekToEndOfFile()
-            h.write(data)
-            h.closeFile()
-        } else {
-            try? data.write(to: URL(fileURLWithPath: path))
-        }
-    }
-
-    /// item 的三個關鍵值（指標識別／duration／reverse・forwardPlaybackEndTime 含 isValid）一次印全。
-    static func describe(_ item: AVPlayerItem?, label: String) -> String {
-        guard let item else { return "\(label)=nil" }
-        let rev = item.reversePlaybackEndTime
-        let fwd = item.forwardPlaybackEndTime
-        return "\(label)=\(ObjectIdentifier(item)) duration=\(item.duration.seconds) " +
-               "reverse=\(rev.seconds)(valid=\(rev.isValid)) forward=\(fwd.seconds)(valid=\(fwd.isValid))"
-    }
-}
-
 final class RecordPreviewWindow: NSWindow {
-    /// 內容區最小尺寸：鈕數量隨環境變（有沒有偵測到 img2webp）——量**最多鈕**的情況（設計文件
-    /// §1.7b）。實測（同 ScrollPreviewWindow.minContentWidth 的量法——NSButton.sizeToFit() 量
-    /// 真實寬度，不是憑印象估）：
-    /// - 7 顆鈕（無 img2webp）：剪裁/存GIF/存APNG/存MP4/拍快照/開啟位置/丟棄，依序寬
-    ///   50/61/77/68/63/76/50pt，button row 本身需要 ~517pt。
-    /// - 8 顆鈕（有 img2webp，多一顆「存 WebP」76pt）：依序寬
-    ///   50/61/77/68/76/63/76/50pt，加 stack spacing 7×8pt 與左右邊距 12×2，button row 本身
-    ///   需要 601pt——這是較大的那個情況，下限跟著它調。
-    /// 把下限調到 624，留 ~23pt 安全邊際（同等級於先前 480→540 的 23pt 裕度）；7 顆鈕情境下
-    /// 這個下限比它本身需要的還寬，不影響顯示（只是空按鈕列右側多一點留白）。
-    static let minContentWidth: CGFloat = 624
+    /// 內容區最小尺寸：實測（同 ScrollPreviewWindow.minContentWidth 的量法——NSButton.sizeToFit()
+    /// 量真實寬度，不是憑印象估）：剪裁/還原剪裁/拍快照/存檔▾/開啟位置/丟棄依序寬
+    /// 50/76/63/74/76/50pt（`NSPopUpButton(pullsDown: true)` 含內建下拉箭頭一併量入），
+    /// 6 個排版元件（5 顆按鈕＋1 顆彈性空白，空白最小寬視為 0）＝6 個間隔×8pt=48pt，
+    /// button row 本身需要 389+48=437pt；加 statusLabel 與按鈕列之間的 8pt、content 左右
+    /// 邊距 12×2＝469pt。安全邊際抓 31pt（比先前幾輪的 21-23pt 略寬——這次佈局多了一個
+    /// 彈性空白元件與新的 leading↔trailing 雙邊等式約束，行為比純右靠攏更緊繃，多留一點）。
+    /// 有沒有偵測到 img2webp 現在只影響「存檔」選單內容，不影響任何按鈕的寬度——不必再像
+    /// 之前那樣為「7 顆鈕／8 顆鈕」兩種情況分別量測，單一數字即可。
+    static let minContentWidth: CGFloat = 500
     static let minContentHeight: CGFloat = 240
 
     private let movieURL: URL
@@ -57,8 +29,9 @@ final class RecordPreviewWindow: NSWindow {
     private var looper: AVPlayerLooper?    // 循環播放：AVPlayerLooper 官方做法，必須持有否則不循環
     private var playerView: AVPlayerView?  // 剪裁鈕要問 canBeginTrimming／呼叫 beginTrimming，需持有
     // img2webp 偵測結果：視窗建構時偵測一次（不是每次按鈕都重新掃檔案系統），非 nil 才會在
-    // buildUI() 加入「存 WebP」鈕——沒偵測到就不出現任何東西（不出灰鈕不出錯誤，設計文件
-    // §1.7b：沒有內建 WebP 編碼器可退，跟 gifski 的「找不到就回退內建」語意不同）。
+    // buildUI() 的「存檔」下拉選單裡加「存 WebP」這一項——沒偵測到就不出現任何東西（不出
+    // 灰選項不出錯誤，設計文件 §1.7b：沒有內建 WebP 編碼器可退，跟 gifski 的「找不到就回退
+    // 內建」語意不同）。
     private let img2webpPath: String?
     private var isExporting = false        // 見 close() 的說明：匯出（GIF 或 APNG 或 WebP）中擋下關閉
     private var isTrimming = false         // trim overlay 顯示中擋下關閉（見 close()，不給強制關閉逃生口）
@@ -68,6 +41,7 @@ final class RecordPreviewWindow: NSWindow {
     // reversePlaybackEndTime/forwardPlaybackEndTime 同一單位），不是相對剪裁前次結果的偏移。
     private var trimRange: CMTimeRange?
     private let statusLabel = NSTextField(labelWithString: "")
+    private let restoreTrimButton = NSButton(title: "還原剪裁", target: nil, action: nil)
     private let openLocationButton = NSButton(title: "開啟位置", target: nil, action: nil)
     private var buttons: [NSButton] = []
     weak var controller: RecordPreviewWindowController?
@@ -135,44 +109,74 @@ final class RecordPreviewWindow: NSWindow {
             ])
         }
 
+        // 左群（編輯）：剪裁／還原剪裁／拍快照。
         let trimButton = NSButton(title: "剪裁", target: self, action: #selector(trimAction))
         trimButton.toolTip = "拖動原生剪裁列選取時間段，之後三種匯出格式都套用這段範圍"
-        let saveGifButton = NSButton(title: "存 GIF", target: self, action: #selector(saveGifAction))
-        saveGifButton.toolTip = "匯出為 GIF 並存到預設資料夾"
-        let saveApngButton = NSButton(title: "存 APNG", target: self, action: #selector(saveApngAction))
-        saveApngButton.toolTip = "匯出為全彩 APNG 並存到預設資料夾（檔案較大，通用貼圖支援度不一）"
-        let saveMp4Button = NSButton(title: "存 MP4", target: self, action: #selector(saveMp4Action))
-        saveMp4Button.toolTip = "複製母帶存成 MP4（不影響之後再匯出 GIF/APNG）"
-        // 「存 WebP」只在偵測到 img2webp 時才建立、才加進 buttons/buttonRow（設計文件 §1.7b：
-        // 沒有內建 WebP 編碼器可退，沒裝就不出現，不是灰鈕）。
-        let saveWebpButton: NSButton? = img2webpPath.map { _ in
-            let b = NSButton(title: "存 WebP", target: self, action: #selector(saveWebpAction))
-            b.toolTip = "匯出為 WebP 並存到預設資料夾（需要外部 img2webp，已偵測到）"
-            return b
-        }
+        restoreTrimButton.target = self
+        restoreTrimButton.action = #selector(restoreTrimAction)
+        restoreTrimButton.toolTip = "清除剪裁範圍，恢復播放與匯出整段母帶"
+        restoreTrimButton.isEnabled = false   // 還沒剪裁過（trimRange 為 nil）沒有可還原的東西
         let snapshotButton = NSButton(title: "拍快照", target: self, action: #selector(snapshotAction))
         snapshotButton.toolTip = "把目前播放位置的畫面複製到剪貼簿（⌘⇧V 可貼成浮動貼圖）"
+
+        // 右群（輸出）：存檔▾（pull-down 選單收納原本四顆存檔鈕）／開啟位置／丟棄。
+        // pull-down 樣式的第一個 menu item 是 AppKit 慣例的「標題佔位項」——按鈕本身固定顯示
+        // 這一項的標題，使用者點下去看到的是它之後的真正選項；佔位項不設 action/target，
+        // 選不到（也不該選到）任何行為。
+        let saveMenu = NSMenu()
+        saveMenu.addItem(NSMenuItem(title: "存檔", action: nil, keyEquivalent: ""))
+        func saveMenuItem(_ title: String, _ action: Selector) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self   // 不留 nil 靠 responder chain 找——跟其餘按鈕一貫的明確 target-action
+            return item
+        }
+        saveMenu.addItem(saveMenuItem("存 GIF", #selector(saveGifAction)))
+        saveMenu.addItem(saveMenuItem("存 APNG", #selector(saveApngAction)))
+        saveMenu.addItem(saveMenuItem("存 MP4", #selector(saveMp4Action)))
+        // 「存 WebP」只在偵測到 img2webp 時才加進選單（設計文件 §1.7b：沒有內建 WebP 編碼器
+        // 可退，沒裝就不出現這個選項，不是灰掉的選項）。
+        if img2webpPath != nil {
+            saveMenu.addItem(saveMenuItem("存 WebP", #selector(saveWebpAction)))
+        }
+        let savePopUpButton = NSPopUpButton(frame: .zero, pullsDown: true)
+        savePopUpButton.menu = saveMenu
+        savePopUpButton.toolTip = "選擇匯出格式並存到預設資料夾"
+
         openLocationButton.target = self
         openLocationButton.action = #selector(openLocationAction)
         openLocationButton.toolTip = "在 Finder 開啟並選取剛存的檔案"
         openLocationButton.isEnabled = false   // 還沒存過檔前無路徑可開
         let discardButton = NSButton(title: "丟棄", target: self, action: #selector(discardAction))
         discardButton.toolTip = "丟掉這段動畫截圖並關窗（需確認）"
-        buttons = [trimButton, saveGifButton, saveApngButton, saveMp4Button] + [saveWebpButton].compactMap { $0 }
-            + [snapshotButton, openLocationButton, discardButton]
+        // 「丟棄」刻意不給快捷鍵：破壞性動作（同 ScrollPreviewWindow.discardAction 的理由）。
+
+        // 中間彈性空白：一般 NSView 沒有 intrinsicContentSize（回傳 noIntrinsicMetric），
+        // 在 `.fill` distribution 的 NSStackView 裡因此不會像其他有固定寬度的按鈕那樣「頂住
+        // 自己的內容尺寸」——只要 buttonRow 本身的寬度被外部約束撐得比所有按鈕加總還寬，
+        // 多出來的空間全部由這個沒有意見的 view 吸收，視覺上就是兩群按鈕中間的彈性空白。
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+
+        buttons = [trimButton, restoreTrimButton, snapshotButton, savePopUpButton,
+                   openLocationButton, discardButton]
         for b in buttons {
             b.bezelStyle = .rounded
             b.translatesAutoresizingMaskIntoConstraints = false
         }
-        // 「丟棄」刻意不給快捷鍵：破壞性動作（同 ScrollPreviewWindow.discardAction 的理由）。
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .secondaryLabelColor
+        // 水平方向設高 hugging：狀態列文字短時不主動撐開去搶彈性空白的份額，讓 spacer
+        // （預設 hugging 很低）去吸收多出的寬度，兩者優先權不同才不會產生模稜兩可的排版。
+        statusLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
-        let buttonRow = NSStackView(views: buttons)
+        let buttonRow = NSStackView(views: [trimButton, restoreTrimButton, snapshotButton, spacer,
+                                            savePopUpButton, openLocationButton, discardButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
+        buttonRow.distribution = .fill   // 明確設定，不依賴 NSStackView 的預設值（Apple 官方
+                                         // 「固定元件＋一個無 intrinsic size 的彈性 view」寫法）
         buttonRow.translatesAutoresizingMaskIntoConstraints = false
 
         content.addSubview(playerView)
@@ -180,19 +184,22 @@ final class RecordPreviewWindow: NSWindow {
         content.addSubview(buttonRow)
 
         // 佈局對照 ScrollPreviewWindow.buildUI 的 scroll+buttonRow constraints，把 scroll 換成
-        // playerView；statusLabel 是本視窗新增的一列，靠左伸縮、trailing 頂到按鈕排 leading，
-        // 讓「GIF 匯出中… NN%」這種變長文字有地方長，同時絕不擠壓／蓋住按鈕。
+        // playerView；statusLabel 是本視窗新增的一列，靠左固定寬度、buttonRow 緊接在後一路
+        // 撐到 content 右邊界——這是本輪佈局改版跟先前版本的關鍵差異：buttonRow 的 leading
+        // 現在是**等式**（釘死在 statusLabel.trailing 之後），不是先前那種只防重疊的
+        // `lessThanOrEqualTo`，因為要讓 buttonRow 有明確寬度，內部的 spacer 才有「多出來的
+        // 空間」可以吸收（純 `<=` 只防重疊，不會逼 buttonRow 撐寬）。
         NSLayoutConstraint.activate([
             playerView.topAnchor.constraint(equalTo: content.topAnchor),
             playerView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             playerView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             playerView.bottomAnchor.constraint(equalTo: buttonRow.topAnchor, constant: -8),
 
+            buttonRow.leadingAnchor.constraint(equalTo: statusLabel.trailingAnchor, constant: 8),
             buttonRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
             buttonRow.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
 
             statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: buttonRow.leadingAnchor, constant: -8),
             statusLabel.centerYAnchor.constraint(equalTo: buttonRow.centerYAnchor),
         ])
     }
@@ -234,74 +241,53 @@ final class RecordPreviewWindow: NSWindow {
         isTrimming = true   // 見 close() 的守衛：trim overlay 顯示中不給關窗，不論強制與否
         playerView.beginTrimming { [weak self] result in
             guard let self else { return }
-            // ↓↓↓ 診斷探針（實機讀值失敗排查，team-lead 交辦）：completion 一進來就無條件記，
-            // 不受下面任何 guard 影響——目的是看清楚 result／currentItem／looper 複本三者的
-            // 實際狀態。AVPlayerLooper.h 已查到一條強線索：header 明講 loopingPlayerItems
-            // 是 template item 的「複本」，且明列 forwardPlaybackEndTime 是「client 不該碰、
-            // 會被 looper 用來實作循環邊界」的屬性之一——這暗示 trim UI 寫的
-            // forwardPlaybackEndTime 可能被 looper 自己的循環邏輯蓋掉，或者 trim UI 操作的
-            // 根本不是同一個 item。這裡先把三者的實況都記下來，不猜著改邏輯。
-            TrimDebugLog.add("beginTrimming completion result=\(result.rawValue)")
-            TrimDebugLog.add(TrimDebugLog.describe(player.currentItem, label: "player.currentItem"))
-            if let looper = self.looper {
-                for (i, item) in looper.loopingPlayerItems.enumerated() {
-                    TrimDebugLog.add(TrimDebugLog.describe(item, label: "looper.loopingPlayerItems[\(i)]"))
-                }
-            } else {
-                TrimDebugLog.add("looper=nil")
-            }
-            TrimDebugLog.add("currentTime=\(player.currentTime().seconds)")
-            // ↑↑↑ 診斷探針結束。
-
             defer {
                 self.isTrimming = false
                 self.setButtonsEnabled(true)
                 self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
+                self.restoreTrimButton.isEnabled = (self.trimRange != nil)
             }
-            guard result == .okButton else {
-                TrimDebugLog.add("分支＝cancel（或非 okButton），不設 trimRange")
-                return
-            }
-            guard let item = player.currentItem else {
-                TrimDebugLog.add("分支＝currentItem 為 nil，不設 trimRange")
-                return
-            }
+            // 分支＝cancel（或非 okButton）：AVKit trim UI 的既定行為是取消時不套用變更，
+            // 這裡不用額外處理——不更新 trimRange 就等於維持剪裁前的狀態（第一次剪裁前＝nil／
+            // 已剪裁過＝上次的範圍）。（實機已驗證：這條讀值路徑本身沒問題，見下方類文件註解。）
+            guard result == .okButton else { return }
+            // 分支＝currentItem 為 nil：理論上不會發生（trim UI 完成時 player 一定有 currentItem），
+            // 防禦性寫，不設 trimRange。
+            guard let item = player.currentItem else { return }
             // reversePlaybackEndTime 無效＝使用者沒動起點（維持 0）；forwardPlaybackEndTime
             // 無效＝沒動終點（維持母帶全長）——兩者預設值都是 kCMTimeInvalid（見 header）。
+            // 實機已驗證：這兩個值確實反映使用者在 trim UI 上選取的範圍。
             let start = item.reversePlaybackEndTime.isValid ? item.reversePlaybackEndTime : .zero
             let end = item.forwardPlaybackEndTime.isValid ? item.forwardPlaybackEndTime : item.duration
             let range = CMTimeRange(start: start, end: end)
             self.trimRange = range
             if range.duration.seconds <= 0 {
-                // 退化範圍：不重建 looper——`AVPlayerLooper.h` 明講「valid time range 的
-                // duration 為 0」會擲 NSInvalidArgumentException，重建下去會直接 crash。
-                // 維持舊 looper（播全長）比 crash 安全；trimRange 仍照設，匯出端遇到這種
-                // 退化範圍是既有問題，不在本次修法範圍內。
-                TrimDebugLog.add("分支＝range 退化（duration<=0）start=\(start.seconds) end=\(end.seconds)，不重建 looper")
+                // 分支＝range 退化（duration<=0，使用者把兩個把手拖到同一點）：不重建
+                // looper——`AVPlayerLooper.h` 明講「valid time range 的 duration 為 0」會擲
+                // NSInvalidArgumentException，重建下去會直接 crash。維持舊 looper（播全長）
+                // 比 crash 安全；trimRange 仍照設，匯出端遇到這種退化範圍是既有問題，不在本次
+                // 修法範圍內。
                 self.statusLabel.stringValue = String(format: "已剪裁 %.1fs–%.1fs，匯出將套用",
                                                       start.seconds, end.seconds)
                 return
             }
-            TrimDebugLog.add("分支＝成功 range=[\(start.seconds), \(end.seconds)]")
-
-            // 重建 looper（根因修法）：`loopingPlayerItems` 是 template item 的複本（見
-            // `AVPlayerLooper.h` `loopingPlayerItems` 屬性說明），trim UI 只改到
-            // `player.currentItem`（複本之一）的 forwardPlaybackEndTime，其餘複本完全沒被
-            // 觸及——looper 輪替到下一個複本時播的仍是全長，這正是使用者回報「剪完會重播回
-            // 未剪影片」的根因（診斷探針證實：currentItem 有 reverse/forward 值，其餘複本都是
-            // invalid）。正解不是去改每個複本（header 講「client 不該碰複本屬性」），是照
-            // header 給的專用建構子重建：`initWithPlayer:templateItem:timeRange:`——
-            // 「Time range will be accomplished by seeking to range start time and setting
+            // 分支＝成功：重建 looper（根因修法，實機已驗證）。`loopingPlayerItems` 是
+            // template item 的複本（見 `AVPlayerLooper.h` `loopingPlayerItems` 屬性說明），
+            // trim UI 只改到 `player.currentItem`（複本之一）的 forwardPlaybackEndTime，其餘
+            // 複本完全沒被觸及——looper 輪替到下一個複本時播的仍是全長，這正是使用者實機回報
+            // 「剪完會重播回未剪影片」的根因（診斷探針確認：currentItem 有 reverse/forward
+            // 值，其餘複本都是 invalid）。正解不是去改每個複本（header 講「client 不該碰複本
+            // 屬性」），是照 header 給的專用建構子重建：`initWithPlayer:templateItem:timeRange:`
+            // ——「Time range will be accomplished by seeking to range start time and setting
             // AVPlayerItem's forwardPlaybackEndTime property **on the looping item replicas**」
             // （已用最小重現專案確認這個 initializer 在 `.macOS(.v14)` target 下零 warning，
             // 無額外可用性標記，不是 macOS 14+ 才有的那個 `existingItemsOrdering:` 版本）。
             // 用全新 `AVPlayerItem`（不是被 trim UI 動過的那個）當 template：header 的
             // 用法就是「乾淨 template item ＋ timeRange 參數」，不是「先設好
-            // forwardPlaybackEndTime 的 item」。
+            // forwardPlaybackEndTime 的 item」。使用者實機驗證：循環播放的確是剪裁後的那段。
             self.looper = nil   // 舊 looper 的複本／佇列由 dealloc 收尾（同 header：destroyed 時恢復佇列）
             let freshItem = AVPlayerItem(url: self.movieURL)
             self.looper = AVPlayerLooper(player: player, templateItem: freshItem, timeRange: range)
-            TrimDebugLog.add("looper rebuilt range=[\(start.seconds), \(end.seconds)]")
             // 重剪語意：重建後 currentItem 是新複本（沒有 reverse/forward 值），使用者再按
             // 「剪裁」時 trim UI 會從全長重新選——「重剪＝從全長重新選」，可接受；
             // beginTrimming 是否在重建後的 looper 上仍可用，跟原本同一種構造（AVQueuePlayer+
@@ -309,11 +295,24 @@ final class RecordPreviewWindow: NSWindow {
             self.statusLabel.stringValue = String(format: "已剪裁 %.1fs–%.1fs，匯出將套用",
                                                   start.seconds, end.seconds)
         }
-        // 取消：AVKit trim UI 的既定行為是取消時不套用變更，這裡不用額外處理——不更新
-        // `trimRange` 就等於維持剪裁前的狀態（第一次剪裁前＝nil／已剪裁過＝上次的範圍）。
         // 再按「剪裁」可重剪：beginTrimming 用 currentItem 目前的
         // forwardPlaybackEndTime/reversePlaybackEndTime 當 trim UI 初始選取範圍，第二次呼叫
-        // 因此會從上次的結果繼續調整，覆蓋 `trimRange` 屬性即可，不需要額外的「清除剪裁」入口。
+        // 因此會從上次的結果繼續調整，覆蓋 `trimRange` 屬性即可，不需要額外的「清除剪裁」入口
+        // （「還原剪裁」鈕是給使用者主動清除、不是這裡自動處理）。
+    }
+
+    /// 還原剪裁：清掉 `trimRange`（回到匯出整段母帶），並把預覽 looper 重建回全長——
+    /// 呼叫 `AVPlayerLooper(player:templateItem:)`（沒有 `timeRange` 參數的版本）跟
+    /// `buildUI()` 最初建立 looper 時是同一個建構子，header 說明「不給 timeRange 等同
+    /// kCMTimeRangeInvalid，也就是 [0, itemToLoop's duration]」——即全長。
+    @objc private func restoreTrimAction() {
+        guard trimRange != nil, let player else { return }
+        trimRange = nil
+        looper = nil
+        let freshItem = AVPlayerItem(url: movieURL)
+        looper = AVPlayerLooper(player: player, templateItem: freshItem)
+        restoreTrimButton.isEnabled = false
+        statusLabel.stringValue = "已還原全長"
     }
 
     /// 存 GIF：匯出中停用所有按鈕＋statusLabel 顯示進度；完成後存到快速儲存路徑。
@@ -357,6 +356,7 @@ final class RecordPreviewWindow: NSWindow {
                                        self.statusLabel.stringValue = "WebP 匯出失敗：\(e)"
                                    }
                                    self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
+                                   self.restoreTrimButton.isEnabled = (self.trimRange != nil)
                                })
     }
 
@@ -392,8 +392,10 @@ final class RecordPreviewWindow: NSWindow {
                                // 「開啟位置」不是跟著上面 setButtonsEnabled(true) 無條件打開：
                                // 還沒存過檔（lastSavedURL 是 nil）就不該讓使用者按得下去——
                                // 沒有路徑可開，按了也只是 guard 直接 return，但那是「看起來能按
-                               // 卻沒反應」，比「本來就是灰的」更讓人困惑。
+                               // 卻沒反應」，比「本來就是灰的」更讓人困惑。「還原剪裁」同一套
+                               // 邏輯（trimRange 決定，不是無條件打開）。
                                self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
+                               self.restoreTrimButton.isEnabled = (self.trimRange != nil)
                            })
     }
 
@@ -439,6 +441,7 @@ final class RecordPreviewWindow: NSWindow {
                 self.isExporting = false
                 self.setButtonsEnabled(true)
                 self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
+                self.restoreTrimButton.isEnabled = (self.trimRange != nil)
             }
             guard let session = AVAssetExportSession(asset: AVURLAsset(url: self.movieURL),
                                                      presetName: AVAssetExportPresetPassthrough) else {
