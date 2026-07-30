@@ -180,6 +180,10 @@ final class RecordPreviewWindow: NSWindow {
         let savePopUpButton = NSPopUpButton(frame: .zero, pullsDown: true)
         savePopUpButton.menu = saveMenu
         savePopUpButton.isBordered = false
+        // 佔位 menu item 的 image 有帶 accessibilityDescription（見上方 savePlaceholder），
+        // 但 AppKit 會不會把它橋接到 popup button 本身的 accessibility label 沒有 header
+        // 可查證——顯式設一次，除掉這個不確定性。
+        savePopUpButton.setAccessibilityLabel("存檔")
         savePopUpButton.translatesAutoresizingMaskIntoConstraints = false
         // 30pt：一次性渲染腳本實測（icon＋系統原生下拉箭頭一起量，見 minContentWidth 註解），
         // 不是沿用 SelectionToolbar 26pt 固定值——那個尺寸沒算進 pull-down 的箭頭，會太擠。
