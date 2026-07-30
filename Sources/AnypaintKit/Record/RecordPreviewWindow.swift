@@ -6,6 +6,34 @@ import UniformTypeIdentifiers
 /// img2webp 時〕〔拍快照〕〔開啟位置〕〔丟棄〕。
 /// 視窗骨架/持有慣例對照 `ScrollPreviewWindow`（該檔 5-45 行的骨架、174-216 行的
 /// controller 持有／forget／present 慣例）——這裡不重複解釋，只記差異。
+/// 剪裁完成回呼實機讀值失敗排查用的診斷（team-lead 交辦，暫時性：拿到證據修完問題後拔掉，
+/// 或收斂成 `RecordSessionLog` 那種常駐精簡診斷）。獨立檔案、獨立於 `RecordSessionLog`——
+/// 這輪只想專注看 trim 完成回呼那一刻的狀態，不跟其他既有診斷混在一起看。
+/// 寫法同 `ScrollSessionLog`/`RecordSessionLog` 的 append 慣例：找不到既有檔就新建，找得到就
+/// seek 到底 append，非熱路徑（只在使用者按「剪裁」時觸發）、無效能影響。
+private enum TrimDebugLog {
+    static let path = "/tmp/anypaint-trim-debug.log"
+    static func add(_ line: String) {
+        guard let data = "\(Date()) \(line)\n".data(using: .utf8) else { return }
+        if let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile()
+            h.write(data)
+            h.closeFile()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+
+    /// item 的三個關鍵值（指標識別／duration／reverse・forwardPlaybackEndTime 含 isValid）一次印全。
+    static func describe(_ item: AVPlayerItem?, label: String) -> String {
+        guard let item else { return "\(label)=nil" }
+        let rev = item.reversePlaybackEndTime
+        let fwd = item.forwardPlaybackEndTime
+        return "\(label)=\(ObjectIdentifier(item)) duration=\(item.duration.seconds) " +
+               "reverse=\(rev.seconds)(valid=\(rev.isValid)) forward=\(fwd.seconds)(valid=\(fwd.isValid))"
+    }
+}
+
 final class RecordPreviewWindow: NSWindow {
     /// 內容區最小尺寸：鈕數量隨環境變（有沒有偵測到 img2webp）——量**最多鈕**的情況（設計文件
     /// §1.7b）。實測（同 ScrollPreviewWindow.minContentWidth 的量法——NSButton.sizeToFit() 量
@@ -204,17 +232,49 @@ final class RecordPreviewWindow: NSWindow {
         isTrimming = true   // 見 close() 的守衛：trim overlay 顯示中不給關窗，不論強制與否
         playerView.beginTrimming { [weak self] result in
             guard let self else { return }
+            // ↓↓↓ 診斷探針（實機讀值失敗排查，team-lead 交辦）：completion 一進來就無條件記，
+            // 不受下面任何 guard 影響——目的是看清楚 result／currentItem／looper 複本三者的
+            // 實際狀態。AVPlayerLooper.h 已查到一條強線索：header 明講 loopingPlayerItems
+            // 是 template item 的「複本」，且明列 forwardPlaybackEndTime 是「client 不該碰、
+            // 會被 looper 用來實作循環邊界」的屬性之一——這暗示 trim UI 寫的
+            // forwardPlaybackEndTime 可能被 looper 自己的循環邏輯蓋掉，或者 trim UI 操作的
+            // 根本不是同一個 item。這裡先把三者的實況都記下來，不猜著改邏輯。
+            TrimDebugLog.add("beginTrimming completion result=\(result.rawValue)")
+            TrimDebugLog.add(TrimDebugLog.describe(player.currentItem, label: "player.currentItem"))
+            if let looper = self.looper {
+                for (i, item) in looper.loopingPlayerItems.enumerated() {
+                    TrimDebugLog.add(TrimDebugLog.describe(item, label: "looper.loopingPlayerItems[\(i)]"))
+                }
+            } else {
+                TrimDebugLog.add("looper=nil")
+            }
+            TrimDebugLog.add("currentTime=\(player.currentTime().seconds)")
+            // ↑↑↑ 診斷探針結束。
+
             defer {
                 self.isTrimming = false
                 self.setButtonsEnabled(true)
                 self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
             }
-            guard result == .okButton, let item = player.currentItem else { return }
+            guard result == .okButton else {
+                TrimDebugLog.add("分支＝cancel（或非 okButton），不設 trimRange")
+                return
+            }
+            guard let item = player.currentItem else {
+                TrimDebugLog.add("分支＝currentItem 為 nil，不設 trimRange")
+                return
+            }
             // reversePlaybackEndTime 無效＝使用者沒動起點（維持 0）；forwardPlaybackEndTime
             // 無效＝沒動終點（維持母帶全長）——兩者預設值都是 kCMTimeInvalid（見 header）。
             let start = item.reversePlaybackEndTime.isValid ? item.reversePlaybackEndTime : .zero
             let end = item.forwardPlaybackEndTime.isValid ? item.forwardPlaybackEndTime : item.duration
-            self.trimRange = CMTimeRange(start: start, end: end)
+            let range = CMTimeRange(start: start, end: end)
+            if range.duration.seconds <= 0 {
+                TrimDebugLog.add("分支＝range 退化（duration<=0）start=\(start.seconds) end=\(end.seconds)")
+            } else {
+                TrimDebugLog.add("分支＝成功 range=[\(start.seconds), \(end.seconds)]")
+            }
+            self.trimRange = range
             self.statusLabel.stringValue = String(format: "已剪裁 %.1fs–%.1fs，匯出將套用",
                                                   start.seconds, end.seconds)
         }
