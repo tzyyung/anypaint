@@ -210,16 +210,18 @@ final class RecordPreviewWindow: NSWindow {
     /// 暴露在 `AVPlayerItem` 上的可編輯範圍屬性；header 本身沒有寫「這就是 trim UI 寫回的地方」
     /// （header 沒把兩者關聯起來講），但這是 AVKit 官方 trim UI 對外溝通選取結果的既定慣例
     /// （長年公開範例／文件如此），也是 `AVPlayerItem` 上唯一能表達「子範圍」的 API——
-    /// 沒有第二條路可查。**這段標記為待實機驗證**：OK 之後兩個屬性的值是否確實反映使用者
-    /// 選取範圍，需要在真機拖過 trim UI 才能確認。
+    /// 沒有第二條路可查。**實機驗證結論（診斷探針證實）**：`canBeginTrimming` 在
+    /// `AVQueuePlayer`＋`AVPlayerLooper` 下是 true、`beginTrimming` 讀值成功——
+    /// `player.currentItem` 那個複本的 `reversePlaybackEndTime`/`forwardPlaybackEndTime`
+    /// 正確反映使用者選取範圍，讀值本身沒有問題。真正的 bug 在別處：見下方「Looper 複本」段落。
     ///
-    /// Looper 相容性風險（設計文件 §1.6）：`AVQueuePlayer`＋`AVPlayerLooper` 在無縫循環時會
-    /// 準備／輪替 currentItem 的複本，`canBeginTrimming`／trim 結果讀取是否受影響無法在無 UI
-    /// 環境確認。這裡先實作「直接對現有 looper 播放呼叫 beginTrimming」的路徑（brief 核可的
-    /// 第一案）；若實機測出 `canBeginTrimming` 為 false 或選取範圍讀不對，fallback 方案＝
-    /// trim 前把 `looper` 設 nil、改單一 `AVPlayerItem` 播放（`actionAtItemEnd = .none` ＋監聽
-    /// `AVPlayerItemDidPlayToEndTimeNotification` 手動 seek 到 0 恢復單曲循環），trim 完成後
-    /// 视情况重建 looper。两案都记录在报告，尚未走 fallback。
+    /// **Looper 複本問題（實機 bug，已修）**：`AVPlayerLooper.loopingPlayerItems` 是 template
+    /// item 的至少 3 份複本輪流播放（見 `AVPlayerLooper.h`），trim UI 只碰得到
+    /// `player.currentItem`（複本之一），其餘複本的 `forwardPlaybackEndTime` 完全沒被觸及——
+    /// 循環播放輪到那些複本時播的是全長，使用者實測症狀正是「剪完會重播，重播後又回到未剪的
+    /// 影片」。header 明講 client 不該手動修改複本屬性，正解是用 header 提供的專用建構子
+    /// `initWithPlayer:templateItem:timeRange:` 整顆重建 looper（見下方 trim 成功分支），
+    /// 讓所有複本都套用同一個 timeRange，不是只有一個。
     @objc private func trimAction() {
         guard let playerView, let player, playerView.canBeginTrimming else {
             statusLabel.stringValue = "此播放器不支援剪裁"
@@ -269,12 +271,41 @@ final class RecordPreviewWindow: NSWindow {
             let start = item.reversePlaybackEndTime.isValid ? item.reversePlaybackEndTime : .zero
             let end = item.forwardPlaybackEndTime.isValid ? item.forwardPlaybackEndTime : item.duration
             let range = CMTimeRange(start: start, end: end)
-            if range.duration.seconds <= 0 {
-                TrimDebugLog.add("分支＝range 退化（duration<=0）start=\(start.seconds) end=\(end.seconds)")
-            } else {
-                TrimDebugLog.add("分支＝成功 range=[\(start.seconds), \(end.seconds)]")
-            }
             self.trimRange = range
+            if range.duration.seconds <= 0 {
+                // 退化範圍：不重建 looper——`AVPlayerLooper.h` 明講「valid time range 的
+                // duration 為 0」會擲 NSInvalidArgumentException，重建下去會直接 crash。
+                // 維持舊 looper（播全長）比 crash 安全；trimRange 仍照設，匯出端遇到這種
+                // 退化範圍是既有問題，不在本次修法範圍內。
+                TrimDebugLog.add("分支＝range 退化（duration<=0）start=\(start.seconds) end=\(end.seconds)，不重建 looper")
+                self.statusLabel.stringValue = String(format: "已剪裁 %.1fs–%.1fs，匯出將套用",
+                                                      start.seconds, end.seconds)
+                return
+            }
+            TrimDebugLog.add("分支＝成功 range=[\(start.seconds), \(end.seconds)]")
+
+            // 重建 looper（根因修法）：`loopingPlayerItems` 是 template item 的複本（見
+            // `AVPlayerLooper.h` `loopingPlayerItems` 屬性說明），trim UI 只改到
+            // `player.currentItem`（複本之一）的 forwardPlaybackEndTime，其餘複本完全沒被
+            // 觸及——looper 輪替到下一個複本時播的仍是全長，這正是使用者回報「剪完會重播回
+            // 未剪影片」的根因（診斷探針證實：currentItem 有 reverse/forward 值，其餘複本都是
+            // invalid）。正解不是去改每個複本（header 講「client 不該碰複本屬性」），是照
+            // header 給的專用建構子重建：`initWithPlayer:templateItem:timeRange:`——
+            // 「Time range will be accomplished by seeking to range start time and setting
+            // AVPlayerItem's forwardPlaybackEndTime property **on the looping item replicas**」
+            // （已用最小重現專案確認這個 initializer 在 `.macOS(.v14)` target 下零 warning，
+            // 無額外可用性標記，不是 macOS 14+ 才有的那個 `existingItemsOrdering:` 版本）。
+            // 用全新 `AVPlayerItem`（不是被 trim UI 動過的那個）當 template：header 的
+            // 用法就是「乾淨 template item ＋ timeRange 參數」，不是「先設好
+            // forwardPlaybackEndTime 的 item」。
+            self.looper = nil   // 舊 looper 的複本／佇列由 dealloc 收尾（同 header：destroyed 時恢復佇列）
+            let freshItem = AVPlayerItem(url: self.movieURL)
+            self.looper = AVPlayerLooper(player: player, templateItem: freshItem, timeRange: range)
+            TrimDebugLog.add("looper rebuilt range=[\(start.seconds), \(end.seconds)]")
+            // 重剪語意：重建後 currentItem 是新複本（沒有 reverse/forward 值），使用者再按
+            // 「剪裁」時 trim UI 會從全長重新選——「重剪＝從全長重新選」，可接受；
+            // beginTrimming 是否在重建後的 looper 上仍可用，跟原本同一種構造（AVQueuePlayer+
+            // AVPlayerLooper），理論上行為一致，仍待實機驗證（見待驗清單）。
             self.statusLabel.stringValue = String(format: "已剪裁 %.1fs–%.1fs，匯出將套用",
                                                   start.seconds, end.seconds)
         }
