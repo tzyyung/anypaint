@@ -87,6 +87,10 @@ anypaint 是選單列 app（LSUIElement/.accessory），平時**不是前景**�
   local + global 雙掛。
 - `capturing` 後使用者點過選區（點擊穿透）→ app 失去前景 → local monitor 也收不到 →
   取消要靠 HUD 鈕／再按全域快鍵（Carbon，不受 active 狀態影響）／看門狗。
+- borderless `NSPanel` 的 `canBecomeKey` 預設 `false`——`becomesKeyOnlyIfNeeded` 在此時完全無效
+  （它只決定「何時」變 key，前提 `canBecomeKey` 已是 true）。HUD 只要有文字輸入欄位就必須子類
+  覆寫 `canBecomeKey = true`；純按鈕面板（無文字欄）不需要（RecordHUD 秒數欄實機教訓，
+  2026-07-30）。
 
 ### 生命週期方法的隱性副作用
 `present()` 開頭呼叫 `dismiss()` 當「清乾淨」，而 `dismiss()` 會把回呼設成 nil ——

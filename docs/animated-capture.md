@@ -16,13 +16,15 @@
 
 `⌘⇧R`（設定可改）→（無螢幕錄製權限時先走系統詢問／既有引導提示，見下表「權限預檢」）→
 拉框圈住要錄的區域 → HUD 待命（可設錄製秒數，空白＝不限）→
-按「開始」→ 錄製（HUD 顯示計時／倒數）→ 停止（手動鈕／倒數到／看門狗／stream error 共用
-同一條路徑）→ 預覽視窗（AVPlayerView 循環播放）→
-〔剪裁〕〔存 GIF〕〔存 APNG〕〔存 MP4〕〔存 WebP，僅偵測到 img2webp 才出現〕〔拍快照〕
-〔開啟位置〕〔丟棄〕；播放器影像區也可直接拖曳出整段母帶 MP4。
+按「開始」（秒數欄按 Enter 同等效果）→ 錄製（HUD 顯示計時／倒數）→ 停止（手動鈕／倒數到／
+看門狗／stream error 共用同一條路徑）→ 預覽視窗（AVPlayerView 循環播放），按鈕列分兩群、中間
+彈性空白撐開：左＝編輯〔剪裁〕〔還原剪裁〕〔拍快照〕，右＝輸出〔存檔▾：存 GIF／存 APNG／
+存 MP4／存 WebP（僅偵測到 img2webp 時多這項）〕〔開啟位置〕〔丟棄〕；播放器影像區也可直接
+拖曳出整段母帶 MP4。
 「丟棄」與紅鈕關閉共用同一個 `close()`；匯出中（GIF／APNG／WebP）關閉會先跳警示，需要選
-「強制關閉」才會真正關窗並刪除母帶（見 §6 的逃生口說明）。存檔通知可直接點擊，在 Finder
-開啟並選取剛存的檔案（截圖／滾動截圖／動畫截圖三處存檔都受益，非動畫截圖獨有）。
+「強制關閉」才會真正關窗並刪除母帶；trim overlay 顯示中關閉則只跳提示、不給強制關閉的逃生口
+（見 §6 的逃生口說明）。存檔通知可直接點擊，在 Finder 開啟並選取剛存的檔案（截圖／滾動截圖／
+動畫截圖三處存檔都受益，非動畫截圖獨有）。
 
 定位是「會動的截圖」，不是螢幕錄影機：不錄音訊、不能暫停續錄、不做 webcam。
 
@@ -34,12 +36,13 @@
 | 權限預檢 | `beginAnimatedCapture()` 開頭 `CGPreflightScreenCaptureAccess()` 為 false → `CGRequestScreenCaptureAccess()`（首次觸發系統詢問）→ 仍拒絕 → 走既有 `showPermissionAlert()`、直接 return，不進 session；request 剛被使用者允許也一律 return 讓使用者重按（授權後常需重啟 app 才生效，續跑會拿到黑畫面 stream） |
 | 錄製中顯示游標／點擊高亮圈 | 設定可各自關；**游標關閉時點擊圈勾選框連動停用**（`CaptureSettingsViewController.updateClickRingEnabledState`）——點擊圈要開，游標必須先開（Kap 的 UX 細節，設定 → 控制/截圖分頁） |
 | 最小選區 | 64 **點**（`RecordSession.minSelectionEdgePt`；錄製無匹配需求，門檻遠低於滾動截圖的 320px） |
+| HUD 秒數欄輸入 | armed 狀態的秒數欄可正常點進去打字（`RecordHUDPanel` 子類覆寫 `canBecomeKey = true`，見 §8 的實機教訓）；欄位按 Enter 與按「開始」鈕同等效果 |
 | 匯出 MP4 | 無剪裁：搬移母帶（copy，非 move——之後可能還要匯 GIF/APNG）；零轉檔，母帶本身即最終品質。有剪裁：`AVAssetExportSession` + `AVAssetExportPresetPassthrough` 只切 `timeRange` 不重編碼，匯到暫存再存檔（§6） |
 | MP4 編碼（HEVC） | 設定 → 截圖 → 動畫截圖：「MP4 使用 HEVC」checkbox，預設關（H.264）。開啟後檔案較小（位元率因子 0.9→0.45，同款 Azayaka 公式）、舊裝置相容性較差；檔案仍是 `.mp4`（hevc-in-mp4 合法），GIF/APNG/WebP 解碼端不受影響 |
 | 匯出 GIF | fps 可設定（8/10/12/15/20，預設 12，設定 → 截圖 → 動畫截圖）、1x（點）尺寸，背景 queue 解碼，預覽窗顯示進度；偵測到外部 gifski 時優先走它產生更高品質 GIF，任何失敗自動回退內建編碼器（§6） |
 | 匯出 APNG | 全彩、無 GIF 那種 256 色調色盤限制，副檔名 `.png`；檔案通常較小但非通用貼圖格式（聊天軟體支援度不一），與 GIF 並存而非取代 |
 | 匯出 WebP | 只在偵測到外部 `img2webp` 時「存 WebP」鈕才出現；沒有內建可回退，沒裝就不出現（不出灰鈕不出錯誤） |
-| 剪裁 | 預覽視窗「剪裁」鈕開原生 `AVPlayerView` trim UI，選定的時間段套用到之後所有匯出格式（GIF/APNG/MP4，以及偵測到 img2webp 時的 WebP）；拍快照、拖曳出檔案兩者都不受剪裁影響（一律對應「目前播放位置」／「整段母帶」） |
+| 剪裁 | 預覽視窗「剪裁」鈕開原生 `AVPlayerView` trim UI，選定的時間段套用到之後所有匯出格式（GIF/APNG/MP4，以及偵測到 img2webp 時的 WebP），且預覽的循環播放也會改成只播剪裁段（重建 `AVPlayerLooper`，見 §6）；「還原剪裁」鈕清掉範圍、預覽與匯出都回到整段母帶；拍快照、拖曳出檔案兩者都不受剪裁影響（一律對應「目前播放位置」／「整段母帶」） |
 | 拖曳出檔案 | 預覽視窗播放器影像區可直接拖曳出**整段母帶** MP4（設計決定：不受剪裁影響，一律整段，v1 語意單純化）；匯出中（GIF/APNG/WebP in-flight）也可正常拖曳 |
 | 儲存通知可點擊 | 系統通知點擊 → `NSWorkspace.activateFileViewerSelecting`，Finder 開啟並選取剛存的檔案；檔案已被移走/刪除時安靜 no-op |
 
@@ -223,6 +226,40 @@ RecordSelfCheck.swift 內建自檢工具（見 §7），不參與正式流程
    可接受，漸層/照片內容會 banding。APNG 全彩無此限制，但非通用貼圖格式，因此與 GIF
    並存而非取代。這是零依賴（內建路徑）的自覺取捨，不是 bug。
 
+### 預覽視窗剪裁 UI：trim 讀值時機與 `AVPlayerLooper` 重建
+
+這節是 `trimRange` 從哪裡來（`RecordPreviewWindow.trimAction`），下一節是它怎麼被匯出端消費。
+
+- **讀值只能在 `beginTrimming` 的 completion 當下讀**：`playerView.canBeginTrimming` 為 true、
+  `beginTrimming` 結束後從 `player.currentItem.reversePlaybackEndTime`／
+  `forwardPlaybackEndTime` 讀選取範圍——這兩個 header 沒明講「trim UI 寫回這裡」，是 AVKit
+  官方 trim UI 溝通選取結果的既定慣例，也是 `AVPlayerItem` 上唯一能表達子範圍的 API。
+  **實機驗證過這一步本身沒問題**：`canBeginTrimming` 在 `AVQueuePlayer`＋`AVPlayerLooper` 下是
+  true，`completion` 裡讀到的兩個值確實反映使用者選取範圍。
+- **真正的 bug 在 looper 複本，不在讀值**：`AVPlayerLooper.loopingPlayerItems`（見
+  `AVPlayerLooper.h`）是 template item 的至少 3 份複本輪流播放，trim UI 只碰得到
+  `player.currentItem`（複本之一），其餘複本的 `forwardPlaybackEndTime` 完全沒被觸及。使用者
+  實機回報的症狀正是「剪完會重播，重播後又回到未剪的影片」——循環播放輪到那些沒被改到的複本
+  時，播的是全長。header 明講 client 不該手動修改複本屬性，因此正解不是去逐一改每個複本。
+- **修法：用專用建構子整顆重建 looper**：`AVPlayerLooper(player:templateItem:timeRange:)`
+  （header 原文：「Time range will be accomplished by seeking to range start time and
+  setting AVPlayerItem's forwardPlaybackEndTime property **on the looping item
+  replicas**」）用一個全新的 `AVPlayerItem`（不是被 trim UI 動過的那個）當 template，讓所有
+  複本都套用同一個 `timeRange`，不是只有一個。已用最小重現專案在 `.macOS(.v14)` target 下確認
+  這個 initializer 零 warning、無額外可用性標記；使用者實機驗證循環播放的確變成只播剪裁段。
+- **退化範圍（duration ≤ 0）不可餵給 looper**：使用者把兩個 trim 把手拖到同一點時，算出的
+  `CMTimeRange` duration 是 0——`AVPlayerLooper.h` 明講這種情況會擲
+  `NSInvalidArgumentException`，重建下去會直接 crash。做法：`trimRange` 仍照常設定（給匯出用），
+  但**不重建 looper**，維持舊 looper 繼續播全長——維持舊行為比 crash 安全，這種退化範圍下
+  「預覽循環的內容」與「匯出的範圍」暫時不一致，是已知取捨、不是本輪修法範圍。
+- **還原剪裁＝無 `timeRange` 重建**：「還原剪裁」鈕清掉 `trimRange`（設 nil）並呼叫
+  `AVPlayerLooper(player:templateItem:)`（不帶 `timeRange` 的版本，跟 `buildUI()` 最初建立
+  looper 時是同一個建構子）——header 說明「不給 `timeRange` 等同 `kCMTimeRangeInvalid`，也就是
+  `[0, itemToLoop's duration]`」，即整支母帶，讓預覽與匯出一起回到未剪裁狀態。
+- **重剪語意**：looper 重建後 `player.currentItem` 是全新複本（沒有 `reverse/forward` 值），
+  使用者再按「剪裁」時 trim UI 會從全長重新選——「重剪＝從全長重新選」，不是接續上次的選取，
+  可接受。
+
 ### 剪裁（timeRange）如何影響匯出
 
 預覽視窗「剪裁」鈕（原生 `AVPlayerView.beginTrimming`）產生的 `CMTimeRange`（母帶絕對時間軸，
@@ -312,6 +349,12 @@ Enter 觸發，避免誤觸）與「強制關閉」。
    而來，落在同一個暫存目錄，app 下次啟動時 `RecordOutputService.cleanupStaleTempFiles()`
    照前綴掃描會一併清掉。
 
+**剪裁中關閉不給這個逃生口**：`isTrimming` 標記與 `isExporting` 是獨立的兩個關閉守衛，處理方式
+故意不同——trim overlay 顯示中按關閉，只跳「剪裁進行中——請先按剪裁列的完成或取消」提示、一顆
+「好」鈕，沒有「強制關閉」選項。理由：trim 隨時可以讓使用者自己按原生剪裁列的「完成」或
+「取消」結束（不像匯出可能因為母帶損毀等原因讓背景 Task 卡死、除了強制關閉別無他法），
+不需要（也不該給）逃生口，避免使用者在 trim UI 顯示中把預覽視窗關掉導致不可預期的狀態。
+
 ---
 
 ## 7. 驗證
@@ -357,10 +400,10 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
 | 3 | 失去前景後仍能停止 | 錄製中點別的 app 搶走前景，再按 `⌘⇧R` 仍能正常停止並收到檔案（Carbon 全域快鍵不受 app 前景狀態影響） |
 | 4 | 游標／點擊圈開關生效 | 設定分頁關閉游標後，點擊圈選項變灰且不可勾；分別開關兩者錄製，實際行為與設定一致 |
 | 5 | 長時間中段靜止 | 錄 10 秒、中間靜止 5 秒 → 收到的 mp4 時長仍 ~10s（不因 SCK 靜止不供格而變短），匯出的 GIF 靜止段播放不跳格 |
-| 6 | armed HUD 秒數欄可打字 | 選區框好、HUD 進入 armed 後，滑鼠點進秒數欄能正常打字並在「開始」後生效（nonactivating panel 的鍵盤路由是 CLAUDE.md 點名的高風險區） |
+| 6 | armed HUD 秒數欄可打字 | **✅ 已驗（使用者實機）**：選區框好、HUD 進入 armed 後，滑鼠點進秒數欄能正常打字，按 Enter 或按「開始」都能生效並開始錄製（`RecordHUDPanel.canBecomeKey` 修復，見 §8） |
 | 7 | 通知點擊開位置 | 截圖／滾動截圖／動畫截圖存檔通知點擊後，Finder 開啟並選取該檔案；檔案已被移走時點擊安靜無反應（不報錯） |
 | 8 | HEVC 可播＋奇數像素邊長選區 | 設定開啟 HEVC 後錄製匯出的 MP4 能在 QuickTime／預覽 正常播放；框選邊長換算成奇數像素時仍能正常編碼、播放不歪 |
-| 9 | 剪裁全流程（六項） | `canBeginTrimming` 在 `AVPlayerLooper` 播放下為 true 且 trim UI 正常顯示（若否需走 §1.6 提到的 fallback：暫停 looper 改單曲播放）；OK 後 `reversePlaybackEndTime`/`forwardPlaybackEndTime` 確實反映使用者選取範圍；剪裁後首格是選取起點附近的畫面（非黑格或範圍外內容）；GIF／APNG／MP4／WebP（偵測到 img2webp 時）在同一個 `trimRange` 下匯出，時長一致且符合預期；重剪（再按「剪裁」）與取消（trim UI 選 Cancel）後 `trimRange` 維持/更新正確；trim overlay 顯示中按關閉：確認守衛 alert 出現且取消 trim 後可正常關窗（`RecordPreviewWindow.isTrimming` 守衛已程式碼化，不給強制關閉逃生口，見 §6） |
+| 9 | 剪裁全流程 | **✅ 已驗（使用者實機）**：`canBeginTrimming` 為 true、trim UI 正常顯示，OK 後選取範圍正確讀出；預覽循環播放正確只播剪裁段（`AVPlayerLooper` 重建修復，見 §6）；GIF／APNG／MP4 剪裁匯出時長一致且內容正確。**尚未驗**：WebP 剪裁匯出（本機無 img2webp，見 #12）；剪裁後首格是否為選取起點附近畫面（非黑格或範圍外內容）；重剪（再按「剪裁」）與取消（trim UI 選 Cancel）後 `trimRange` 維持/更新是否正確；退化範圍（兩把手拖到同一點）維持舊 looper 播全長的行為是否符合使用者預期；trim overlay 顯示中按關閉，守衛 alert 出現且取消 trim 後可正常關窗 |
 | 10 | 拖曳出 MP4（六項） | 拖到 Finder：檔案落地、檔名符合樣板展開（剝 .png 補 .mp4）、內容為完整可播母帶；拖到瀏覽器：`NSFilePromiseProvider` 的 promise 型拖曳是否被接收端正確接受（部分較舊/客製拖放實作只吃 `NSURL`／`NSFilenamesPboardType`，不吃 promise）；`contentOverlayView` 疊的 `DragOriginView` 確實不擋 `.inline` 控制列的滑鼠事件（scrubber 拖曳、播放/暫停按鈕、原生 click-to-pause 手勢不被吞掉）；右鍵選單／視訊分析選取等 `AVPlayerView` 原生手勢確實穿透 `DragOriginView`；拖曳進行中同時有 GIF/APNG/MP4/WebP 匯出在跑，兩者對同一份母帶的檔案 I/O 不互相干擾；拖曳中途（`writePromiseTo` 背景複製還沒完成）就關閉/丟棄預覽視窗（母帶被刪除）不出錯 |
 | 11 | gifski 兩況 | 裝 gifski（`brew install gifski`）：存 GIF 走外部引擎，畫質明顯優於內建（無明顯調色盤 banding）；不裝（或暫時改名模擬移除）：存 GIF 正常回退內建路徑，行為與第一輪相同 |
 | 12 | img2webp（三項） | `-d`（per-frame delay）語法在真實 img2webp 上行為與 libwebp 官方文件描述一致（本機未裝，尚未實測，見 §6）；產出的 WebP 讀回檢視畫面/fps/循環都正確；「存 WebP」鈕從偵測到匯出到開啟位置的預覽全流程正常 |
@@ -388,3 +431,6 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
 | `RecordSelfCheck` 的 fps／format／engine／useHEVC 改成跟著 `AppSettings` 走 | 判準必須確定性：自檢跑出的期望值（時長×fps 的格數、GIF 是否合併相同格、HEVC 位元率）若隨使用者這台機器的設定值或是否裝了 gifski 而變動，同一份程式碼在不同機器/不同時間跑出不同「應該通過」的數字，自檢就不再是可重現的回歸網——因此四處都顯式傳常數（fps 12、`.gif`、`.builtin`、`false`），不吃設定 | §6 |
 | gifski 失敗時不回退內建、直接顯示錯誤或跳過 GIF | 使用者體驗會因為「這台機器有沒有裝 gifski」「這次子程序有沒有剛好失敗」而不一致地失敗；內建 CGImageDestination 路徑對同一支母帶一定能成功產生 GIF（本節前 7 點就是回歸網），gifski 是加值不是必要條件，沒有回退等於把「加值」變成「地雷」 | §6 |
 | 讓拖曳出的 MP4 套用 `trimRange`（跟到三種匯出格式一樣剪裁後的範圍） | 設計決定（brief／spec 已核）：v1 語意刻意單純化為「一律整段母帶」——拖曳走的是檔案系統複製，不是重新編碼；要套用剪裁得比照 `saveMp4Action` 走 `AVAssetExportSession` 匯到暫存檔再供 promise 讀取，複雜度陡增，而拖曳的使用情境本來就是「快速丟出整段」，跟剪裁後只要片段的匯出情境不同 | §1、§6 |
+| 有文字輸入欄位的 nonactivating panel 不覆寫 `canBecomeKey` | borderless `NSPanel` 的 `canBecomeKey` 預設 `false`；`becomesKeyOnlyIfNeeded` 只決定「何時」變 key window，前提是 `canBecomeKey` 本身要為 true——沒覆寫時面板永遠成不了 key window，文字欄收不到任何按鍵（`RecordHUD` 秒數欄實機回報「點了打不了字」，round 1 的 `becomesKeyOnlyIfNeeded` 因此完全無效，round 2 才修對）。純按鈕面板（如 `ScrollHUD`）不需要這條——按鈕靠 hit-test 不需要 key window，不要照抄 `RecordHUD` 的覆寫，兩者的正確做法本來就不同 | §1、CLAUDE.md |
+| trim 讀值只在 `beginTrimming` completion 之外的時機讀，或讀完就當作已經反映到播放 | `player.currentItem` 只是 `AVPlayerLooper` 複本之一，trim UI 只改得到這一個複本的 `forwardPlaybackEndTime`；讀值本身在 completion 當下沒問題，但**不重建 looper 就不會反映到循環播放**（其餘複本沒被改到，輪到時播全長）——這是使用者實機回報「剪完會重播回未剪影片」的根因，修法是用 `AVPlayerLooper(player:templateItem:timeRange:)` 整顆重建，不是去改每個複本（header 明講 client 不該碰） | §6 |
+| 退化 `timeRange`（duration ≤ 0）餵給 `AVPlayerLooper(player:templateItem:timeRange:)` | `AVPlayerLooper.h` 明講這種情況會擲 `NSInvalidArgumentException`，會直接 crash；使用者把兩個 trim 把手拖到同一點時必然發生。正解是偵測到 `duration <= 0` 就不重建 looper，維持舊 looper 繼續播全長（`trimRange` 仍照常設定，只是這種退化情況下預覽循環的內容與匯出範圍暫時不一致，是已知取捨） | §6 |
