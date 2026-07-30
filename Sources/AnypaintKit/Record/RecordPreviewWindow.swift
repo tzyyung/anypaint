@@ -2,22 +2,26 @@ import AppKit
 import AVKit
 import UniformTypeIdentifiers
 
-/// 動畫截圖預覽：AVPlayerView 循環播放母帶。按鈕列分兩群，中間彈性空白撐開（使用者核可的
-/// 佈局）：左＝編輯〔剪裁〕〔還原剪裁〕〔拍快照〕，右＝輸出〔存檔▾：存 GIF／存 APNG／存 MP4／
-/// 存 WebP（僅偵測到 img2webp 時在選單多這項）〕〔開啟位置〕〔丟棄〕。
+/// 動畫截圖預覽：AVPlayerView 循環播放母帶。按鈕列改成 icon＋下方說明行，視覺語言完整沿用
+/// `SelectionToolbar`（框選標註工具列，該檔 197-216 行的 icon 鈕建構、294-307 行的 hover 說明
+/// 機制、209-216 行的分隔線做法——這裡不重複解釋，只記差異，見 `HoverHintRow` 與 `buildUI`
+/// 的註解）。分兩群：編輯〔剪裁 `scissors`〕〔還原剪裁 `arrow.uturn.backward`〕
+/// 〔拍快照 `camera`〕｜分隔線｜輸出〔存檔▾ `square.and.arrow.down`：選單收納存 GIF／存 APNG／
+/// 存 MP4／存 WebP（僅偵測到 img2webp 時在選單多這項）〕〔開啟位置 `folder`〕〔丟棄 `trash`〕。
 /// 視窗骨架/持有慣例對照 `ScrollPreviewWindow`（該檔 5-45 行的骨架、174-216 行的
 /// controller 持有／forget／present 慣例）——這裡不重複解釋，只記差異。
 final class RecordPreviewWindow: NSWindow {
-    /// 內容區最小尺寸：實測（同 ScrollPreviewWindow.minContentWidth 的量法——NSButton.sizeToFit()
-    /// 量真實寬度，不是憑印象估）：剪裁/還原剪裁/拍快照/存檔▾/開啟位置/丟棄依序寬
-    /// 50/76/63/74/76/50pt（`NSPopUpButton(pullsDown: true)` 含內建下拉箭頭一併量入），
-    /// 6 個排版元件（5 顆按鈕＋1 顆彈性空白，空白最小寬視為 0）＝6 個間隔×8pt=48pt，
-    /// button row 本身需要 389+48=437pt；加 statusLabel 與按鈕列之間的 8pt、content 左右
-    /// 邊距 12×2＝469pt。安全邊際抓 31pt（比先前幾輪的 21-23pt 略寬——這次佈局多了一個
-    /// 彈性空白元件與新的 leading↔trailing 雙邊等式約束，行為比純右靠攏更緊繃，多留一點）。
-    /// 有沒有偵測到 img2webp 現在只影響「存檔」選單內容，不影響任何按鈕的寬度——不必再像
-    /// 之前那樣為「7 顆鈕／8 顆鈕」兩種情況分別量測，單一數字即可。
-    static let minContentWidth: CGFloat = 500
+    /// 內容區最小尺寸：icon 鈕比先前的文字按鈕窄很多，大幅下降（500→260）。實測（同慣例，
+    /// icon 鈕固定 26×22pt——照抄 `SelectionToolbar.configureSymbolButton` 的固定尺寸，不是
+    /// sizeToFit() 量出來的，那份參照本身就是「不管符號長怎樣，尺寸一律固定」的設計）：
+    /// 剪裁/還原剪裁/拍快照/開啟位置/丟棄各 26pt，分隔線 1pt；存檔▾（icon＋系統原生下拉箭頭）
+    /// 量到 30pt——這是本檔唯一新增的組合控件，不是抄來的，用一次性渲染腳本量出「icon 與箭頭
+    /// 不擠在一起」的寬度（過程見 fix round 報告）。排版元件共 7 個（5 顆按鈕＋1 分隔線＋1
+    /// 存檔▾），`SelectionToolbar.toolsRow` 用的 spacing 是 4pt（不是舊版文字按鈕列的 8pt），
+    /// 這裡跟著改：26×5+1+30=161，6 個間隔×4pt=24，hoverRow 本身需要 161+24=185pt。
+    /// 加 content 左右邊距 12×2=24 → 209pt。安全邊際抓 41pt（比前幾輪都寬——這是本檔第一次用
+    /// 「hover 說明列＋獨立狀態行」這種新佈局，穩妥起見多留）→ 250pt。
+    static let minContentWidth: CGFloat = 250
     static let minContentHeight: CGFloat = 240
 
     private let movieURL: URL
@@ -40,6 +44,14 @@ final class RecordPreviewWindow: NSWindow {
     // （設計文件 §1.6）。母帶絕對時間軸座標（與 player.currentItem 的
     // reversePlaybackEndTime/forwardPlaybackEndTime 同一單位），不是相對剪裁前次結果的偏移。
     private var trimRange: CMTimeRange?
+    // 說明/狀態行（`statusLabel`）現在身兼兩職（設計文件外、team-lead 這輪核可的自行實作，
+    // `SelectionToolbar.hintLabel` 沒有這個需求——它的說明列只有「hover 說明」一種角色，
+    // 離開時回復固定預設文字即可；這裡的同一行還要顯示匯出進度／已存檔名／已剪裁範圍這些
+    // *有狀態* 的訊息，離開 hover 不能把這些訊息蓋掉）：`lastStatusMessage` 記最後一次真正的
+    // 狀態訊息，hover 進某顆鈕時 `statusLabel` 暫時顯示它的說明文字，滑鼠離開（或本來就沒
+    // hover 在任何鈕上）就顯示 `lastStatusMessage`。所有「设定状态」的地方一律呼叫
+    // `setStatus(_:)`（見該函式），不要直接寫 `statusLabel.stringValue`。
+    private var lastStatusMessage = ""
     private let statusLabel = NSTextField(labelWithString: "")
     private let restoreTrimButton = NSButton(title: "還原剪裁", target: nil, action: nil)
     private let openLocationButton = NSButton(title: "開啟位置", target: nil, action: nil)
@@ -63,6 +75,10 @@ final class RecordPreviewWindow: NSWindow {
         title = "動畫截圖"
         isReleasedWhenClosed = false   // 由 controller 明確持有與釋放（forget，同 ScrollPreviewWindow）
         contentMinSize = NSSize(width: Self.minContentWidth, height: Self.minContentHeight)
+        // hover 說明機制需要 mouseMoved 事件才會送達 tracking area（同 SelectionOverlayController.swift:21
+        // 的說明：NSTrackingArea 的 `.mouseMoved` 選項要求視窗顯式開啟這個旗標，`.mouseEnteredAndExited`
+        // 本身不需要，但我們兩者都要用）。
+        acceptsMouseMovedEvents = true
         buildUI()
     }
 
@@ -109,22 +125,45 @@ final class RecordPreviewWindow: NSWindow {
             ])
         }
 
-        // 左群（編輯）：剪裁／還原剪裁／拍快照。
-        let trimButton = NSButton(title: "剪裁", target: self, action: #selector(trimAction))
-        trimButton.toolTip = "拖動原生剪裁列選取時間段，之後三種匯出格式都套用這段範圍"
-        restoreTrimButton.target = self
-        restoreTrimButton.action = #selector(restoreTrimAction)
-        restoreTrimButton.toolTip = "清除剪裁範圍，恢復播放與匯出整段母帶"
-        restoreTrimButton.isEnabled = false   // 還沒剪裁過（trimRange 為 nil）沒有可還原的東西
-        let snapshotButton = NSButton(title: "拍快照", target: self, action: #selector(snapshotAction))
-        snapshotButton.toolTip = "把目前播放位置的畫面複製到剪貼簿（⌘⇧V 可貼成浮動貼圖）"
+        let hoverRow = HoverHintRow()
+        hoverRow.translatesAutoresizingMaskIntoConstraints = false
+        // 離開所有控件（或本來就沒 hover 在任何控件上）：回復最後一次真正的狀態訊息，不是
+        // SelectionToolbar 那種固定預設文字（見 lastStatusMessage 宣告處的說明）。
+        hoverRow.onHint = { [weak self] hint in
+            guard let self else { return }
+            self.statusLabel.stringValue = hint ?? self.lastStatusMessage
+        }
 
-        // 右群（輸出）：存檔▾（pull-down 選單收納原本四顆存檔鈕）／開啟位置／丟棄。
-        // pull-down 樣式的第一個 menu item 是 AppKit 慣例的「標題佔位項」——按鈕本身固定顯示
-        // 這一項的標題，使用者點下去看到的是它之後的真正選項；佔位項不設 action/target，
-        // 選不到（也不該選到）任何行為。
+        // 左群（編輯）：剪裁／還原剪裁／拍快照。三顆都用 configureSymbolButton（照抄
+        // SelectionToolbar.configureSymbolButton 的固定尺寸／borderless／cornerRadius 做法，
+        // 差異只在不設 contentTintColor——SelectionToolbar 疊在螢幕內容上要固定白色圖示，
+        // RecordPreviewWindow 是普通視窗、跟著系統外觀走，留給預設值自動適配淺色/深色模式）。
+        let trimButton = NSButton()
+        configureSymbolButton(trimButton, symbol: "scissors", accessibilityLabel: "剪裁",
+                              action: #selector(trimAction))
+        setHelp("拖動原生剪裁列選取時間段，之後三種匯出格式都套用這段範圍", for: trimButton, in: hoverRow)
+
+        configureSymbolButton(restoreTrimButton, symbol: "arrow.uturn.backward", accessibilityLabel: "還原剪裁",
+                              action: #selector(restoreTrimAction))
+        setHelp("清除剪裁範圍，恢復播放與匯出整段母帶", for: restoreTrimButton, in: hoverRow)
+        restoreTrimButton.isEnabled = false   // 還沒剪裁過（trimRange 為 nil）沒有可還原的東西
+
+        let snapshotButton = NSButton()
+        configureSymbolButton(snapshotButton, symbol: "camera", accessibilityLabel: "拍快照",
+                              action: #selector(snapshotAction))
+        setHelp("把目前播放位置的畫面複製到剪貼簿（⌘⇧V 可貼成浮動貼圖）", for: snapshotButton, in: hoverRow)
+
+        // 右群（輸出）：存檔▾（pull-down 選單收納存 GIF／存 APNG／存 MP4／存 WebP）／開啟位置／丟棄。
+        // icon 放在 pull-down 的**第一個 menu item**（標題佔位項）上，不是 popup button 自己的
+        // `.image`——實測過（一次性渲染腳本比對）：直接設 `NSPopUpButton.image` 在 pull-down
+        // 模式下不會顯示，pull-down cell 只認第一個 menu item 的 title/image 當「持續顯示」的
+        // 內容；佔位項因此只給 image、不給 title（image-only 比 icon+文字擠在一起乾淨），
+        // 不設 action/target，選不到（也不該選到）任何行為。
         let saveMenu = NSMenu()
-        saveMenu.addItem(NSMenuItem(title: "存檔", action: nil, keyEquivalent: ""))
+        let savePlaceholder = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        savePlaceholder.image = NSImage(systemSymbolName: "square.and.arrow.down",
+                                        accessibilityDescription: "存檔")
+        saveMenu.addItem(savePlaceholder)
         func saveMenuItem(_ title: String, _ action: Selector) -> NSMenuItem {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self   // 不留 nil 靠 responder chain 找——跟其餘按鈕一貫的明確 target-action
@@ -140,72 +179,120 @@ final class RecordPreviewWindow: NSWindow {
         }
         let savePopUpButton = NSPopUpButton(frame: .zero, pullsDown: true)
         savePopUpButton.menu = saveMenu
-        savePopUpButton.toolTip = "選擇匯出格式並存到預設資料夾"
+        savePopUpButton.isBordered = false
+        savePopUpButton.translatesAutoresizingMaskIntoConstraints = false
+        // 30pt：一次性渲染腳本實測（icon＋系統原生下拉箭頭一起量，見 minContentWidth 註解），
+        // 不是沿用 SelectionToolbar 26pt 固定值——那個尺寸沒算進 pull-down 的箭頭，會太擠。
+        savePopUpButton.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        savePopUpButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        setHelp("選擇匯出格式並存到預設資料夾", for: savePopUpButton, in: hoverRow)
 
-        openLocationButton.target = self
-        openLocationButton.action = #selector(openLocationAction)
-        openLocationButton.toolTip = "在 Finder 開啟並選取剛存的檔案"
+        configureSymbolButton(openLocationButton, symbol: "folder", accessibilityLabel: "開啟位置",
+                              action: #selector(openLocationAction))
+        setHelp("在 Finder 開啟並選取剛存的檔案", for: openLocationButton, in: hoverRow)
         openLocationButton.isEnabled = false   // 還沒存過檔前無路徑可開
-        let discardButton = NSButton(title: "丟棄", target: self, action: #selector(discardAction))
-        discardButton.toolTip = "丟掉這段動畫截圖並關窗（需確認）"
-        // 「丟棄」刻意不給快捷鍵：破壞性動作（同 ScrollPreviewWindow.discardAction 的理由）。
 
-        // 中間彈性空白：一般 NSView 沒有 intrinsicContentSize（回傳 noIntrinsicMetric），
-        // 在 `.fill` distribution 的 NSStackView 裡因此不會像其他有固定寬度的按鈕那樣「頂住
-        // 自己的內容尺寸」——只要 buttonRow 本身的寬度被外部約束撐得比所有按鈕加總還寬，
-        // 多出來的空間全部由這個沒有意見的 view 吸收，視覺上就是兩群按鈕中間的彈性空白。
-        let spacer = NSView()
-        spacer.translatesAutoresizingMaskIntoConstraints = false
+        let discardButton = NSButton()
+        configureSymbolButton(discardButton, symbol: "trash", accessibilityLabel: "丟棄",
+                              action: #selector(discardAction))
+        setHelp("丟掉這段動畫截圖並關窗（需確認）", for: discardButton, in: hoverRow)
+        // 「丟棄」刻意不給快捷鍵：破壞性動作（同 ScrollPreviewWindow.discardAction 的理由）。
 
         buttons = [trimButton, restoreTrimButton, snapshotButton, savePopUpButton,
                    openLocationButton, discardButton]
-        for b in buttons {
-            b.bezelStyle = .rounded
-            b.translatesAutoresizingMaskIntoConstraints = false
-        }
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .secondaryLabelColor
-        // 水平方向設高 hugging：狀態列文字短時不主動撐開去搶彈性空白的份額，讓 spacer
-        // （預設 hugging 很低）去吸收多出的寬度，兩者優先權不同才不會產生模稜兩可的排版。
-        statusLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        statusLabel.font = .systemFont(ofSize: 11)   // 同 SelectionToolbar.hintLabel 的字級
 
-        let buttonRow = NSStackView(views: [trimButton, restoreTrimButton, snapshotButton, spacer,
-                                            savePopUpButton, openLocationButton, discardButton])
-        buttonRow.orientation = .horizontal
-        buttonRow.spacing = 8
-        buttonRow.distribution = .fill   // 明確設定，不依賴 NSStackView 的預設值（Apple 官方
-                                         // 「固定元件＋一個無 intrinsic size 的彈性 view」寫法）
-        buttonRow.translatesAutoresizingMaskIntoConstraints = false
+        // 兩群中間一條分隔線，照抄 SelectionToolbar.separator()（該檔 209-216 行）——
+        // 1pt 寬、16pt 高、白色 25% 透明度的細線。這裡不是深色 HUD 背景，25% 透明白線在淺色
+        // 視窗背景下會太淡看不見；改用 `.separatorColor`（系統語意色，本身就是為了「分隔線」
+        // 這個用途設計、自動適配淺色/深色外觀），視覺角色相同、色彩來源換成本視窗合適的版本。
+        let toolsRow = NSStackView(views: [trimButton, restoreTrimButton, snapshotButton, separator(),
+                                           savePopUpButton, openLocationButton, discardButton])
+        toolsRow.orientation = .horizontal
+        toolsRow.spacing = 4   // 同 SelectionToolbar.toolsRow 的 spacing（不是舊版文字按鈕的 8pt）
+        toolsRow.translatesAutoresizingMaskIntoConstraints = false
+        hoverRow.addSubview(toolsRow)
+        NSLayoutConstraint.activate([
+            toolsRow.leadingAnchor.constraint(equalTo: hoverRow.leadingAnchor),
+            toolsRow.trailingAnchor.constraint(equalTo: hoverRow.trailingAnchor),
+            toolsRow.topAnchor.constraint(equalTo: hoverRow.topAnchor),
+            toolsRow.bottomAnchor.constraint(equalTo: hoverRow.bottomAnchor),
+        ])
 
         content.addSubview(playerView)
+        content.addSubview(hoverRow)
         content.addSubview(statusLabel)
-        content.addSubview(buttonRow)
 
-        // 佈局對照 ScrollPreviewWindow.buildUI 的 scroll+buttonRow constraints，把 scroll 換成
-        // playerView；statusLabel 是本視窗新增的一列，靠左固定寬度、buttonRow 緊接在後一路
-        // 撐到 content 右邊界——這是本輪佈局改版跟先前版本的關鍵差異：buttonRow 的 leading
-        // 現在是**等式**（釘死在 statusLabel.trailing 之後），不是先前那種只防重疊的
-        // `lessThanOrEqualTo`，因為要讓 buttonRow 有明確寬度，內部的 spacer 才有「多出來的
-        // 空間」可以吸收（純 `<=` 只防重疊，不會逼 buttonRow 撐寬）。
+        // 佈局：playerView 佔滿上方；hoverRow（icon 鈕列）置中在 playerView 下方；statusLabel
+        // 說明/狀態行整條貼底（同 SelectionToolbar 的垂直排列：toolsRow→styleRow→hintLabel，
+        // 這裡對應 hoverRow→statusLabel，省了 styleRow 那一層——本視窗沒有樣式子選單）。
+        // statusLabel 貼滿左右邊界（不像 hoverRow 置中）：狀態文字（匯出進度／檔名）長度
+        // 不固定，需要跟按鈕列一樣寬的顯示空間，內容太長就靠 `.byTruncatingTail` 截斷。
         NSLayoutConstraint.activate([
             playerView.topAnchor.constraint(equalTo: content.topAnchor),
             playerView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             playerView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            playerView.bottomAnchor.constraint(equalTo: buttonRow.topAnchor, constant: -8),
+            playerView.bottomAnchor.constraint(equalTo: hoverRow.topAnchor, constant: -8),
 
-            buttonRow.leadingAnchor.constraint(equalTo: statusLabel.trailingAnchor, constant: 8),
-            buttonRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
-            buttonRow.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
+            hoverRow.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            hoverRow.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -4),
 
             statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            statusLabel.centerYAnchor.constraint(equalTo: buttonRow.centerYAnchor),
+            statusLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            statusLabel.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
         ])
+    }
+
+    /// 照抄 `SelectionToolbar.configureSymbolButton`（該檔 197-207 行）：固定尺寸 26×22pt、
+    /// borderless、cornerRadius——差異只在不強制 `.contentTintColor`（見 buildUI 呼叫處的說明）
+    /// 與多了 `accessibilityLabel` 參數（team-lead 這輪要求：每顆都要 toolTip＋
+    /// accessibilityDescription，SelectionToolbar 原本沒設 accessibilityDescription，這裡加嚴）。
+    private func configureSymbolButton(_ b: NSButton, symbol: String, accessibilityLabel: String,
+                                       action: Selector) {
+        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: accessibilityLabel)
+        b.target = self
+        b.action = action
+        b.isBordered = false
+        b.wantsLayer = true
+        b.layer?.cornerRadius = 4
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 22).isActive = true
+    }
+
+    /// 說明文字設一次、兩處生效：系統 tooltip 與 hoverRow 的 hover 說明（同
+    /// `SelectionToolbar.setHelp`，該檔 180-183 行）。
+    private func setHelp(_ text: String, for view: NSView, in hoverRow: HoverHintRow) {
+        view.toolTip = text
+        hoverRow.hints[view] = text
+    }
+
+    /// 照抄 `SelectionToolbar.separator()`（該檔 209-216 行），顏色換成 `.separatorColor`
+    /// （見 buildUI 呼叫處的說明——原版的白色 25% 透明度是深色 HUD 專用）。
+    private func separator() -> NSView {
+        let v = NSView()
+        v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        v.heightAnchor.constraint(equalToConstant: 16).isActive = true
+        return v
     }
 
     private func setButtonsEnabled(_ enabled: Bool) {
         for b in buttons { b.isEnabled = enabled }
+    }
+
+    /// 所有「設定狀態訊息」的地方都呼叫這裡，不要直接寫 `statusLabel.stringValue`——
+    /// 否則 hover 離開後 `HoverHintRow.onHint` 回復的 `lastStatusMessage` 會是舊的（見
+    /// `lastStatusMessage` 屬性宣告處的說明）。
+    private func setStatus(_ text: String) {
+        lastStatusMessage = text
+        statusLabel.stringValue = text
     }
 
     // MARK: - 按鈕語意
@@ -231,7 +318,7 @@ final class RecordPreviewWindow: NSWindow {
     /// 讓所有複本都套用同一個 timeRange，不是只有一個。
     @objc private func trimAction() {
         guard let playerView, let player, playerView.canBeginTrimming else {
-            statusLabel.stringValue = "此播放器不支援剪裁"
+            setStatus("此播放器不支援剪裁")
             return
         }
         // trim overlay 蓋在播放器上時鎖住其他按鈕（review minor finding）：原生剪裁 UI 顯示中
@@ -267,8 +354,8 @@ final class RecordPreviewWindow: NSWindow {
                 // NSInvalidArgumentException，重建下去會直接 crash。維持舊 looper（播全長）
                 // 比 crash 安全；trimRange 仍照設，匯出端遇到這種退化範圍是既有問題，不在本次
                 // 修法範圍內。
-                self.statusLabel.stringValue = String(format: "已剪裁 %.1fs–%.1fs，匯出將套用",
-                                                      start.seconds, end.seconds)
+                self.setStatus(String(format: "已剪裁 %.1fs–%.1fs，匯出將套用",
+                                      start.seconds, end.seconds))
                 return
             }
             // 分支＝成功：重建 looper（根因修法，實機已驗證）。`loopingPlayerItems` 是
@@ -292,8 +379,8 @@ final class RecordPreviewWindow: NSWindow {
             // 「剪裁」時 trim UI 會從全長重新選——「重剪＝從全長重新選」，可接受；
             // beginTrimming 是否在重建後的 looper 上仍可用，跟原本同一種構造（AVQueuePlayer+
             // AVPlayerLooper），理論上行為一致，仍待實機驗證（見待驗清單）。
-            self.statusLabel.stringValue = String(format: "已剪裁 %.1fs–%.1fs，匯出將套用",
-                                                  start.seconds, end.seconds)
+            self.setStatus(String(format: "已剪裁 %.1fs–%.1fs，匯出將套用",
+                                  start.seconds, end.seconds))
         }
         // 再按「剪裁」可重剪：beginTrimming 用 currentItem 目前的
         // forwardPlaybackEndTime/reversePlaybackEndTime 當 trim UI 初始選取範圍，第二次呼叫
@@ -312,7 +399,7 @@ final class RecordPreviewWindow: NSWindow {
         let freshItem = AVPlayerItem(url: movieURL)
         looper = AVPlayerLooper(player: player, templateItem: freshItem)
         restoreTrimButton.isEnabled = false
-        statusLabel.stringValue = "已還原全長"
+        setStatus("已還原全長")
     }
 
     /// 存 GIF：匯出中停用所有按鈕＋statusLabel 顯示進度；完成後存到快速儲存路徑。
@@ -331,13 +418,13 @@ final class RecordPreviewWindow: NSWindow {
         guard let img2webpPath else { return }
         isExporting = true
         setButtonsEnabled(false)
-        statusLabel.stringValue = "WebP 匯出中… 0%"
+        setStatus("WebP 匯出中… 0%")
         let tmpURL = movieURL.deletingPathExtension().appendingPathExtension("webp")
         let fps = Double(AppSettings.recordGifFps)
         GifExporter.exportWebP(movieURL: movieURL, to: tmpURL, pointScale: captureScale,
                                fps: fps, timeRange: trimRange, img2webpPath: img2webpPath,
                                progress: { [weak self] p in
-                                   self?.statusLabel.stringValue = "WebP 匯出中… \(Int(p * 100))%"
+                                   self?.setStatus("WebP 匯出中… \(Int(p * 100))%")
                                },
                                completion: { [weak self] result in
                                    guard let self else { return }
@@ -348,12 +435,12 @@ final class RecordPreviewWindow: NSWindow {
                                        let saved = self.output.saveCopy(from: tmpURL, ext: "webp", vars: self.vars)
                                        try? FileManager.default.removeItem(at: tmpURL)
                                        if let saved { self.lastSavedURL = saved }
-                                       self.statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" }
-                                           ?? "WebP 存檔失敗"
+                                       self.setStatus(saved.map { "已存 \($0.lastPathComponent)" }
+                                           ?? "WebP 存檔失敗")
                                    case .failure(let e):
                                        // 不回退（設計文件 §1.7b：沒有內建 WebP 編碼器）——直接顯示錯誤，
                                        // GifExporter.exportWebP 內部已經把同款診斷寫進 RecordSessionLog。
-                                       self.statusLabel.stringValue = "WebP 匯出失敗：\(e)"
+                                       self.setStatus("WebP 匯出失敗：\(e)")
                                    }
                                    self.openLocationButton.isEnabled = (self.lastSavedURL != nil)
                                    self.restoreTrimButton.isEnabled = (self.trimRange != nil)
@@ -366,14 +453,14 @@ final class RecordPreviewWindow: NSWindow {
     private func exportAndSave(format: AnimationFormat, label: String) {
         isExporting = true
         setButtonsEnabled(false)
-        statusLabel.stringValue = "\(label) 匯出中… 0%"
+        setStatus("\(label) 匯出中… 0%")
         let ext = format.fileExtension
         let tmpURL = movieURL.deletingPathExtension().appendingPathExtension(ext)
         let fps = Double(AppSettings.recordGifFps)
         GifExporter.export(movieURL: movieURL, to: tmpURL, pointScale: captureScale,
                            fps: fps, format: format, timeRange: trimRange,
                            progress: { [weak self] p in
-                               self?.statusLabel.stringValue = "\(label) 匯出中… \(Int(p * 100))%"
+                               self?.setStatus("\(label) 匯出中… \(Int(p * 100))%")
                            },
                            completion: { [weak self] result in
                                guard let self else { return }
@@ -384,10 +471,10 @@ final class RecordPreviewWindow: NSWindow {
                                    let saved = self.output.saveCopy(from: tmpURL, ext: ext, vars: self.vars)
                                    try? FileManager.default.removeItem(at: tmpURL)
                                    if let saved { self.lastSavedURL = saved }
-                                   self.statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" }
-                                       ?? "\(label) 存檔失敗"
+                                   self.setStatus(saved.map { "已存 \($0.lastPathComponent)" }
+                                       ?? "\(label) 存檔失敗")
                                case .failure(let e):
-                                   self.statusLabel.stringValue = "\(label) 匯出失敗：\(e)"
+                                   self.setStatus("\(label) 匯出失敗：\(e)")
                                }
                                // 「開啟位置」不是跟著上面 setButtonsEnabled(true) 無條件打開：
                                // 還沒存過檔（lastSavedURL 是 nil）就不該讓使用者按得下去——
@@ -422,12 +509,12 @@ final class RecordPreviewWindow: NSWindow {
                 lastSavedURL = saved
                 openLocationButton.isEnabled = true
             }
-            statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" } ?? "MP4 存檔失敗"
+            setStatus(saved.map { "已存 \($0.lastPathComponent)" } ?? "MP4 存檔失敗")
             return
         }
         isExporting = true
         setButtonsEnabled(false)
-        statusLabel.stringValue = "MP4 剪裁匯出中…"
+        setStatus("MP4 剪裁匯出中…")
         // 暫存檔沿用 RecordOutputService.tempMovieURL()：檔名固定「anypaint-record-<uuid>.mp4」，
         // 與母帶同前綴，app 下次啟動的 cleanupStaleTempFiles() 掃得到（若這次強制關閉/當掉沒清到）。
         let tmpURL = output.tempMovieURL()
@@ -445,7 +532,7 @@ final class RecordPreviewWindow: NSWindow {
             }
             guard let session = AVAssetExportSession(asset: AVURLAsset(url: self.movieURL),
                                                      presetName: AVAssetExportPresetPassthrough) else {
-                self.statusLabel.stringValue = "MP4 剪裁匯出失敗：無法建立匯出工作階段"
+                self.setStatus("MP4 剪裁匯出失敗：無法建立匯出工作階段")
                 return
             }
             session.outputURL = tmpURL
@@ -458,11 +545,10 @@ final class RecordPreviewWindow: NSWindow {
                 let saved = self.output.saveCopy(from: tmpURL, ext: "mp4", vars: self.vars)
                 try? FileManager.default.removeItem(at: tmpURL)
                 if let saved { self.lastSavedURL = saved }
-                self.statusLabel.stringValue = saved.map { "已存 \($0.lastPathComponent)" }
-                    ?? "MP4 存檔失敗"
+                self.setStatus(saved.map { "已存 \($0.lastPathComponent)" } ?? "MP4 存檔失敗")
             } else {
                 try? FileManager.default.removeItem(at: tmpURL)
-                self.statusLabel.stringValue = "MP4 剪裁匯出失敗：\(session.error?.localizedDescription ?? "未知錯誤")"
+                self.setStatus("MP4 剪裁匯出失敗：\(session.error?.localizedDescription ?? "未知錯誤")")
             }
         }
     }
@@ -491,9 +577,9 @@ final class RecordPreviewWindow: NSWindow {
             do {
                 let result = try await generator.image(at: time)
                 self.pinboard.copyLarge(cgImage: result.image, scale: self.captureScale)
-                self.statusLabel.stringValue = "快照已複製（⌘⇧V 可貼出）"
+                self.setStatus("快照已複製（⌘⇧V 可貼出）")
             } catch {
-                self.statusLabel.stringValue = "拍快照失敗：\(error)"
+                self.setStatus("拍快照失敗：\(error)")
             }
         }
     }
@@ -570,6 +656,52 @@ final class RecordPreviewWindow: NSWindow {
         try? FileManager.default.removeItem(at: movieURL)
         controller?.forget(self)
         super.close()
+    }
+
+    // MARK: - 按鈕列 hover 說明
+
+    /// 按鈕列 hover 說明機制：完整比照 `SelectionToolbar`（該檔 27-49、272-307 行）的做法——
+    /// 用一個 tracking area 換算滑鼠是否落在哪個已註冊控件的 bounds 內，不靠系統 tooltip
+    /// （同款理由：tooltip 要停留一兩秒才浮出，對一整排小 icon 太慢；這裡雖然不是 nonactivating
+    /// panel，但一樣要「meaningfully instant」）。與 `SelectionToolbar.hintLabel` 的唯一差異
+    /// 寫在 `RecordPreviewWindow.lastStatusMessage` 屬性宣告處：離開時回復的不是固定預設文字，
+    /// 是「最後一次真正的狀態訊息」——這行同時兼職 hover 說明與匯出進度/存檔結果/剪裁範圍
+    /// 的顯示，SelectionToolbar 的說明列沒有第二種角色，因此那份參照沒有這個機制，這裡是
+    /// team-lead 這輪核可的自行設計（brief 原文：「沒有就實作…並記錄」）。
+    ///
+    /// 不覆寫 `mouseDown`（跟 `SelectionToolbar` 不同）：那邊要擋掉點擊穿透到底下的
+    /// `SelectionView`（overlay 疊在使用者正在操作的畫面上）；這裡的按鈕列只是普通視窗最下方
+    /// 的一排控件，底下沒有東西需要保護，讓 AppKit 正常的子視圖 hit-test 把點擊事件送給實際
+    /// 被點到的按鈕就好——tracking area 只負責 hover 資訊，不干涉點擊派送。
+    private final class HoverHintRow: NSView {
+        var hints: [NSView: String] = [:]
+        var onHint: ((String?) -> Void)?   // nil＝滑鼠離開所有已註冊控件，回復狀態訊息
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(
+                rect: bounds,
+                options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                owner: self, userInfo: nil))
+        }
+        override func mouseEntered(with event: NSEvent) { updateHint(with: event) }
+        override func mouseMoved(with event: NSEvent) { updateHint(with: event) }
+        override func mouseExited(with event: NSEvent) { onHint?(nil) }
+
+        /// 找滑鼠底下註冊過說明的控件（同 `SelectionToolbar.updateHint` 的做法：不用
+        /// `hitTest(_:)`，直接對每個控件換算座標，控件數量小，成本可忽略）。
+        private func updateHint(with event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            for (view, text) in hints {
+                guard !view.isHiddenOrHasHiddenAncestor else { continue }
+                if view.bounds.contains(view.convert(point, from: self)) {
+                    onHint?(text)
+                    return
+                }
+            }
+            onHint?(nil)
+        }
     }
 
     // MARK: - 拖曳出 MP4
@@ -741,11 +873,15 @@ public final class RecordPreviewWindowController {
         let scale = captureScale > 0 ? captureScale : 2.0
 
         // 寬 = min(母帶像素寬/captureScale + 40, 螢幕可視寬×0.6)，下限 minContentWidth；
-        // 高 = 寬×影片長寬比 + 90（播放器上方＋按鈕列），下限 minContentHeight；兩者都 clamp 進螢幕。
+        // 高 = 寬×影片長寬比 + 60（playerView 下緣到 content 下緣的固定量：
+        // 8pt 間距＋hoverRow 22pt＋4pt 間距＋statusLabel 說明/狀態行約 14pt＋10pt 底邊距＝58pt，
+        // 取 60 留一點餘裕），下限 minContentHeight；兩者都 clamp 進螢幕。這個常數改版前是 90
+        // （文字按鈕列比 icon 列高、也沒有獨立的說明/狀態行，見 RecordPreviewWindow.buildUI
+        // 這輪佈局改版的說明），icon 化＋按鈕列變窄變矮之後跟著往下調。
         let ideal = min(naturalSize.width / scale + 40, visible.width * 0.6)
         let width = min(max(ideal, RecordPreviewWindow.minContentWidth), visible.width)
         let aspect = naturalSize.height / max(naturalSize.width, 1)
-        let idealHeight = width * aspect + 90
+        let idealHeight = width * aspect + 60
         let height = min(max(idealHeight, RecordPreviewWindow.minContentHeight), visible.height)
         let contentRect = NSRect(x: 0, y: 0, width: width, height: height)
 
