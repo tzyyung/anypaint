@@ -85,6 +85,8 @@ func overlayKeyBindingStoreTests() {
     T.checkEq("未設定時回預設",
               OverlayKeyBindings.binding(for: .recognizeText, store: store),
               OverlayKeyBindings.defaults[.recognizeText]!)
+    T.checkTrue("讀取不存在的值不得寫回預設",
+                store.object(forKey: "overlayKey.recognizeText") == nil)
 
     let custom = OverlayKeyBinding(character: "y", modifiers: [.command, .option])
     OverlayKeyBindings.setBinding(custom, for: .recognizeText, store: store)
