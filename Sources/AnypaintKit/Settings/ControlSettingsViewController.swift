@@ -97,11 +97,6 @@ final class ControlSettingsViewController: NSViewController {
             label.setContentHuggingPriority(.required, for: .horizontal)
             label.widthAnchor.constraint(equalToConstant: 92).isActive = true
 
-            let warning = NSTextField(labelWithString: "")
-            warning.font = .systemFont(ofSize: 11)
-            warning.textColor = .systemOrange
-            overlayWarnings[action] = warning
-
             let field = OverlayKeyRecorderField(
                 binding: OverlayKeyBindings.binding(for: action)
             ) { [weak self] new in
@@ -115,13 +110,33 @@ final class ControlSettingsViewController: NSViewController {
             }
             overlayFields[action] = field
 
-            let row = NSStackView(views: [label, field, warning])
-            row.orientation = .horizontal
-            row.spacing = 8
-            fieldRows.append(row)
+            let fieldRow = NSStackView(views: [label, field])
+            fieldRow.orientation = .horizontal
+            fieldRow.spacing = 8
+
+            // 獨立一行放在欄位正下方（而不是同一行的第三格）：同一行給它的寬度只剩約 202pt，
+            // 一句完整的中文提示放不下、又是不換行的 label，句子會被容器的 trailing 約束截斷，
+            // 使用者只看到前半句、看不到「換一個」那半句該做的事。
+            // isHidden＝true 時 NSStackView 完全不替它保留空間與間距，
+            // 所以「沒有互撞」的那一行不會比別的動作多佔一點高度。
+            let warning = NSTextField(labelWithString: "")
+            warning.font = .systemFont(ofSize: 11)
+            warning.textColor = .systemOrange
+            warning.lineBreakMode = .byWordWrapping
+            warning.maximumNumberOfLines = 2
+            warning.preferredMaxLayoutWidth = 420   // 略小於容器寬度 440，留一點餘裕避免貼齊右緣
+            warning.isHidden = true
+            overlayWarnings[action] = warning
+
+            let group = NSStackView(views: [fieldRow, warning])
+            group.orientation = .vertical
+            group.alignment = .leading
+            group.spacing = 4
+            fieldRows.append(group)
         }
 
-        let hint = NSTextField(labelWithString: "點一下欄位再按下想要的組合即可更改；按清除鈕可回到預設。")
+        let hint = NSTextField(labelWithString:
+            "點一下欄位按下組合即可更改；Esc 取消、Delete 或按清除鈕都可回到預設組合。")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         fieldRows.append(hint)
@@ -134,15 +149,17 @@ final class ControlSettingsViewController: NSViewController {
         return stack
     }
 
-    /// 互撞提示：只在真的有動作被遮蔽時說話，一切正常時完全不出現。
+    /// 互撞提示：只在真的有動作被遮蔽時說話，一切正常時完全不出現（連空白行都不留）。
     private func refreshOverlayWarnings() {
         let shadowed = OverlayKeyBindings.shadowed(in: OverlayKeyBindings.all())
-        for (action, field) in overlayWarnings {
+        for (action, warningLabel) in overlayWarnings {
             if let winner = shadowed[action] {
-                let combo = OverlayKeyRecorderField.displayString(for: OverlayKeyBindings.binding(for: action))
-                field.stringValue = "\(combo) 已用於「\(Self.actionName(winner))」——換一個沒被使用的組合"
+                // 欄位本身已經顯示組合，這裡不必再重複一次按鍵——只講使用者現在該做的事。
+                warningLabel.stringValue = "這個組合已經被「\(Self.actionName(winner))」用掉，請換一個。"
+                warningLabel.isHidden = false
             } else {
-                field.stringValue = ""
+                warningLabel.stringValue = ""
+                warningLabel.isHidden = true
             }
         }
     }

@@ -52,6 +52,18 @@ func overlayKeyBindingResolveTests() {
               Set(OverlayKeyBindings.defaults.keys), Set(OverlayAction.allCases))
 }
 
+func overlayKeyBindingCodableNormalizationTests() {
+    // 合成的 Decodable 會把存的字串直接指定給 character，繞過 init 的小寫正規化——
+    // 存進 UserDefaults 的資料若混進大寫（例如使用者手改，或未來版本寫壞），resolve
+    // 用小寫比對就永遠比不中，動作悄悄失效。custom init(from:) 要保證解出來一律是小寫。
+    let json = #"{"character":"S","modifiers":1}"#.data(using: .utf8)!
+    let decoded = try! JSONDecoder().decode(OverlayKeyBinding.self, from: json)
+    T.checkEq("decode 大寫字元後正規化為小寫", decoded.character, "s")
+    T.checkEq("正規化後 resolve 能命中",
+              OverlayKeyBindings.resolve(character: "s", modifiers: [.command],
+                                        bindings: [.save: decoded]), .save)
+}
+
 func overlayKeyBindingConflictTests() {
     T.checkTrue("預設值無互撞", OverlayKeyBindings.shadowed(in: OverlayKeyBindings.defaults).isEmpty)
 

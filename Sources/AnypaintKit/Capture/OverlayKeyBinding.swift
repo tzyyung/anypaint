@@ -30,6 +30,17 @@ public struct OverlayKeyBinding: Equatable, Codable, Sendable {
         self.character = character.lowercased()
         self.modifiers = modifiers
     }
+
+    private enum CodingKeys: String, CodingKey { case character, modifiers }
+
+    /// 不能用合成的 `Decodable`：那條路直接把存的字串指定給 `character`，繞過上面 init
+    /// 的小寫正規化。舊資料（或使用者手改的 UserDefaults）裡若混進大寫字元，`resolve`
+    /// 比對時一律轉小寫，會永遠比不中——動作因此悄悄失效，且無任何警示。改走正規化 init。
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(character: try c.decode(String.self, forKey: .character),
+                  modifiers: try c.decode(OverlayModifiers.self, forKey: .modifiers))
+    }
 }
 
 public enum OverlayKeyBindings {

@@ -101,6 +101,21 @@ anypaint 是選單列 app（LSUIElement/.accessory），平時**不是前景**�
 量測方式：`CGEvent` ＋ `post(tap: .cghidEventTap)` 送鍵，用 System Events 的
 `count of windows` 當觀察值。**不可用 `frontmost`**——框選層是 `.nonactivatingPanel`，前景不變。
 
+### 已知限制（刻意保留）：看門狗關閉＋還沒拖選區＋鍵盤焦點被搶走＝唯一逃生門是結束整個 app
+設定頁看門狗選單的「關閉」選項是把逾時時間設成 `0`（`AppSettings.watchdogOptions` 第一個
+就是 `0`），而 `armWatchdog` 在總秒數不是正數時直接 return、不排任何逾時。framing 剛開啟、
+使用者還沒拖出選區時，工具列預設是隱藏的（`SelectionView.swift` 初始化就把
+`toolbar.isHidden = true`）。這兩者疊上「鍵盤焦點被搶走」（Spotlight、通知中心跳出）：
+`Esc` 走的是本地 `NSEvent` monitor，焦點不在 overlay 上就收不到；畫面上又沒有取消鈕可以按
+（工具列還藏著）；而框選期間全域四顆熱鍵已經整批停用（見上一條「全域 Carbon 快鍵會蓋掉
+自家視窗的本地鍵」），所以連原本不受焦點影響的 Carbon 熱鍵也按不動。三者同時發生時，
+**除了結束整個 app 沒有別的退出方式**。改動前，截圖熱鍵在這個狀態下仍然按得動，因為
+Carbon 熱鍵本來就不看哪個視窗持有鍵盤焦點。
+
+這是**刻意的取捨，不是待修的 bug**：曾考慮的替代方案是「只要熱鍵的組合沒有撞上六個框選
+動作中的任何一個，框選期間仍保留該熱鍵可按」，但目前決定維持現狀（全部停用比部分停用
+好推理、好維護）。之後若要「修」這個情境，先確認是不是要推翻這個決定，不要當成疏漏改掉。
+
 ### 生命週期方法的隱性副作用
 `present()` 開頭呼叫 `dismiss()` 當「清乾淨」，而 `dismiss()` 會把回呼設成 nil ——
 呼叫端「先設回呼、再 present」的話回呼**立刻被抹掉**，症狀是整條流程靜默失效。

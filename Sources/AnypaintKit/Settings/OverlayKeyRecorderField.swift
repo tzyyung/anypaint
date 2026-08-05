@@ -53,6 +53,9 @@ public final class OverlayKeyRecorderField: NSView {
     private var monitor: Any?          // 強持有——弱持有會在 autorelease pool 清空時被釋放
                                         // （vendored 副本正是這個缺陷，issue #241 defect 1）
     private var recording = false
+    // 按到叫不出名字的鍵時，短暫顯示提示再退回錄製中的文字——用 work item 而非裸 Timer
+    // 是為了「使用者緊接著又按一次」時可以先取消上一個，不會兩個提示互相搶著改字。
+    private var rejectedKeyHintWork: DispatchWorkItem?
     // 設定視窗在 macOS 13.5+ 點關閉鈕是「隱藏」不是「關閉」，view 不會被釋放、deinit 不會跑，
     // 所以錄製狀態要靠「視窗不再是 key」主動收尾，不能只靠 deinit。token 存起來、
     // 每次重新掛上／deinit 都要移除，避免視窗開關幾次後 observer 疊加。
@@ -149,6 +152,7 @@ public final class OverlayKeyRecorderField: NSView {
             }
             guard let chars = event.charactersIgnoringModifiers, !chars.isEmpty,
                   !Self.isUnrepresentablePrivateUse(chars) else {
+                self.showRejectedKeyHint()
                 return nil
             }
             let new = OverlayKeyBinding(character: chars,
@@ -162,11 +166,26 @@ public final class OverlayKeyRecorderField: NSView {
 
     private func stopRecording() {
         recording = false
+        rejectedKeyHintWork?.cancel()
+        rejectedKeyHintWork = nil
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         if Self.recordingField === self { Self.recordingField = nil }
         label.stringValue = Self.displayString(for: binding)
         layer?.borderColor = NSColor.separatorColor.cgColor
+    }
+
+    /// 按到私用區裡叫不出名字的鍵（如小鍵盤少見的功能鍵）：不錄，但要讓使用者知道剛剛
+    /// 那一下沒有生效，不是欄位卡住——短暫提示後自動退回「按下想要的組合」。
+    private func showRejectedKeyHint() {
+        rejectedKeyHintWork?.cancel()
+        label.stringValue = "這個鍵沒辦法顯示，請換一個再按一次"
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.recording else { return }
+            self.label.stringValue = "按下想要的組合"
+        }
+        rejectedKeyHintWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
     @objc private func clearAction() {
