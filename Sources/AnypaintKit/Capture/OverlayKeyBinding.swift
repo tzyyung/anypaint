@@ -60,4 +60,21 @@ public enum OverlayKeyBindings {
         }
         return nil
     }
+
+    /// 找出被遮蔽的動作：某動作的綁定與求值順序更前面的動作相同時，它永遠不會被觸發。
+    /// 回傳 [被遮蔽的動作: 搶到它的動作]。
+    public static func shadowed(in bindings: [OverlayAction: OverlayKeyBinding]) -> [OverlayAction: OverlayAction] {
+        var result: [OverlayAction: OverlayAction] = [:]
+        for (index, action) in evaluationOrder.enumerated() {
+            guard let b = bindings[action] else { continue }
+            for earlier in evaluationOrder[..<index] {
+                guard let e = bindings[earlier] else { continue }
+                if e.character == b.character && e.modifiers == b.modifiers {
+                    result[action] = earlier
+                    break
+                }
+            }
+        }
+        return result
+    }
 }

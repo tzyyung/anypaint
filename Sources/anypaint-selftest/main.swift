@@ -1319,5 +1319,6 @@ checkEq("img2webp arguments 空frames",
         ["-loop", "0", "-o", "/tmp/out.webp"])
 
 overlayKeyBindingResolveTests()
+overlayKeyBindingConflictTests()
 
 T.finish()

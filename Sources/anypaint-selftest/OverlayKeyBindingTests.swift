@@ -51,3 +51,27 @@ func overlayKeyBindingResolveTests() {
     T.checkEq("defaults 涵蓋所有動作",
               Set(OverlayKeyBindings.defaults.keys), Set(OverlayAction.allCases))
 }
+
+func overlayKeyBindingConflictTests() {
+    T.checkTrue("預設值無互撞", OverlayKeyBindings.shadowed(in: OverlayKeyBindings.defaults).isEmpty)
+
+    var clash = OverlayKeyBindings.defaults
+    clash[.recognizeText] = OverlayKeyBinding(character: "s", modifiers: [.command])
+    let s1 = OverlayKeyBindings.shadowed(in: clash)
+    T.checkEq("辨識文字被存檔遮蔽", s1[.recognizeText], .save)
+    T.checkEq("只報一筆", s1.count, 1)
+
+    // 修飾鍵不同不算互撞
+    var shifted = OverlayKeyBindings.defaults
+    shifted[.recognizeText] = OverlayKeyBinding(character: "s", modifiers: [.command, .option])
+    T.checkTrue("⌥⌘s 與 ⌘s 不算互撞", OverlayKeyBindings.shadowed(in: shifted).isEmpty)
+
+    // 三個相撞：後兩個都被最前面那個遮蔽
+    var triple = OverlayKeyBindings.defaults
+    triple[.saveAndOpen] = OverlayKeyBinding(character: "r", modifiers: [])
+    triple[.recognizeText] = OverlayKeyBinding(character: "r", modifiers: [])
+    let s2 = OverlayKeyBindings.shadowed(in: triple)
+    T.checkEq("存檔並開啟被重拍遮蔽", s2[.saveAndOpen], .reshoot)
+    T.checkEq("辨識文字被重拍遮蔽", s2[.recognizeText], .reshoot)
+    T.checkEq("共兩筆", s2.count, 2)
+}
