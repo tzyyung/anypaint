@@ -1322,5 +1322,6 @@ overlayKeyBindingResolveTests()
 overlayKeyBindingConflictTests()
 overlayKeyBindingStoreTests()
 overlayModifiersFromEventTests()
+overlayKeyDisplayStringTests()
 
 T.finish()

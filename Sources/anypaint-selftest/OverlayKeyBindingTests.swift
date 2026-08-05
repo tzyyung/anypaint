@@ -126,3 +126,17 @@ func overlayModifiersFromEventTests() {
               OverlayModifiers([.command, .shift, .control, .option]))
     T.checkEq("空的就是空的", OverlayModifiers(event: []), OverlayModifiers([]))
 }
+
+func overlayKeyDisplayStringTests() {
+    T.checkEq("裸鍵顯示大寫字母",
+              OverlayKeyRecorderField.displayString(for: OverlayKeyBinding(character: "r", modifiers: [])), "R")
+    T.checkEq("⌘S",
+              OverlayKeyRecorderField.displayString(for: OverlayKeyBinding(character: "s", modifiers: [.command])), "⌘S")
+    T.checkEq("修飾鍵順序固定為 ⌃⌥⇧⌘",
+              OverlayKeyRecorderField.displayString(
+                  for: OverlayKeyBinding(character: "s", modifiers: [.command, .shift, .control, .option])),
+              "⌃⌥⇧⌘S")
+    T.checkEq("⇧⌘S",
+              OverlayKeyRecorderField.displayString(
+                  for: OverlayKeyBinding(character: "s", modifiers: [.command, .shift])), "⇧⌘S")
+}
