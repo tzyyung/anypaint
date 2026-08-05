@@ -139,4 +139,14 @@ func overlayKeyDisplayStringTests() {
     T.checkEq("⇧⌘S",
               OverlayKeyRecorderField.displayString(
                   for: OverlayKeyBinding(character: "s", modifiers: [.command, .shift])), "⇧⌘S")
+    // 私用區方向鍵／功能鍵／空白鍵：charactersIgnoringModifiers 回傳的原始標量必須換成看得懂的名字
+    T.checkEq("裸上方向鍵顯示 ↑",
+              OverlayKeyRecorderField.displayString(
+                  for: OverlayKeyBinding(character: "\u{F700}", modifiers: [])), "↑")
+    T.checkEq("⌘F5",
+              OverlayKeyRecorderField.displayString(
+                  for: OverlayKeyBinding(character: "\u{F708}", modifiers: [.command])), "⌘F5")
+    T.checkEq("裸空白鍵顯示「空白」",
+              OverlayKeyRecorderField.displayString(
+                  for: OverlayKeyBinding(character: " ", modifiers: [])), "空白")
 }
