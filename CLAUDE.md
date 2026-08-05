@@ -92,6 +92,15 @@ anypaint 是選單列 app（LSUIElement/.accessory），平時**不是前景**�
   覆寫 `canBecomeKey = true`；純按鈕面板（無文字欄）不需要（RecordHUD 秒數欄實機教訓，
   2026-07-30）。
 
+### 全域 Carbon 快鍵會蓋掉自家視窗的本地鍵（2026-08-02 實測）
+全域快鍵在系統層攔截，事件不會送到 app 的 `NSEvent` 本地監聽器。截圖快鍵設成 ⌘T 時，
+框選中的 ⌘T（辨識文字）**完全到不了**——實測第二次 ⌘T 直接取消框選（視窗數 2→0）。
+因此 overlay 期間必須 `KeyboardShortcuts.disable(MenuBarController.allShortcuts)`，
+不能只讓路給部分快鍵。還原務必走單一出口（見 `a77aeb3`）。
+
+量測方式：`CGEvent` ＋ `post(tap: .cghidEventTap)` 送鍵，用 System Events 的
+`count of windows` 當觀察值。**不可用 `frontmost`**——框選層是 `.nonactivatingPanel`，前景不變。
+
 ### 生命週期方法的隱性副作用
 `present()` 開頭呼叫 `dismiss()` 當「清乾淨」，而 `dismiss()` 會把回呼設成 nil ——
 呼叫端「先設回呼、再 present」的話回呼**立刻被抹掉**，症狀是整條流程靜默失效。
