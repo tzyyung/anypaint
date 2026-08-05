@@ -77,4 +77,36 @@ public enum OverlayKeyBindings {
         }
         return result
     }
+
+    private static func key(for action: OverlayAction) -> String { "overlayKey.\(action.rawValue)" }
+
+    /// 讀綁定。沒設定、或存的資料解不出來 → 回預設值（不寫入，讓預設值保持可演進）。
+    public static func binding(for action: OverlayAction,
+                               store: UserDefaults = .standard) -> OverlayKeyBinding {
+        let fallback = defaults[action]!
+        guard let s = store.string(forKey: key(for: action)),
+              let data = s.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(OverlayKeyBinding.self, from: data)
+        else { return fallback }
+        return decoded
+    }
+
+    public static func setBinding(_ binding: OverlayKeyBinding,
+                                  for action: OverlayAction,
+                                  store: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(binding),
+              let s = String(data: data, encoding: .utf8) else { return }
+        store.set(s, forKey: key(for: action))
+    }
+
+    /// 清除＝移除項目，於是自然回到預設值。不存哨兵值，所以沒有「無綁定」狀態。
+    public static func clear(_ action: OverlayAction, store: UserDefaults = .standard) {
+        store.removeObject(forKey: key(for: action))
+    }
+
+    public static func all(store: UserDefaults = .standard) -> [OverlayAction: OverlayKeyBinding] {
+        var result: [OverlayAction: OverlayKeyBinding] = [:]
+        for a in OverlayAction.allCases { result[a] = binding(for: a, store: store) }
+        return result
+    }
 }

@@ -75,3 +75,41 @@ func overlayKeyBindingConflictTests() {
     T.checkEq("辨識文字被重拍遮蔽", s2[.recognizeText], .reshoot)
     T.checkEq("共兩筆", s2.count, 2)
 }
+
+func overlayKeyBindingStoreTests() {
+    // 獨立 suite，跑完清掉——不可寫進 com.aidaris.anypaint
+    let suiteName = "anypaint.selftest.overlayKeys"
+    let store = UserDefaults(suiteName: suiteName)!
+    for a in OverlayAction.allCases { store.removeObject(forKey: "overlayKey.\(a.rawValue)") }
+
+    T.checkEq("未設定時回預設",
+              OverlayKeyBindings.binding(for: .recognizeText, store: store),
+              OverlayKeyBindings.defaults[.recognizeText]!)
+
+    let custom = OverlayKeyBinding(character: "y", modifiers: [.command, .option])
+    OverlayKeyBindings.setBinding(custom, for: .recognizeText, store: store)
+    T.checkEq("寫入後讀回同值",
+              OverlayKeyBindings.binding(for: .recognizeText, store: store), custom)
+    T.checkEq("其他動作不受影響",
+              OverlayKeyBindings.binding(for: .save, store: store),
+              OverlayKeyBindings.defaults[.save]!)
+
+    OverlayKeyBindings.clear(.recognizeText, store: store)
+    T.checkEq("清除後回預設",
+              OverlayKeyBindings.binding(for: .recognizeText, store: store),
+              OverlayKeyBindings.defaults[.recognizeText]!)
+
+    // 存壞資料 → 回預設，不崩
+    store.set("not json", forKey: "overlayKey.save")
+    T.checkEq("資料損毀時回預設",
+              OverlayKeyBindings.binding(for: .save, store: store),
+              OverlayKeyBindings.defaults[.save]!)
+
+    OverlayKeyBindings.setBinding(custom, for: .pickColor, store: store)
+    T.checkEq("all() 含自訂值", OverlayKeyBindings.all(store: store)[.pickColor], custom)
+    T.checkEq("all() 涵蓋所有動作",
+              Set(OverlayKeyBindings.all(store: store).keys), Set(OverlayAction.allCases))
+
+    for a in OverlayAction.allCases { store.removeObject(forKey: "overlayKey.\(a.rawValue)") }
+    UserDefaults.standard.removeSuite(named: suiteName)
+}
