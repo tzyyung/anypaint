@@ -1,14 +1,17 @@
 import AppKit
 import KeyboardShortcuts
 
-/// 控制：全域快速鍵（recorder 純搬移）＋滑鼠（唯讀固定綁定一覽）兩子分頁。
-/// 子頁切換只顯隱、視窗高度不變（容器高取兩者較高者）。
+/// 控制：全域快速鍵（recorder 純搬移）＋框選中（框選內功能鍵，可自訂）＋滑鼠（唯讀固定綁定一覽）三子分頁。
+/// 子頁切換只顯隱、視窗高度不變（容器高取三者較高者）。
 final class ControlSettingsViewController: NSViewController {
-    private let segment = NSSegmentedControl(labels: ["全域快速鍵", "滑鼠"],
+    private let segment = NSSegmentedControl(labels: ["全域快速鍵", "框選中", "滑鼠"],
                                              trackingMode: .selectOne,
                                              target: nil, action: nil)
     private var keysView: NSView!
+    private var overlayView: NSView!
     private var mouseView: NSView!
+    private var overlayFields: [OverlayAction: OverlayKeyRecorderField] = [:]
+    private var overlayWarnings: [OverlayAction: NSTextField] = [:]
 
     override func loadView() {
         segment.target = self
@@ -16,12 +19,14 @@ final class ControlSettingsViewController: NSViewController {
         segment.selectedSegment = 0
 
         keysView = buildKeysView()
+        overlayView = buildOverlayView()
+        overlayView.isHidden = true
         mouseView = buildMouseView()
         mouseView.isHidden = true
 
-        // 兩子 view 疊放同一容器：各自 pin 頂/左/右，容器底 ≥ 兩者底（高取較高者）
+        // 三子 view 疊放同一容器：各自 pin 頂/左/右，容器底 ≥ 三者底（高取較高者）
         let container = NSView()
-        for sub in [keysView!, mouseView!] {
+        for sub in [keysView!, overlayView!, mouseView!] {
             sub.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(sub)
             NSLayoutConstraint.activate([
@@ -42,7 +47,8 @@ final class ControlSettingsViewController: NSViewController {
 
     @objc private func segmentChanged() {
         keysView.isHidden = segment.selectedSegment != 0
-        mouseView.isHidden = segment.selectedSegment != 1
+        overlayView.isHidden = segment.selectedSegment != 1
+        mouseView.isHidden = segment.selectedSegment != 2
     }
 
     private func buildKeysView() -> NSView {
@@ -72,6 +78,84 @@ final class ControlSettingsViewController: NSViewController {
         row.orientation = .horizontal
         row.spacing = 8
         return row
+    }
+
+    /// 框選中的功能鍵。與全域快鍵分開呈現——全域鍵只負責啟動，進到框選後鍵盤屬於 app。
+    private func buildOverlayView() -> NSView {
+        let rows: [(String, OverlayAction)] = [
+            ("重拍：", .reshoot),
+            ("取色：", .pickColor),
+            ("存檔：", .save),
+            ("另存為：", .saveAs),
+            ("存檔並開啟：", .saveAndOpen),
+            ("辨識文字：", .recognizeText),
+        ]
+        var fieldRows: [NSView] = []
+        for (title, action) in rows {
+            let label = NSTextField(labelWithString: title)
+            label.alignment = .right
+            label.setContentHuggingPriority(.required, for: .horizontal)
+            label.widthAnchor.constraint(equalToConstant: 92).isActive = true
+
+            let warning = NSTextField(labelWithString: "")
+            warning.font = .systemFont(ofSize: 11)
+            warning.textColor = .systemOrange
+            overlayWarnings[action] = warning
+
+            let field = OverlayKeyRecorderField(
+                binding: OverlayKeyBindings.binding(for: action)
+            ) { [weak self] new in
+                if let new {
+                    OverlayKeyBindings.setBinding(new, for: action)
+                } else {
+                    OverlayKeyBindings.clear(action)
+                }
+                self?.overlayFields[action]?.binding = OverlayKeyBindings.binding(for: action)
+                self?.refreshOverlayWarnings()
+            }
+            overlayFields[action] = field
+
+            let row = NSStackView(views: [label, field, warning])
+            row.orientation = .horizontal
+            row.spacing = 8
+            fieldRows.append(row)
+        }
+
+        let hint = NSTextField(labelWithString: "點一下欄位再按下想要的組合即可更改；按清除鈕可回到預設。")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        fieldRows.append(hint)
+
+        let stack = NSStackView(views: fieldRows)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        refreshOverlayWarnings()
+        return stack
+    }
+
+    /// 互撞提示：只在真的有動作被遮蔽時說話，一切正常時完全不出現。
+    private func refreshOverlayWarnings() {
+        let shadowed = OverlayKeyBindings.shadowed(in: OverlayKeyBindings.all())
+        for (action, field) in overlayWarnings {
+            if let winner = shadowed[action] {
+                let combo = OverlayKeyRecorderField.displayString(for: OverlayKeyBindings.binding(for: action))
+                field.stringValue = "\(combo) 已用於「\(Self.actionName(winner))」——換一個沒被使用的組合"
+            } else {
+                field.stringValue = ""
+            }
+        }
+    }
+
+    private static func actionName(_ action: OverlayAction) -> String {
+        switch action {
+        case .reshoot: return "重拍"
+        case .pickColor: return "取色"
+        case .save: return "存檔"
+        case .saveAs: return "另存為"
+        case .saveAndOpen: return "存檔並開啟"
+        case .recognizeText: return "辨識文字"
+        }
     }
 
     private func buildMouseView() -> NSView {
