@@ -79,9 +79,9 @@ final class SelectionOverlayController {
         self.onRecognizeText = onRecognizeText
         self.onPin = onPin
         self.onCancel = onCancel
-        // 反向互斥（spec §9.1）：凍結框選中擋 ⌘⇧X。AppDelegate.beginScrollCapture 的
-        // .freeze guard 已守一層，這裡快鍵層再 disable 是雙保險（spec 明確要求兩者都做）。
-        KeyboardShortcuts.disable(.scrollCapture)
+        // 全域鍵只負責啟動——框選開著時鍵盤屬於 app，否則 Carbon 會在系統層把事件攔走，
+        // 本地監聽器收不到（實測：截圖鍵設 ⌘T 時框選內的 ⌘T 完全到不了）。
+        KeyboardShortcuts.disable(MenuBarController.allShortcuts)
 
         NSApp.activate(ignoringOtherApps: true)
         buildWindows(snapshots: snapshots)
@@ -414,7 +414,7 @@ final class SelectionOverlayController {
         onPin = nil
         onCancel = nil
         isActive = false
-        KeyboardShortcuts.enable(.scrollCapture)   // 反向互斥解除（spec §9.1）
+        KeyboardShortcuts.enable(MenuBarController.allShortcuts)   // 反向互斥解除（spec §9.1）
     }
 }
 
