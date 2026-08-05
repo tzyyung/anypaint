@@ -143,57 +143,43 @@ final class SelectionOverlayController {
                 return event   // 修飾鍵事件一律放行，別破壞系統/IME 的修飾鍵狀態
             }
             self?.armWatchdog()          // 任何鍵都算互動（含文字編輯中打字）
-            // R：重拍——把目前 overlay 的操作畫面連同工具本身拍進新快照。
-            // 比照 C：排除修飾鍵、文字編輯／組字中不攔（讓 r 正常打進編輯器）。
-            // async 空窗期用 reshootInFlight 擋連按。
-            if let self,
-               !event.modifierFlags.contains(.command),
-               !event.modifierFlags.contains(.control),
-               !event.modifierFlags.contains(.option),
-               event.charactersIgnoringModifiers?.lowercased() == "r",
-               !self.reshootInFlight,
-               !self.windows.compactMap({ $0.selectionView }).contains(where: { $0.isEditingText }) {
-                self.reshootInFlight = true
-                self.onReshoot?()
-                return nil
-            }
-            // C：取色（放大鏡顯示中）。文字編輯中不攔——讓 c 正常打進編輯器。
-            if !event.modifierFlags.contains(.command),
-               !event.modifierFlags.contains(.control),
-               !event.modifierFlags.contains(.option),
-               event.charactersIgnoringModifiers?.lowercased() == "c",
-               let views = self?.windows.compactMap({ $0.selectionView }),
-               !views.contains(where: { $0.isEditingText }),
-               let hovered = views.first(where: { $0.activeLoupePoint() != nil }) {
-                hovered.copyLoupeColor()
-                return nil
-            }
-            // ⌘S：存到預設資料夾；⌘⇧S：另存為（Save As 慣例）；⌘O：存檔並用外部程式開啟；
-            // ⌘T：辨識文字／QR 並複製。有有效框才作用。
-            // 走監聽器不走 view keyDown——nonactivating panel 被點擊前收不到 responder 事件
-            // （取色 Shift 的同一教訓）。文字編輯中也攔：四條路徑都會先落字再動作（與複製同紀律）。
-            // ⇧⌘O／⇧⌘T 未定義 → 不攔，讓事件過去。
-            if event.modifierFlags.contains(.command),
-               !event.modifierFlags.contains(.control),
-               !event.modifierFlags.contains(.option),
-               let key = event.charactersIgnoringModifiers?.lowercased(),
-               key == "s" || ((key == "o" || key == "t") && !event.modifierFlags.contains(.shift)),
-               let views = self?.windows.compactMap({ $0.selectionView }),
-               !views.contains(where: { $0.isComposingText }),   // 組字中讓位 IME（比照 Esc）
-               // 多螢幕兩邊都有框：優先「使用者最後互動的視窗」（比照看門狗搶救歸屬）
-               let target = (self?.lastInteractedWindow?.selectionView.flatMap { $0.hasValidSelection ? $0 : nil })
-                            ?? views.first(where: { $0.hasValidSelection }) {
-                switch key {
-                case "o": target.openConfirm()
-                case "t": target.recognizeTextConfirm()
-                default:
-                    if event.modifierFlags.contains(.shift) {
-                        target.saveAsConfirm()
-                    } else {
-                        target.saveConfirm()
+            // 綁定改為可自訂（見 OverlayKeyBinding.swift）。解析只回「哪個動作」，
+            // 能不能做由下面的情境守門決定——守門條件與改動前逐條相同。
+            if let chars = event.charactersIgnoringModifiers,
+               let action = OverlayKeyBindings.resolve(
+                   character: chars,
+                   modifiers: OverlayModifiers(event: event.modifierFlags),
+                   bindings: OverlayKeyBindings.all()) {
+                let views = (self?.windows ?? []).compactMap { $0.selectionView }
+                switch action {
+                case .reshoot:
+                    if let self, !self.reshootInFlight,
+                       !views.contains(where: { $0.isEditingText }) {
+                        self.reshootInFlight = true
+                        self.onReshoot?()
+                        return nil
+                    }
+                case .pickColor:
+                    if !views.contains(where: { $0.isEditingText }),
+                       let hovered = views.first(where: { $0.activeLoupePoint() != nil }) {
+                        hovered.copyLoupeColor()
+                        return nil
+                    }
+                case .save, .saveAs, .saveAndOpen, .recognizeText:
+                    if !views.contains(where: { $0.isComposingText }),
+                       let target = (self?.lastInteractedWindow?.selectionView
+                                        .flatMap { $0.hasValidSelection ? $0 : nil })
+                                    ?? views.first(where: { $0.hasValidSelection }) {
+                        switch action {
+                        case .save: target.saveConfirm()
+                        case .saveAs: target.saveAsConfirm()
+                        case .saveAndOpen: target.openConfirm()
+                        case .recognizeText: target.recognizeTextConfirm()
+                        default: break
+                        }
+                        return nil
                     }
                 }
-                return nil
             }
             if event.keyCode == 53 {
                 let views = (self?.windows ?? []).compactMap { $0.selectionView }

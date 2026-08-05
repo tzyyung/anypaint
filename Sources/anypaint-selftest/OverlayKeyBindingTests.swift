@@ -115,3 +115,14 @@ func overlayKeyBindingStoreTests() {
     for a in OverlayAction.allCases { store.removeObject(forKey: "overlayKey.\(a.rawValue)") }
     UserDefaults.standard.removeSuite(named: suiteName)
 }
+
+func overlayModifiersFromEventTests() {
+    T.checkEq("只取關心的位元：capsLock 被忽略",
+              OverlayModifiers(event: [.command, .capsLock]), OverlayModifiers([.command]))
+    T.checkEq("function 位被忽略",
+              OverlayModifiers(event: [.shift, .function]), OverlayModifiers([.shift]))
+    T.checkEq("四個都取得到",
+              OverlayModifiers(event: [.command, .shift, .control, .option]),
+              OverlayModifiers([.command, .shift, .control, .option]))
+    T.checkEq("空的就是空的", OverlayModifiers(event: []), OverlayModifiers([]))
+}

@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// 框選中可自訂的功能。raw value 同時作為 UserDefaults key 後綴，不可隨意改名。
 public enum OverlayAction: String, CaseIterable, Sendable {
@@ -108,5 +108,18 @@ public enum OverlayKeyBindings {
         var result: [OverlayAction: OverlayKeyBinding] = [:]
         for a in OverlayAction.allCases { result[a] = binding(for: a, store: store) }
         return result
+    }
+}
+
+extension OverlayModifiers {
+    /// 只取四個關心的位元——NSEvent 的 flags 還含 capsLock/function/numericPad 等，
+    /// 直接整包比對會因為那些雜訊位而永遠不相等。
+    public init(event flags: NSEvent.ModifierFlags) {
+        var m: OverlayModifiers = []
+        if flags.contains(.command) { m.insert(.command) }
+        if flags.contains(.shift) { m.insert(.shift) }
+        if flags.contains(.control) { m.insert(.control) }
+        if flags.contains(.option) { m.insert(.option) }
+        self = m
     }
 }
