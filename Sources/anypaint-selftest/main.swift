@@ -1318,4 +1318,6 @@ checkEq("img2webp arguments 空frames",
         Img2webpEngine.arguments(delaysMs: [], frames: [], output: "/tmp/out.webp"),
         ["-loop", "0", "-o", "/tmp/out.webp"])
 
+overlayKeyBindingResolveTests()
+
 T.finish()
