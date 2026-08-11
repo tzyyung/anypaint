@@ -180,7 +180,13 @@ final class PinWindow: NSPanel {
     func copyToPasteboard() {
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.writeObjects([pinImage])
+        // 走 PinboardService.imageItem（PNG）而不是 writeObjects([pinImage])：NSImage 只註冊
+        // 未壓縮的 public.tiff，全螢幕 Retina 尺寸實測 20.5 MB。理由詳見該方法的註解。
+        if let item = PinboardService.imageItem(for: pinImage) {
+            pb.writeObjects([item])
+        } else {
+            pb.writeObjects([pinImage])
+        }
     }
 
     // Esc（透過 responder chain 的標準取消動作）→ 關閉。

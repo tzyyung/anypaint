@@ -1324,5 +1324,7 @@ overlayKeyBindingConflictTests()
 overlayKeyBindingStoreTests()
 overlayModifiersFromEventTests()
 overlayKeyDisplayStringTests()
+pasteboardPayloadTests()
+pasteboardRoundTripTests()
 
 T.finish()

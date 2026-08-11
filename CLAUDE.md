@@ -116,6 +116,42 @@ Carbon 熱鍵本來就不看哪個視窗持有鍵盤焦點。
 動作中的任何一個，框選期間仍保留該熱鍵可按」，但目前決定維持現狀（全部停用比部分停用
 好推理、好維護）。之後若要「修」這個情境，先確認是不是要推翻這個決定，不要當成疏漏改掉。
 
+### 剪貼簿不要放 NSImage——那是未壓縮的 TIFF（2026-08-11 實測）
+`pasteboard.writeObjects([NSImage])` **只註冊 `public.tiff`，而且未壓縮**。實測（2880×1864
+像素的全螢幕 Retina 選區）：
+
+| 放法 | 剪貼簿上宣告的酬載 | 貼上後點數尺寸 | 只認 TIFF 的接收端 |
+|---|---|---|---|
+| `writeObjects([NSImage])` | **20.5 MB** | 正確 | 拿得到 |
+| `NSPasteboardItem` 只放 PNG | **117 KB**（文字類）／2.7 MB（隨機雜訊最壞） | 正確（見下） | **仍拿得到** |
+
+三件實測結論：
+
+1. **只放 PNG 不犧牲相容性**——macOS 會在有人索取 `public.tiff` 時**即時從 PNG 合成**
+   （`pasteboard.data(forType: .tiff)` 仍有值），而合成的那份**不在 `item.types` 裡**，
+   所以剪貼簿觀察者掃不到它。`NSImage(pasteboard:)`、`readObjects(forClasses:[NSImage.self])`
+   都照樣讀得到。
+2. **`rep.size` 必須設成點數尺寸**，不是多餘賦值：PNG 以它寫入解析度。少了它，接收端讀回的
+   點數會等於像素數，Retina 截圖貼到其他 app **變成兩倍大**。
+3. 為什麼在意 20 MB：剪貼簿上的**每個觀察者**都要把宣告的型別整份讀一次（通用剪貼簿會把
+   內容往其他裝置推、遠端桌面類工具會同步），不只是最終貼上的那個 app。
+
+**這個改動與 promise 無關，不要拿它去解剪貼簿卡死。** 兩種寫法 anypaint 都**沒有**掛
+promise：`writeObjects([NSImage])` 不是（NSImage 沒實作 `writingOptions`），只放 PNG 也不是
+——實測寫入行程**結束之後**，另一個行程仍拿得到 `public.tiff`（1200×800px 那份 3.84 MB／
+4.6 ms），所以按需那份是剪貼簿服務轉的，不是寫入端履行的。剪貼簿卡死若出現，要查的是**誰
+用 `setOwner:forTypes:` 掛了 promise**（2026-08-11 實例：TeamViewer 的剪貼簿同步在
+`CFPasteboardHandleFulfillMessage` 解析自己掛的 promise 時死鎖，anypaint 不在阻塞鏈上）。
+
+也不要「PNG＋TIFF 兩份都明放」：實測那樣觀察者掃到的量回到 14.7 MB，而 TIFF 本來就要得到。
+
+`PinboardService.imageItem(for:)` 是唯一出口，三個複製點（一般截圖、長圖、貼圖視窗）都走它，
+取不到點陣資料時回 `nil` 讓呼叫端降級回 `writeObjects([image])`——寧可放大一點的 TIFF，
+也不要靜默弄丟使用者的複製。
+
+**注意 `CaptureSaver.writePNG(cgImage:to:)` 不寫 DPI**（`CGImageDestination` 直寫原生像素），
+所以不能拿它產生的檔案位元組直接充剪貼簿——尺寸會跑掉。剪貼簿那份要在記憶體另外編碼。
+
 ### 生命週期方法的隱性副作用
 `present()` 開頭呼叫 `dismiss()` 當「清乾淨」，而 `dismiss()` 會把回呼設成 nil ——
 呼叫端「先設回呼、再 present」的話回呼**立刻被抹掉**，症狀是整條流程靜默失效。
