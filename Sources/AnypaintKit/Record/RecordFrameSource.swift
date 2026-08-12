@@ -180,10 +180,23 @@ public final class RecordFrameSource: NSObject {
     }
     public var onStreamError: ((Error) -> Void)?
 
+    /// SCK 音訊格式的實機證明（sampleRate／channels／interleaved），供 `RecordAudioSelfCheck`
+    /// 記錄——這是「WriterBox 收到的 CMSampleBuffer 到底長什麼樣」的唯一觀察點，不是
+    /// `RecordAudioTracks` 編碼設定（那是我們自己指定的輸出格式，不代表 SCK 實際給的輸入格式）。
+    public struct AudioBufferInfo: Sendable {
+        public let sampleRate: Double
+        public let channels: Int
+        public let isInterleaved: Bool
+    }
+    public var onFirstAudioBuffer: ((AudioBufferInfo) -> Void)?
+
     private var stream: SCStream?
     private var pendingStop = false
     private var outputURL: URL?
     private let sampleQueue = DispatchQueue(label: "anypaint.record.frames")
+    /// 只在 sampleQueue 上讀寫（同 `box` 的豁免理由：這個 handler 只在單一序列佇列上跑，
+    /// 天然無競爭）。只記錄「第一個音訊格」，之後恆為 true，避免每格都重算 ASBD。
+    private nonisolated(unsafe) var loggedFirstAudioBuffer = false
     /// nonisolated：handler 在 sampleQueue 上直接讀（同 ScrollFrameSource.ciContext 的編譯器限制
     /// 說明，但這裡是可變的 var，多一條額外保證要記清楚）。**豁免理由（fix round 3 再次校正——
     /// round 2 只讓 `abort()` 遵守，`stopAndFinish()` 當時仍是漏網之魚，這裡把敘述改成兩者
@@ -407,6 +420,19 @@ extension RecordFrameSource: SCStreamOutput, SCStreamDelegate {
                                    of type: SCStreamOutputType) {
         guard type == .screen else {
             box?.appendAudio(sb, type: type)   // 音訊不帶 SCFrameStatus，不做 status gate
+            if !loggedFirstAudioBuffer,
+               let fmt = CMSampleBufferGetFormatDescription(sb),
+               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fmt) {
+                loggedFirstAudioBuffer = true
+                let info = AudioBufferInfo(sampleRate: asbd.pointee.mSampleRate,
+                                           channels: Int(asbd.pointee.mChannelsPerFrame),
+                                           isInterleaved: (asbd.pointee.mFormatFlags
+                                                           & kAudioFormatFlagIsNonInterleaved) == 0)
+                // 讀 self.onFirstAudioBuffer 必須在跳進 MainActor 之後才做（同 onStreamError 的
+                // 既有慣例）：這個 handler 是 nonisolated，直接在這裡讀 MainActor-isolated 的
+                // stored property 是不允許的。
+                Task { @MainActor [info] in self.onFirstAudioBuffer?(info) }
+            }
             return
         }
         // 只收 .complete；.idle/.blank 不可進 writer（否則黑首格＋時長錯——設計文件 §3）

@@ -35,5 +35,19 @@ else
 fi
 pkill -x anypaint 2>/dev/null || true
 
+echo "== L2: 音訊自檢 =="
+rm -f /tmp/anypaint-audio-selfcheck.log
+open -n "$ROOT/build.noindex/anypaint.app" --args --audio-selfcheck
+for _ in $(seq 1 60); do [ -f /tmp/anypaint-audio-selfcheck.log ] && grep -q -- "----" /tmp/anypaint-audio-selfcheck.log 2>/dev/null && break; sleep 1; done
+# 判準與錄影自檢同款邏輯：只在全部檢查跑完時才會寫「---- 全部通過 ----」。
+# 音量鍵靜音不影響此自檢（實測：系統音量 0 時 SCK 仍撈得到全振幅系統聲，見
+# docs/animated-capture.md §7「音訊」），因此不需要 osascript 調音量的兜底。
+if [ -f /tmp/anypaint-audio-selfcheck.log ] && grep -q "全部通過" /tmp/anypaint-audio-selfcheck.log; then
+    echo "   音訊自檢 PASS"
+else
+    echo "   音訊自檢 FAIL（或無 log——檢查螢幕錄製權限）"; cat /tmp/anypaint-audio-selfcheck.log 2>/dev/null; FAIL=1
+fi
+pkill -x anypaint 2>/dev/null || true
+
 echo; [ "$FAIL" -eq 0 ] && echo "== 總結: PASS ==" || echo "== 總結: FAIL =="
 exit $FAIL

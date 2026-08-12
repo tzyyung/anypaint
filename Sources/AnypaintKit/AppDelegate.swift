@@ -49,6 +49,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var scrollSelfCheck: ScrollCaptureSelfCheck?
     /// 動畫截圖內建自檢（--record-selfcheck）：同上，跑完寫檔即結束。
     private var recordSelfCheck: RecordSelfCheck?
+    /// 音訊自檢（--audio-selfcheck）：同上，跑完寫檔即結束。
+    private var audioSelfCheck: RecordAudioSelfCheck?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         // 必須用啟動參數（不是環境變數）：從終端直跑 binary 時 TCC 把螢幕錄製的責任歸給終端機
@@ -64,6 +66,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--record-selfcheck") {
             let check = RecordSelfCheck()
             recordSelfCheck = check
+            check.run()
+            return
+        }
+        if CommandLine.arguments.contains("--audio-selfcheck") {
+            let check = RecordAudioSelfCheck()
+            audioSelfCheck = check
             check.run()
             return
         }
