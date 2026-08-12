@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "anypaint",
     platforms: [
-        .macOS(.v14)  // ScreenCaptureKit 的 SCScreenshotManager.captureImage 需要 macOS 14+
+        .macOS(.v15)  // ScreenCaptureKit captureMicrophone／SCRecordingOutput 需要 macOS 15+
     ],
     dependencies: [
         // 本機 vendored（見 vendored/KeyboardShortcuts）：patch 過 .localized 修 C1 資源崩潰；
