@@ -70,7 +70,7 @@ scroll_selfcheck() {
 }
 
 verify_all() {
-    echo "==> 一鍵驗證（L1 selftest → build → L2 錄影自檢）"
+    echo "==> 一鍵驗證（L1 selftest → build → L2 錄影自檢＋音訊自檢）"
     bash "${ROOT}/scripts/verify.sh"
 }
 
@@ -97,7 +97,7 @@ while true; do
   6) 建立持久簽章身分（避免權限每次重置）
   7) 從 /Applications 移除 anypaint
   8) 滾動截圖自檢（自動，不需互動）
-  9) 一鍵驗證（L1 selftest ＋ build ＋ L2 錄影自檢）
+  9) 一鍵驗證（L1 selftest ＋ build ＋ L2 錄影自檢＋音訊自檢）
   0) 離開
 ===================================
 MENU

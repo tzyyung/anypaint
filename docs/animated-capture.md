@@ -446,9 +446,24 @@ excludesOwnAudio: false)`（**`excludesOwnAudio: false`**——自檢要聽到�
 實測：`sampleRate=48000.0 channels=2 interleaved=false`——SCK 的系統聲原始格式是 48kHz 雙聲道
 **非交錯**（planar）float。
 
-結果寫 `/tmp/anypaint-audio-selfcheck.log`（`PASS:`／`FAIL:` 前綴，同 `RecordSelfCheck` 慣例，
-全部通過時最後一行是「---- 全部通過 ----」），跑完自動 `exit`。啟動同樣**必須 `open -n`**
-（既有實例會吃掉 `--args`，見 §8）。
+結果寫 `/tmp/anypaint-audio-selfcheck.log`（純文字，一行一筆；逐項檢查用 `✅`／`❌` 行首，
+早退路徑——無主螢幕、測試音源啟動失敗、stream 啟動失敗——用 `FAIL ` 開頭，**不是** `PASS:`／
+`FAIL:` 這種帶冒號的前綴慣例；全部通過時最後一行是「---- 全部通過 ----」，有失敗則是
+「---- 有 N 項失敗 ----」），跑完自動 `exit`（`exitCode` 對應是否有失敗）。啟動同樣**必須
+`open -n`**（既有實例會吃掉 `--args`，見 §8）。
+
+**其他觀察（本輪修復波記錄）**：
+
+- **升 macOS 15 後匯出路徑有 3 個 `AVAssetExportSession` 棄用警告**：`RecordPreviewWindow.swift`
+  的剪裁匯出 MP4 路徑（`exportAsynchronously(completionHandler:)`／`status`／`error` 三個成員）
+  在 macOS 15+ SDK 下建置各印一個棄用警告，官方建議遷移到 `export(to:as:) async throws`。目前
+  仍可正常建置與運作（deprecated ≠ 移除），列為待遷項目，不影響本輪功能，不阻塞驗證。
+- **空音軌實測結論**：開了 `captureSystemAudio`／`captureMicrophone`（`RecordAudioTracks` 因此
+  建了對應的 `AVAssetWriterInput`），但整段錄製期間該來源實際上零 `CMSampleBuffer` 送達時，
+  `WriterBox.finish` 仍正常完成（`writer.status == .completed`），輸出檔裡對應的那條音軌
+  **完全不會出現**（`tracks(withMediaType: .audio).count` 反映的是實際寫入的軌數，不是設定開了
+  幾個開關）——這不是失敗路徑，一次性 probe 實測證實，`RecordAudioTests.swift` 有對應 case
+  釘住這個結論。
 
 **系統音量不影響此自檢**：2026-08-12 實測把系統輸出音量調到 0 再跑一次，440Hz 能量仍是
 0.237（比開著音量的兩次跑法 0.174／0.174 還略高，屬正常誤差範圍），遠高於絕對門檻——
