@@ -6,15 +6,22 @@ FAIL=0
 
 echo "== L1: selftest =="
 OUT=$(cd "$ROOT" && swift run -c release anypaint-selftest 2>&1)
+RUN_RC=$?
 PASS_N=$(echo "$OUT" | grep -c "^✅"); FAIL_N=$(echo "$OUT" | grep -c "^❌")
-echo "   ✅ $PASS_N  ❌ $FAIL_N"
-[ "$FAIL_N" -eq 0 ] || { echo "$OUT" | grep "^❌"; FAIL=1; }
+echo "   exit=$RUN_RC ✅ $PASS_N  ❌ $FAIL_N"
+# 三種失敗都要抓：❌>0（測試沒過）、exit!=0（編譯失敗或 swift run 本身 crash）、
+# PASS_N=0（在印出任何✅之前就掛了——只看 FAIL_N 的話這種情況會被誤判成通過）。
+if [ "$FAIL_N" -ne 0 ] || [ "$RUN_RC" -ne 0 ] || [ "$PASS_N" -eq 0 ]; then
+    echo "$OUT" | grep "^❌"
+    echo "$OUT" | tail -40
+    FAIL=1
+fi
 
 echo "== build app (release) =="
 "$ROOT/scripts/build_app.sh" release >/dev/null || FAIL=1
 
 echo "== L2: 錄影自檢 =="
-pkill -f "anypaint.app" 2>/dev/null || true
+pkill -x anypaint 2>/dev/null || true
 sleep 1
 rm -f /tmp/anypaint-record-selfcheck.log
 open -n "$ROOT/build.noindex/anypaint.app" --args --record-selfcheck
@@ -26,7 +33,7 @@ if [ -f /tmp/anypaint-record-selfcheck.log ] && grep -q "全部通過" /tmp/anyp
 else
     echo "   錄影自檢 FAIL（或無 log——檢查螢幕錄製權限）"; cat /tmp/anypaint-record-selfcheck.log 2>/dev/null; FAIL=1
 fi
-pkill -f "anypaint.app" 2>/dev/null || true
+pkill -x anypaint 2>/dev/null || true
 
 echo; [ "$FAIL" -eq 0 ] && echo "== 總結: PASS ==" || echo "== 總結: FAIL =="
 exit $FAIL
