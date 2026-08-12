@@ -118,6 +118,8 @@ public final class RecordSession {
                     options.captureMicrophone = false   // 降級續錄，不中斷（spec §3）
                     self.hud.showTransientNotice("🎙 麥克風權限未授予，本次未錄麥克風")
                 }
+                // 錄製真正開始處：用降級後的 options 設定 HUD 徽章，與實際錄到的音軌一致。
+                self.hud.micActive = options.captureMicrophone
                 try await self.frameSource.start(selectionGlobal: selectionGlobal, screen: screen,
                                                  ringWindowNumber: ringNumber, outputURL: url,
                                                  options: options)

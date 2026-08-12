@@ -32,6 +32,12 @@ public final class RecordHUDController: NSObject {
     /// 短暫提示行（例如麥克風權限降級），預設隱藏；樣式照 durationSuffix。
     private let noticeLabel = NSTextField(labelWithString: "")
     private var mode: Mode = .armed
+    /// 錄製中是否包含麥克風（Task 13；由 RecordSession 用降級後的 options 設定）。
+    /// 影響 updateClock 的徽章前綴，本身不驅動任何佈局。
+    public var micActive = false
+    /// showTransientNotice 的隱藏計時器：存起來才能在 3 秒內第二次呼叫時取消上一顆
+    /// （T11 審查移交必修 b——否則兩次提示疊加時，第一顆計時器會把第二次的提示提前關掉）。
+    private var noticeHideWork: DispatchWorkItem?
 
     public override init() { super.init() }
 
@@ -59,7 +65,8 @@ public final class RecordHUDController: NSObject {
     }
 
     public func updateClock(elapsed: Double, limit: Double?) {
-        clockLabel.stringValue = "● " + RecordMath.hudClockText(elapsedSeconds: elapsed, limitSeconds: limit)
+        let prefix = micActive ? "🎙 ● " : "● "
+        clockLabel.stringValue = prefix + RecordMath.hudClockText(elapsedSeconds: elapsed, limitSeconds: limit)
         clockLabel.textColor = .systemRed
     }
 
@@ -75,13 +82,18 @@ public final class RecordHUDController: NSObject {
         onCancel = nil
     }
 
-    /// 短暫提示（3 秒自動清除）：借用既有 clockLabel 樣式下方另一行黃字（Task 13 再加常駐 🎙 徽章）。
+    /// 短暫提示（3 秒自動清除）：借用既有 clockLabel 樣式下方另一行黃字。
+    /// 隱藏用可取消的 DispatchWorkItem（T11 審查移交必修 b）：3 秒內再呼叫一次，先取消
+    /// 舊的隱藏排程再重新排 3 秒，避免第一顆計時器把第二次的提示提前關掉。
     public func showTransientNotice(_ text: String) {
+        noticeHideWork?.cancel()
         noticeLabel.stringValue = text
         noticeLabel.isHidden = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+        let work = DispatchWorkItem { [weak self] in
             self?.noticeLabel.isHidden = true
         }
+        noticeHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 
     private func buildPanel() {
@@ -129,9 +141,15 @@ public final class RecordHUDController: NSObject {
         noticeLabel.font = .systemFont(ofSize: 12, weight: .regular)
         noticeLabel.lineBreakMode = .byTruncatingTail
         noticeLabel.isHidden = true
+        // T11 審查移交必修 (a)：版面擠爆時 clockLabel（跳動中的錄製時鐘）不得先被壓縮——
+        // clockLabel 已是 .defaultLow(250)，noticeLabel 給更低的優先度，擠爆時先讓 noticeLabel
+        // 的寬度讓步（它本來就有 lineBreakMode 截尾兜底）。
+        noticeLabel.setContentCompressionResistancePriority(
+            NSLayoutConstraint.Priority(rawValue: 200), for: .horizontal)
 
-        // 佈局：clockLabel 左、（durationField／durationSuffix，僅 armed）、primaryButton／cancelButton 右、
-        // noticeLabel（隱藏時不佔位，Task 13 常駐徽章前的暫用版）。
+        // 佈局：clockLabel 左（🎙 徽章前綴內建於其文字，不佔獨立位置）、
+        // （durationField／durationSuffix，僅 armed）、primaryButton／cancelButton 右、
+        // noticeLabel（隱藏時不佔位）。
         let stack = NSStackView(views: [clockLabel, durationField, durationSuffix, primaryButton, cancelButton, noticeLabel])
         stack.orientation = .horizontal
         stack.alignment = .centerY
