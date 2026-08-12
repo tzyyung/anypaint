@@ -68,6 +68,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         UITestServer.startIfRequested()
+        UITestServer.shared?.commandHandler = { [weak self] command in self?.handleUITestCommand(command) }
         // app 啟動時清一次殘留暫存母帶（上次 crash/強退遺留）。只能在真正的啟動路徑呼叫一次：
         // 若放進上面 selfcheck 分支或任何其他路徑，`open -n` 開的第二個實例可能在另一個實例
         // 錄製中途把它的暫存母帶當「殘留」刪掉。
@@ -252,7 +253,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 動畫截圖：拉框 → 錄製 → 預覽
 
-    private func beginAnimatedCapture() {
+    /// - Parameter rect: 非 nil＝RPC 自動化路徑（`UITestServer` `startRecord` 命令），跳過拉框互動，
+    ///   直接以此全域矩形進入 armed 並開始錄製（`RecordSession.startProgrammatically`）；
+    ///   nil＝熱鍵／選單路徑，走既有拉框流程（`RecordSession.begin`）。除了選區來源，
+    ///   權限預檢、快鍵互斥、`onFinished` 收尾全部共用同一段，不重複兩份。
+    private func beginAnimatedCapture(rect: CGRect? = nil) {
         switch activeMode {
         case .record: recordSession.cancelIfActive(); return   // 再按＝armed 取消／recording 停止收檔
         case .freeze, .scroll: return                            // 凍結／滾動中 → 不疊加
@@ -283,8 +288,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 await self.recordPreviewController?.present(movieURL: url, vars: vars, captureScale: captureScale)
             }
         }
-        recordSession.begin()
-        // begin() 在無主螢幕時會靜默 no-op（onFinished 永不 fire）——
+        if let rect { recordSession.startProgrammatically(rect: rect) } else { recordSession.begin() }
+        // begin()／startProgrammatically() 在無主螢幕時會靜默 no-op（onFinished 永不 fire）——
         // 若沒真的進場就立刻把剛 disable 的快鍵/選單恢復，否則其餘三入口永久失效需重啟。
         guard recordSession.isActive else {
             KeyboardShortcuts.enable(.capture, .pin, .scrollCapture)
@@ -302,6 +307,43 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindowController?.showWindow(nil)
         settingsWindowController?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - RPC 自動化（`--uitest`／`AppSettings.allowLocalAutomation` 才會有 `UITestServer.shared`；
+    // 正常啟動這個方法永遠不會被呼叫——見 `UITestServer.startIfRequested()`）。
+
+    /// `UITestServer.commandHandler` 的接線出口。回 `nil`＝「不是我認的命令」，讓
+    /// `UITestServer.handle` 照原邏輯走 `unknownCommand`（見該檔案 default 分支）。
+    private func handleUITestCommand(_ command: UITestChannel.Command) -> [String: Any]? {
+        switch command.cmd {
+        case "startRecord":
+            guard let rectStr = command.json["rect"] as? String,
+                  let rect = Self.parseRect(rectStr) else {
+                return ["ok": false, "error": "badRect"]
+            }
+            beginAnimatedCapture(rect: rect)
+            return ["ok": recordSession.isActive]
+        case "stopRecord":
+            recordSession.cancelIfActive()   // 走與熱鍵相同入口：recording 中＝停止並保留母帶
+            return ["ok": true]
+        case "abortRecord":
+            recordSession.abortIfActive()    // 不論哪個 active 狀態都丟棄（同 Esc／取消鈕）
+            return ["ok": true]
+        case "openSettings":
+            openSettings()
+            return ["ok": true]
+        default:
+            return nil
+        }
+    }
+
+    /// 解析 `"x,y,w,h"`（AppKit 全域座標，點）。四段都要是合法數字，否則回 nil。
+    private static func parseRect(_ s: String) -> CGRect? {
+        let parts = s.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 4 else { return nil }
+        let nums = parts.compactMap { Double($0) }
+        guard nums.count == 4 else { return nil }
+        return CGRect(x: nums[0], y: nums[1], width: nums[2], height: nums[3])
     }
 
     // MARK: - 權限

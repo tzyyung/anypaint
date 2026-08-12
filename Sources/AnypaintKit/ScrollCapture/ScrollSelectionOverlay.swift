@@ -73,6 +73,18 @@ public final class ScrollSelectionOverlayController {
         self.window = window
     }
 
+    /// 程式化鎖定（RPC 自動化用，`RecordSession.startProgrammatically` 消費）：跳過拖曳互動，
+    /// 建視窗後直接以給定全域矩形鎖定選區——走與滑鼠 `mouseUp` 鎖定**完全相同**的
+    /// `onSelectionLocked` 回呼路徑（`ScrollSelectionView.lockProgrammatically` 觸發同一個
+    /// closure），呼叫端不必另外處理 armed 進場。呼叫前一樣要先設好回呼（同 `present()` 的規定）。
+    public func presentLocked(_ globalRect: CGRect, on screen: NSScreen) {
+        present(on: screen)
+        let local = CGRect(x: globalRect.minX - screen.frame.minX,
+                           y: globalRect.minY - screen.frame.minY,
+                           width: globalRect.width, height: globalRect.height)
+        window?.selectionView?.lockProgrammatically(local)
+    }
+
     /// capturing：放行滑鼠／滾輪給底下的活畫面；view 淡出遮罩只剩框線。
     public func enterCapturing() {
         window?.ignoresMouseEvents = true
@@ -203,6 +215,16 @@ final class ScrollSelectionView: NSView {
         needsDisplay = true
         // armed 中調框才回報 onSelectionChanged；selecting 階段的拉框在 mouseUp 一次性鎖定。
         if mode == .armed, let sel = selection { onSelectionChanged?(sel) }
+    }
+
+    /// 程式化鎖定（RPC 自動化）：跳過拖曳，直接設定選區並走與 `mouseUp` 鎖定相同的
+    /// 收尾（`mode = .armed` ＋觸發 `onSelectionLocked`），不複製鎖定邏輯。
+    func lockProgrammatically(_ rect: CGRect) {
+        let clamped = clampToBounds(rect)
+        selection = clamped
+        mode = .armed
+        needsDisplay = true
+        onSelectionLocked?(clamped)
     }
 
     override func mouseUp(with event: NSEvent) {

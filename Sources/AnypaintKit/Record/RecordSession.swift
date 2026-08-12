@@ -58,12 +58,55 @@ public final class RecordSession {
         armWatchdog(seconds: AppSettings.overlayWatchdogSeconds)
     }
 
+    /// RPC 自動化入口（`UITestServer` `startRecord` 命令消費）：跳過拉框互動，直接以給定
+    /// 全域矩形進入 armed 並開始錄製——與熱鍵入口 `begin()` 共用 `enterArmed`／`startRecording`
+    /// 這段既有啟動碼（不複製邏輯），差別只在選區來源是參數而不是滑鼠拖曳：
+    /// `ScrollSelectionOverlayController.presentLocked` 觸發與滑鼠 `mouseUp` 鎖定完全相同的
+    /// `onSelectionLocked` 回呼，進而呼叫 `enterArmed`。
+    /// - Parameter rect: AppKit 全域座標（點，左下原點）。
+    public func startProgrammatically(rect: CGRect) {
+        guard state == .idle, let screen = Self.screen(containing: rect) else { return }
+        self.screen = screen
+        state = .selecting
+        overlay.onSelectionLocked = { [weak self] sel, scr in self?.enterArmed(sel, scr) }
+        overlay.onSelectionChanged = { [weak self] sel in
+            guard let self, let scr = self.screen else { return }
+            self.enterArmed(sel, scr)
+        }
+        overlay.onCancelRequested = { [weak self] in self?.cancel() }
+        overlay.presentLocked(rect, on: screen)
+        installEscMonitor()
+        armWatchdog(seconds: AppSettings.overlayWatchdogSeconds)
+        // 自動化沒有滑鼠可按「開始」鍵：選區夠大時直接接著走完 armed → recording
+        // （選區太小時 enterArmed 只停在 armed 顯示訊息，這裡不強行往下推，行為與互動路徑一致）。
+        if state == .armed { startRecording() }
+    }
+
+    /// `rect` 中心點命中的螢幕；命中不到（跨螢幕邊界外、螢幕熱插拔瞬間）退回滑鼠所在螢幕
+    /// （與 `screenUnderMouse()` 同一套退路，不重複實作）。
+    private static func screen(containing rect: CGRect) -> NSScreen? {
+        let screens = NSScreen.screens
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        if let i = ScrollCoords.screenIndex(containing: center, screenFrames: screens.map(\.frame)) {
+            return screens[i]
+        }
+        return ScrollCaptureSession.screenUnderMouse()
+    }
+
     /// 再按快鍵的語意：recording 中＝停止收檔（不是丟棄——使用者按快鍵最可能想結束並拿結果）；
     /// 其餘 active 狀態（selecting/armed/finishing）＝取消。finishing 由 `cancel()` 自己擋掉
     /// （不接受取消，見該方法），這裡不必特判。
     public func cancelIfActive() {
         if state == .recording { stopRecording(); return }
         if isActive { cancel() }
+    }
+
+    /// RPC `abortRecord`：不論目前處於哪個 active 狀態都強制取消並丟棄母帶（同 Esc／取消鈕）。
+    /// 與 `cancelIfActive()` 不同——後者在 `.recording` 中視為「停止並保留」（熱鍵語意）；
+    /// 這裡不管有沒有在錄，一律丟棄，供自動化明確表達「不要這次結果」。
+    public func abortIfActive() {
+        guard isActive else { return }
+        cancel()
     }
 
     private func enterArmed(_ selection: CGRect, _ scr: NSScreen) {
@@ -123,6 +166,7 @@ public final class RecordSession {
                 try await self.frameSource.start(selectionGlobal: selectionGlobal, screen: screen,
                                                  ringWindowNumber: ringNumber, outputURL: url,
                                                  options: options)
+                UITestServer.shared?.emit("recordingStarted", [:])   // 錄製真正開始（stream 已起）
             } catch {
                 // state != .recording 代表 await 期間已經被 cancel()／stopRecording() 处理過
                 // （各自的路徑已經 teardown＋發過 onFinished，不能在這裡重發第二次）。
@@ -181,6 +225,7 @@ public final class RecordSession {
                 guard self.state == .finishing else { return }   // 期間被 cancel（防二次 onFinished）
                 self.teardown()
                 self.onFinished?(url, scale)
+                UITestServer.shared?.emit("recordingStopped", ["outputURL": url.path])
             } catch {
                 guard self.state == .finishing else { return }
                 self.teardown()
@@ -202,6 +247,7 @@ public final class RecordSession {
         teardown()
         if wasRecording { Task { await frameSource.abort() } }      // 丟母帶＋刪暫存
         onFinished?(nil, screen?.backingScaleFactor ?? 2)
+        UITestServer.shared?.emit("recordingAborted", [:])
     }
 
     // MARK: 看門狗／Esc／teardown

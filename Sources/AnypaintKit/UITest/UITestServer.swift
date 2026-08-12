@@ -31,6 +31,11 @@ public final class UITestServer {
     private var port: CFMessagePort?
     private var seq = 0
 
+    /// 命令接線出口（AppDelegate 在 `startIfRequested()` 之後設）：內建命令（getState／dumpUI／
+    /// screenshotSelf）之外的命令都先問這個閉包。回 `nil`（閉包本身是 nil，或閉包執行後回 nil＝
+    /// 「不是我認的命令」）都照走原本的 `unknownCommand`——不是「有 handler 就必定認得」。
+    public var commandHandler: ((UITestChannel.Command) -> [String: Any]?)?
+
     public static func startIfRequested() {
         guard CommandLine.arguments.contains("--uitest")
                 || AppSettings.allowLocalAutomation else { return }
@@ -107,6 +112,9 @@ public final class UITestServer {
             }
             return reply(["ok": true, "paths": paths])
         default:
+            if let result = commandHandler?(command) {
+                return reply(result)
+            }
             return reply(["ok": false, "error": "unknownCommand:\(command.cmd)"])
         }
     }
