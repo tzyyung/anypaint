@@ -236,4 +236,13 @@ public enum AppSettings {
         get { UserDefaults.standard.object(forKey: recordUseHEVCKey) as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: recordUseHEVCKey) }
     }
+
+    // MARK: - UI 自動化
+
+    private static let allowLocalAutomationKey = "allowLocalAutomation"
+    /// 自動化通道的常駐閘門（--uitest 之外的第二條）。預設關——混淆代理人對策 (a)。
+    public static var allowLocalAutomation: Bool {
+        get { UserDefaults.standard.object(forKey: allowLocalAutomationKey) as? Bool ?? false }
+        set { UserDefaults.standard.set(newValue, forKey: allowLocalAutomationKey) }
+    }
 }

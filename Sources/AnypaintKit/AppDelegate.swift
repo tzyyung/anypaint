@@ -67,6 +67,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             check.run()
             return
         }
+        UITestServer.startIfRequested()
         // app 啟動時清一次殘留暫存母帶（上次 crash/強退遺留）。只能在真正的啟動路徑呼叫一次：
         // 若放進上面 selfcheck 分支或任何其他路徑，`open -n` 開的第二個實例可能在另一個實例
         // 錄製中途把它的暫存母帶當「殘留」刪掉。

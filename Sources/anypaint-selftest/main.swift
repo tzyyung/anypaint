@@ -1328,5 +1328,6 @@ pasteboardPayloadTests()
 pasteboardRoundTripTests()
 recordOptionsTests()
 makeStreamConfigurationTests()
+uitestProtocolTests()
 
 T.finish()
