@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 
 /// 截圖：框選相關（看門狗）。邏輯自 SettingsWindowController 純搬移。
 final class CaptureSettingsViewController: NSViewController {
@@ -9,6 +10,8 @@ final class CaptureSettingsViewController: NSViewController {
     private let recordClickRingCheckbox = NSButton(checkboxWithTitle: "點擊時顯示高亮圈", target: nil, action: nil)
     private let recordGifFpsPopup = NSPopUpButton()
     private let recordUseHEVCCheckbox = NSButton(checkboxWithTitle: "MP4 使用 HEVC（檔案較小，舊裝置相容性較差）", target: nil, action: nil)
+    private let recordSystemAudioCheckbox = NSButton(checkboxWithTitle: "錄製系統聲音", target: nil, action: nil)
+    private let recordMicCheckbox = NSButton(checkboxWithTitle: "錄製麥克風", target: nil, action: nil)
 
     override func loadView() {
         let watchdogHint = NSTextField(labelWithString:
@@ -54,8 +57,17 @@ final class CaptureSettingsViewController: NSViewController {
         recordUseHEVCCheckbox.target = self
         recordUseHEVCCheckbox.action = #selector(recordUseHEVCToggled)
 
+        recordSystemAudioCheckbox.state = AppSettings.recordSystemAudio ? .on : .off
+        recordSystemAudioCheckbox.target = self
+        recordSystemAudioCheckbox.action = #selector(recordSystemAudioToggled)
+
+        recordMicCheckbox.state = AppSettings.recordMicrophone ? .on : .off
+        recordMicCheckbox.target = self
+        recordMicCheckbox.action = #selector(recordMicToggled)
+
         let stack = NSStackView(views: [heading, recordCursorCheckbox, recordClickRingCheckbox,
-                                        buildRecordGifFpsRow(), buildGifskiHintLabel(), recordUseHEVCCheckbox])
+                                        buildRecordGifFpsRow(), buildGifskiHintLabel(), recordUseHEVCCheckbox,
+                                        recordSystemAudioCheckbox, recordMicCheckbox])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -108,6 +120,30 @@ final class CaptureSettingsViewController: NSViewController {
 
     @objc private func recordUseHEVCToggled() {
         AppSettings.recordUseHEVC = (recordUseHEVCCheckbox.state == .on)
+    }
+
+    @objc private func recordSystemAudioToggled() {
+        AppSettings.recordSystemAudio = (recordSystemAudioCheckbox.state == .on)
+    }
+
+    /// 開啟時才要求麥克風權限；使用者拒絕就把設定值與 checkbox 都彈回關閉（不留假象的「開」）。
+    @objc private func recordMicToggled() {
+        guard recordMicCheckbox.state == .on else {
+            AppSettings.recordMicrophone = false
+            return
+        }
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            DispatchQueue.main.async {
+                AppSettings.recordMicrophone = granted
+                self.recordMicCheckbox.state = granted ? .on : .off
+                if !granted {
+                    let alert = NSAlert()
+                    alert.messageText = "需要麥克風權限"
+                    alert.informativeText = "請到「系統設定 › 隱私權與安全性 › 麥克風」開啟 anypaint。"
+                    alert.runModal()
+                }
+            }
+        }
     }
 
     @objc private func recordCursorToggled() {

@@ -9,6 +9,10 @@ final class GeneralSettingsViewController: NSViewController {
                                           target: nil, action: nil)
     private let approvalHint = NSTextField(labelWithString:
         "系統要求核准：請到「系統設定 → 一般 → 登入項目」允許 anypaint。")
+    private let allowLocalAutomationCheckbox = NSButton(checkboxWithTitle: "允許本機自動化（anypaintctl）",
+                                                         target: nil, action: nil)
+    private let allowLocalAutomationHint = NSTextField(labelWithString:
+        "開啟後本機程式可遙控 anypaint 截圖／錄影（重啟後生效）。")
 
     override func loadView() {
         launchCheckbox.target = self
@@ -16,7 +20,15 @@ final class GeneralSettingsViewController: NSViewController {
         approvalHint.font = .systemFont(ofSize: 11)
         approvalHint.textColor = .secondaryLabelColor
         approvalHint.isHidden = true
-        let stack = NSStackView(views: [launchCheckbox, approvalHint])
+
+        allowLocalAutomationCheckbox.state = AppSettings.allowLocalAutomation ? .on : .off
+        allowLocalAutomationCheckbox.target = self
+        allowLocalAutomationCheckbox.action = #selector(allowLocalAutomationToggled)
+        allowLocalAutomationHint.font = .systemFont(ofSize: 11)
+        allowLocalAutomationHint.textColor = .secondaryLabelColor
+
+        let stack = NSStackView(views: [launchCheckbox, approvalHint,
+                                        allowLocalAutomationCheckbox, allowLocalAutomationHint])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -45,5 +57,9 @@ final class GeneralSettingsViewController: NSViewController {
             NSLog("anypaint: 開機啟動設定失敗 \(error)")
         }
         refreshFromSystem()   // 以系統實況回彈——失敗時 checkbox 不會停在錯誤狀態
+    }
+
+    @objc private func allowLocalAutomationToggled() {
+        AppSettings.allowLocalAutomation = (allowLocalAutomationCheckbox.state == .on)
     }
 }

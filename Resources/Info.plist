@@ -26,5 +26,7 @@
 	<!-- 螢幕錄製權限的系統彈窗會自動出現；此描述供系統設定顯示用途 -->
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>anypaint 需要螢幕錄製權限才能擷取畫面內容以供截圖與貼圖。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>錄製動畫截圖時收錄麥克風聲音（可在設定中關閉）。</string>
 </dict>
 </plist>
