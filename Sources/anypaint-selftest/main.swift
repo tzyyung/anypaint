@@ -1326,5 +1326,6 @@ overlayModifiersFromEventTests()
 overlayKeyDisplayStringTests()
 pasteboardPayloadTests()
 pasteboardRoundTripTests()
+recordOptionsTests()
 
 T.finish()
