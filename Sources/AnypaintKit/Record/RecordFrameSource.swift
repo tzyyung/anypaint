@@ -19,9 +19,10 @@ public enum RecordError: Error {
 /// `stopAndFinish`／`abort` 用 `sampleQueue.async` 派工呼叫，不直接在 MainActor 上碰內部狀態。
 /// 內部沒有任何跨佇列直接讀寫的路徑，因此把整個型別標成 Sendable 是安全的——真正的隔離
 /// 邊界在呼叫端（誰負責派工進 sampleQueue），不是靠編譯器逐一檢查每個 stored property。
-final class WriterBox: @unchecked Sendable {
+public final class WriterBox: @unchecked Sendable {
     private let writer: AVAssetWriter
     private let input: AVAssetWriterInput
+    private let audio: RecordAudioTracks
     private var sessionStarted = false
     /// 保留最後一格供停止時補尾。**永久佔掉 SCK IOSurface 池一張**——queueDepth 必須 ≥ 5
     /// （nonstrict 原註解；本 stream 設 6）。
@@ -36,7 +37,7 @@ final class WriterBox: @unchecked Sendable {
     /// - Parameter options: `useHEVC` 決定 codec——false＝H.264（預設）、true＝HEVC。檔案仍是
     ///   .mp4（hevc-in-mp4 合法）。位元率因子隨 codec 切換：H.264 沿用 Azayaka 原公式 0.9；
     ///   HEVC 用 0.9×0.5＝0.45（同款 Azayaka 公式的 hevc 因子，設計文件 §1.8）。
-    init(outputURL: URL, pixelWidth: Int, pixelHeight: Int, options: RecordOptions) throws {
+    public init(outputURL: URL, pixelWidth: Int, pixelHeight: Int, options: RecordOptions) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
         // Azayaka 位元率公式 + QuickRecorder 20 萬下限；30fps、Rec.709
         let bitrateFactor = options.useHEVC ? 0.45 : 0.9
@@ -58,11 +59,13 @@ final class WriterBox: @unchecked Sendable {
         input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         input.expectsMediaDataInRealTime = true   // 全部實戰專案一致；ready=false 時丟格不排隊
         writer.add(input)
+        audio = RecordAudioTracks(options: options)
+        audio.attach(to: writer)
         writer.startWriting()                     // 立刻 startWriting；session 懶啟動（防黑首格）
     }
 
     /// sampleQueue 上呼叫。只收 .complete 的 buffer（呼叫端已 gate）。
-    func append(_ sb: CMSampleBuffer) {
+    public func append(_ sb: CMSampleBuffer) {
         // isTerminal：finish()/cancel() 呼叫過就不能再 append——`markAsFinished()` 之後
         // `writer.status` 在 finishWriting 完成前仍會回報 .writing（非同步收尾的空窗期），
         // 只靠 status 擋不住這段時間遲到的格子（曾經是真的 crash 路徑）。
@@ -76,10 +79,16 @@ final class WriterBox: @unchecked Sendable {
         lastSampleBuffer = sb
     }
 
+    /// sampleQueue 上呼叫；gate 同 append（isTerminal／status），session gate 交給 audio.append。
+    public func appendAudio(_ sb: CMSampleBuffer, type: SCStreamOutputType) {
+        guard !isTerminal, writer.status == .writing else { return }
+        audio.append(sb, type: type, sessionStarted: sessionStarted)
+    }
+
     /// sampleQueue 上呼叫（stream 已停）。補尾格 → endSession → finalize。
     /// - Parameter nowUptime: 停止當下的 host clock 秒數（ProcessInfo.systemUptime；
     ///   SCK 的 PTS 在 host clock 上，**不可用 Date**——設計文件 §3）。
-    func finish(nowUptime: TimeInterval, completion: @escaping (Result<Void, RecordError>) -> Void) {
+    public func finish(nowUptime: TimeInterval, completion: @escaping (Result<Void, RecordError>) -> Void) {
         guard !isTerminal else {
             // 已經 finish 或 cancel 過一次——冪等：不重做，也不再碰 writer。
             completion(.failure(.writerFailed(nil)))
@@ -118,6 +127,7 @@ final class WriterBox: @unchecked Sendable {
         }
         writer.endSession(atSourceTime: endPTS)
         input.markAsFinished()
+        audio.markFinished()
         writer.finishWriting { [writer] in
             // writer 可能在最後一步靜默失敗（QuickRecorder SCContext.swift:352 教訓）
             if writer.status == .completed { completion(.success(())) }

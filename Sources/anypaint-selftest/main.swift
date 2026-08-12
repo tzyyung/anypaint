@@ -1330,5 +1330,6 @@ recordOptionsTests()
 makeStreamConfigurationTests()
 uitestProtocolTests()
 goertzelTests()
+recordAudioTracksEndToEndTests()
 
 T.finish()

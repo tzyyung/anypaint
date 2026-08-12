@@ -5,10 +5,19 @@ import Foundation
 public struct RecordOptions: Equatable, Sendable {
     public var showsCursor: Bool
     public var useHEVC: Bool
+    public var captureSystemAudio: Bool
+    public var captureMicrophone: Bool
+    /// 正式流程 true（不錄自家音效）；只有音訊自檢設 false（要聽到自己播的檢測音）。
+    public var excludesOwnAudio: Bool
 
-    public init(showsCursor: Bool, useHEVC: Bool) {
+    public init(showsCursor: Bool, useHEVC: Bool,
+                captureSystemAudio: Bool = false, captureMicrophone: Bool = false,
+                excludesOwnAudio: Bool = true) {
         self.showsCursor = showsCursor
         self.useHEVC = useHEVC
+        self.captureSystemAudio = captureSystemAudio
+        self.captureMicrophone = captureMicrophone
+        self.excludesOwnAudio = excludesOwnAudio
     }
 
     nonisolated
