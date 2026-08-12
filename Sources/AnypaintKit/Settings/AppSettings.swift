@@ -237,6 +237,22 @@ public enum AppSettings {
         set { UserDefaults.standard.set(newValue, forKey: recordUseHEVCKey) }
     }
 
+    private static let recordSystemAudioKey = "recordSystemAudio"
+    private static let recordMicrophoneKey = "recordMicrophone"
+
+    /// 錄製時包含系統聲音（SCStreamConfiguration.capturesAudio）。預設開。
+    public static var recordSystemAudio: Bool {
+        get { UserDefaults.standard.object(forKey: recordSystemAudioKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: recordSystemAudioKey) }
+    }
+
+    /// 錄製時包含麥克風（需要 TCC 授權；未授權時啟動處會降級關閉，不中斷錄影——spec §3）。
+    /// 預設關。
+    public static var recordMicrophone: Bool {
+        get { UserDefaults.standard.object(forKey: recordMicrophoneKey) as? Bool ?? false }
+        set { UserDefaults.standard.set(newValue, forKey: recordMicrophoneKey) }
+    }
+
     // MARK: - UI 自動化
 
     private static let allowLocalAutomationKey = "allowLocalAutomation"

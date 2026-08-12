@@ -23,7 +23,9 @@ public struct RecordOptions: Equatable, Sendable {
     nonisolated
     public static func fromSettings() -> RecordOptions {
         RecordOptions(showsCursor: AppSettings.recordShowsCursor,
-                      useHEVC: AppSettings.recordUseHEVC)
+                      useHEVC: AppSettings.recordUseHEVC,
+                      captureSystemAudio: AppSettings.recordSystemAudio,
+                      captureMicrophone: AppSettings.recordMicrophone)
     }
 
     /// 自檢固定配方：判準確定性，不吃設定。

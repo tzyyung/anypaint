@@ -13,6 +13,22 @@ func recordOptionsTests() {
     UserDefaults.standard.removeObject(forKey: "recordUseHEVC")
     T.checkEq("options.selfCheck 固定配方", RecordOptions.selfCheck,
               RecordOptions(showsCursor: false, useHEVC: false))
+
+    // 清鍵後 fromSettings() 的音訊兩鍵預設：系統聲 true、麥克風 false。
+    UserDefaults.standard.removeObject(forKey: "recordSystemAudio")
+    UserDefaults.standard.removeObject(forKey: "recordMicrophone")
+    let defaults = RecordOptions.fromSettings()
+    T.checkEq("options.fromSettings 系統聲預設開", defaults.captureSystemAudio, true)
+    T.checkEq("options.fromSettings 麥克風預設關", defaults.captureMicrophone, false)
+
+    // 設鍵後 fromSettings() 跟著變。
+    UserDefaults.standard.set(false, forKey: "recordSystemAudio")
+    UserDefaults.standard.set(true, forKey: "recordMicrophone")
+    let toggled = RecordOptions.fromSettings()
+    T.checkEq("options.fromSettings 系統聲跟著設定變", toggled.captureSystemAudio, false)
+    T.checkEq("options.fromSettings 麥克風跟著設定變", toggled.captureMicrophone, true)
+    UserDefaults.standard.removeObject(forKey: "recordSystemAudio")
+    UserDefaults.standard.removeObject(forKey: "recordMicrophone")
 }
 
 nonisolated func makeStreamConfigurationTests() {

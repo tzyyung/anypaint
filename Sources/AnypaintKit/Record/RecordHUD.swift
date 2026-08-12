@@ -29,6 +29,8 @@ public final class RecordHUDController: NSObject {
     private let durationSuffix = NSTextField(labelWithString: "秒（空白＝不限）")
     private let primaryButton = NSButton(title: "開始", target: nil, action: nil)
     private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
+    /// 短暫提示行（例如麥克風權限降級），預設隱藏；樣式照 durationSuffix。
+    private let noticeLabel = NSTextField(labelWithString: "")
     private var mode: Mode = .armed
 
     public override init() { super.init() }
@@ -73,6 +75,15 @@ public final class RecordHUDController: NSObject {
         onCancel = nil
     }
 
+    /// 短暫提示（3 秒自動清除）：借用既有 clockLabel 樣式下方另一行黃字（Task 13 再加常駐 🎙 徽章）。
+    public func showTransientNotice(_ text: String) {
+        noticeLabel.stringValue = text
+        noticeLabel.isHidden = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.noticeLabel.isHidden = true
+        }
+    }
+
     private func buildPanel() {
         let p = RecordHUDPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 56),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -114,9 +125,14 @@ public final class RecordHUDController: NSObject {
         cancelButton.target = self
         cancelButton.action = #selector(cancelTapped)
 
-        // 佈局：clockLabel 左、（durationField／durationSuffix，僅 armed）、primaryButton／cancelButton 右
-        // （NSStackView，spec 骨架註記）。
-        let stack = NSStackView(views: [clockLabel, durationField, durationSuffix, primaryButton, cancelButton])
+        noticeLabel.textColor = .systemYellow
+        noticeLabel.font = .systemFont(ofSize: 12, weight: .regular)
+        noticeLabel.lineBreakMode = .byTruncatingTail
+        noticeLabel.isHidden = true
+
+        // 佈局：clockLabel 左、（durationField／durationSuffix，僅 armed）、primaryButton／cancelButton 右、
+        // noticeLabel（隱藏時不佔位，Task 13 常駐徽章前的暫用版）。
+        let stack = NSStackView(views: [clockLabel, durationField, durationSuffix, primaryButton, cancelButton, noticeLabel])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 10

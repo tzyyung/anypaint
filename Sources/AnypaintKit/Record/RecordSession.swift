@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 
 /// 動畫截圖協調者（設計文件 §2 狀態機）。組裝 overlay/HUD/frameSource/clickRing，
 /// 自己不做編碼，只管「誰在什麼時候呼叫誰」＋逃生路徑。整體對照 `ScrollCaptureSession`
@@ -111,9 +112,15 @@ public final class RecordSession {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
+                var options = RecordOptions.fromSettings()
+                if options.captureMicrophone,
+                   AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
+                    options.captureMicrophone = false   // 降級續錄，不中斷（spec §3）
+                    self.hud.showTransientNotice("🎙 麥克風權限未授予，本次未錄麥克風")
+                }
                 try await self.frameSource.start(selectionGlobal: selectionGlobal, screen: screen,
                                                  ringWindowNumber: ringNumber, outputURL: url,
-                                                 options: RecordOptions.fromSettings())
+                                                 options: options)
             } catch {
                 // state != .recording 代表 await 期間已經被 cancel()／stopRecording() 处理過
                 // （各自的路徑已經 teardown＋發過 onFinished，不能在這裡重發第二次）。
