@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import KeyboardShortcuts
 import UniformTypeIdentifiers
 
@@ -32,6 +33,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var ocrInFlight = false
 
     private var settingsWindowController: SettingsWindowController?
+
+    /// RPC 專用試音錶（`micProbeStart`/`micLevel`/`micProbeStop`）：與設定頁
+    /// `CaptureSettingsViewController` 自己持有的 `MicLevelMonitor` 是**兩個獨立實例**——取簡
+    /// （A7 brief 明確二選一，記錄選擇）。`MicLevelMonitor` 沒有 singleton 防同裝置多 session
+    /// （A6 審查已指出的已知限制）：若設定頁同時開著同一顆裝置，會有兩條 `AVCaptureSession`
+    /// 各自對同一裝置起 `AVCaptureDeviceInput`——實測（見 task-A7-report）沒有導致 crash，
+    /// 兩者各自拿到獨立的樣本流；正常自動化情境設定頁通常沒開，可接受。
+    private lazy var micProbeMonitor = MicLevelMonitor()
 
     /// 四入口互斥（spec §9.1）：任一 capture mode active 時其他入口 guard-return。
     /// preview 不佔 mode（session 已結束，開著可以再截）。
@@ -373,6 +382,32 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return ["ok": !recordSession.isActive, "state": "\(recordSession.state)"]
         case "openSettings":
             openSettings()
+            return ["ok": true]
+        case "micDevices":
+            let devices = AudioInputDeviceList.all().map {
+                ["uniqueID": $0.uniqueID, "name": $0.name, "isDefault": $0.isDefault] as [String: Any]
+            }
+            // `?? NSNull()`：`JSONSerialization` 不接受裸 `Optional<String>.none` 當 Any 值
+            // （不在它認得的型別清單內，會讓整個 `withJSONObject:` 呼叫失敗，見
+            // `UITestServer.reply` 的 `try?` 吞掉錯誤退化成空 `Data()`）——nil 必須顯式包成
+            // `NSNull()` 才序列化得出來。
+            return ["ok": true, "devices": devices,
+                    "systemDefaultID": AudioInputDeviceList.systemDefaultID() ?? NSNull()]
+        case "micProbeStart":
+            // 省略 "deviceID"（或傳空字串）＝系統預設，同 `MicLevelMonitor.start(deviceID:)`
+            // 對 nil 的既有語意。
+            let deviceID = command.json["deviceID"] as? String
+            micProbeMonitor.start(deviceID: (deviceID?.isEmpty == true) ? nil : deviceID)
+            // 附上目前的麥克風授權狀態：`MicLevelMonitor.start()` 未授權時是**靜默不啟動**
+            // （`latestLevel` 恆 0、不 crash，見該檔案註解），呼叫端光看 `{"ok":true}` 分辨不出
+            // 「已啟動只是還沒收到聲音」與「未授權所以根本沒起 session」——端到端煙霧測試
+            // 實測就撞過這個模糊地帶（task-A7-report），這裡直接把狀態攤開，不用呼叫端自己猜。
+            let authorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+            return ["ok": true, "authorized": authorized]
+        case "micLevel":
+            return ["ok": true, "level": micProbeMonitor.latestLevel]
+        case "micProbeStop":
+            micProbeMonitor.stop()
             return ["ok": true]
         default:
             return nil
