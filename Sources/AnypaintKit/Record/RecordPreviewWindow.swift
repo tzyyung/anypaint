@@ -14,13 +14,16 @@ final class RecordPreviewWindow: NSWindow {
     /// 內容區最小尺寸：icon 鈕比先前的文字按鈕窄很多，大幅下降（500→260）。實測（同慣例，
     /// icon 鈕固定 26×22pt——照抄 `SelectionToolbar.configureSymbolButton` 的固定尺寸，不是
     /// sizeToFit() 量出來的，那份參照本身就是「不管符號長怎樣，尺寸一律固定」的設計）：
-    /// 剪裁/還原剪裁/拍快照/開啟位置/丟棄各 26pt，分隔線 1pt；存檔▾（icon＋系統原生下拉箭頭）
+    /// 喇叭/剪裁/還原剪裁/拍快照/開啟位置/丟棄各 26pt，分隔線 1pt；存檔▾（icon＋系統原生下拉箭頭）
     /// 量到 30pt——這是本檔唯一新增的組合控件，不是抄來的，用一次性渲染腳本量出「icon 與箭頭
-    /// 不擠在一起」的寬度（過程見 fix round 報告）。排版元件共 7 個（5 顆按鈕＋1 分隔線＋1
-    /// 存檔▾），`SelectionToolbar.toolsRow` 用的 spacing 是 4pt（不是舊版文字按鈕列的 8pt），
-    /// 這裡跟著改：26×5+1+30=161，6 個間隔×4pt=24，hoverRow 本身需要 161+24=185pt。
-    /// 加 content 左右邊距 12×2=24 → 209pt。安全邊際抓 41pt（比前幾輪都寬——這是本檔第一次用
-    /// 「hover 說明列＋獨立狀態行」這種新佈局，穩妥起見多留）→ 250pt。
+    /// 不擠在一起」的寬度（過程見 fix round 報告）。排版元件共 8 個（6 顆按鈕＋1 分隔線＋1
+    /// 存檔▾——喇叭鈕算進這顆常數：即使沒有音軌時它是 `isHidden`，`minContentWidth` 是視窗
+    /// 尺寸下限，要用「所有按鈕都顯示」的最寬情況去算，不能假設它不在），`SelectionToolbar.toolsRow`
+    /// 用的 spacing 是 4pt（不是舊版文字按鈕列的 8pt），這裡跟著改：26×6+1+30=187，
+    /// 7 個間隔×4pt=28，hoverRow 本身需要 187+28=215pt。加 content 左右邊距 12×2=24 → 239pt。
+    /// 安全邊際抓 11pt（喇叭鈕加入後從前一輪的 41pt 被吃掉大半——這輪沒有新增「這是本檔第一次用
+    /// 某種新佈局」那種不確定性，250pt 這個常數維持不動，邊際數字純粹是新增一顆按鈕後重算出來的
+    /// 結果，不是刻意留寬）→ 250pt。
     static let minContentWidth: CGFloat = 250
     static let minContentHeight: CGFloat = 240
 
@@ -331,11 +334,24 @@ final class RecordPreviewWindow: NSWindow {
     /// 靜音切換：player 建立時預設 `isMuted = true`（循環播放不吵——spec §0），這顆鈕讓使用者
     /// 自行取消／恢復靜音，圖示同步換 slash/wave 兩態。只有偵測到母帶含音軌才會顯示（見
     /// `detectAudioTrack()`），沒有音軌時這顆鈕維持隱藏，不會被按到。
+    ///
+    /// **accessibilityDescription 兩態各給一個**（review 抓到的必修）：不能沿用初始建立時的
+    /// 那個值——`NSImage(systemSymbolName:accessibilityDescription:)` 每次呼叫都是全新的
+    /// `NSImage`，換圖就等於換掉整個 accessibility 描述，若這裡傳 `nil` 第一次點擊後 VoiceOver
+    /// 就聽不到鈕名了。文案跟 `configureSymbolButton` 建立時的初始值同一套邏輯：說的是「點下去
+    /// 會做什麼」，不是「目前是什麼狀態」（同 macOS 系統音量鈕的慣例）——靜音中（顯示
+    /// `speaker.slash`）→ 「取消靜音」；有聲中（顯示 `speaker.wave.2`）→ 「靜音」。
+    ///
+    /// toolTip／hover 說明**不跟著切換**：`setHelp()` 設的那行「預覽預設靜音，點一下切換播放
+    /// 聲音」本身就是狀態中立的通用說明（描述這顆鈕的功能，不是目前狀態），跟同檔
+    /// `restoreTrimButton`／`openLocationButton`——`isEnabled` 隨狀態變但 toolTip 文字固定
+    /// 不變——是同一個慣例，不需要另外處理。
     @objc private func toggleAudio() {
         guard let q = playerView?.player else { return }
         q.isMuted.toggle()
         audioButton.image = NSImage(systemSymbolName:
-            q.isMuted ? "speaker.slash" : "speaker.wave.2", accessibilityDescription: nil)
+            q.isMuted ? "speaker.slash" : "speaker.wave.2",
+            accessibilityDescription: q.isMuted ? "取消靜音" : "靜音")
     }
 
     /// 剪裁：原生 trim UI（設計文件 §1.6）。已查 AVKit header（`AVPlayerView.h`）：
