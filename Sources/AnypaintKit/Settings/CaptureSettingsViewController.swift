@@ -12,8 +12,19 @@ final class CaptureSettingsViewController: NSViewController {
     private let recordUseHEVCCheckbox = NSButton(checkboxWithTitle: "MP4 使用 HEVC（檔案較小，舊裝置相容性較差）", target: nil, action: nil)
     private let recordSystemAudioCheckbox = NSButton(checkboxWithTitle: "錄製系統聲音", target: nil, action: nil)
     private let recordMicCheckbox = NSButton(checkboxWithTitle: "錄製麥克風", target: nil, action: nil)
+    private let micDevicePopup = NSPopUpButton()
+    private let micLevelMeter = LevelMeterView()
+    private let micLevelMonitor = MicLevelMonitor()
+    /// 麥克風裝置選擇＋電平表那一列（漸進展開，`isHidden` 隨「錄製麥克風」開關連動）。
+    /// 在 `buildMicDetailRow()` 裡建構後才有值，`loadView` 一定先跑過那條路，之後才可能被
+    /// 其他方法（`recordMicToggled` 等）存取。
+    private var micDetailRow: NSView!
 
     override func loadView() {
+        micLevelMonitor.onLevel = { [weak self] level in
+            self?.micLevelMeter.level = level
+        }
+
         let watchdogHint = NSTextField(labelWithString:
             "無任何操作達此時間就自動取消框選（免按鍵的安全保險）。\n選「關閉」後將沒有免按鍵的自動逃生；Esc、右鍵、再按快鍵、工具列取消仍可用。")
         watchdogHint.usesSingleLineMode = false
@@ -65,13 +76,88 @@ final class CaptureSettingsViewController: NSViewController {
         recordMicCheckbox.target = self
         recordMicCheckbox.action = #selector(recordMicToggled)
 
+        let micRow = buildMicDetailRow()
+        micDetailRow = micRow
+
         let stack = NSStackView(views: [heading, recordCursorCheckbox, recordClickRingCheckbox,
                                         buildRecordGifFpsRow(), buildGifskiHintLabel(), recordUseHEVCCheckbox,
-                                        recordSystemAudioCheckbox, recordMicCheckbox])
+                                        recordSystemAudioCheckbox, recordMicCheckbox, micRow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         return stack
+    }
+
+    /// 麥克風裝置下拉＋即時電平表：漸進展開列，「錄製麥克風」勾上才顯示（`recordMicToggled`）。
+    private func buildMicDetailRow() -> NSView {
+        populateMicDevicePopup()
+        micDevicePopup.target = self
+        micDevicePopup.action = #selector(micDeviceChanged)
+        micDevicePopup.menu?.delegate = self   // 展開時重新列舉，涵蓋熱插拔（見 menuWillOpen）
+
+        micLevelMeter.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        micLevelMeter.heightAnchor.constraint(equalToConstant: 16).isActive = true
+
+        let row = NSStackView(views: [micDevicePopup, micLevelMeter])
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.isHidden = !AppSettings.recordMicrophone
+        return row
+    }
+
+    /// 重新列舉麥克風裝置：第一項固定「系統預設」（`representedObject == nil`），其餘來自
+    /// `AudioInputDeviceList.all()`。選中項一律以 `AppSettings.recordMicrophoneDeviceID`
+    /// （存值）為準，不看 popup 目前的暫時選中狀態——存值在新列出的清單裡找不到對應裝置
+    /// （拔線／幽靈裝置）就回退系統預設並清鍵。呼叫時機：`loadView`（首次）與
+    /// `menuWillOpen`（每次展開，涵蓋熱插拔）。
+    private func populateMicDevicePopup() {
+        let devices = AudioInputDeviceList.all()
+        if let saved = AppSettings.recordMicrophoneDeviceID,
+           !devices.contains(where: { $0.uniqueID == saved }) {
+            AppSettings.recordMicrophoneDeviceID = nil
+        }
+
+        micDevicePopup.removeAllItems()
+        micDevicePopup.addItem(withTitle: "系統預設")
+        for device in devices {
+            micDevicePopup.addItem(withTitle: device.name)
+            micDevicePopup.lastItem?.representedObject = device.uniqueID
+        }
+
+        let currentID = AppSettings.recordMicrophoneDeviceID
+        if let currentID, let idx = devices.firstIndex(where: { $0.uniqueID == currentID }) {
+            micDevicePopup.selectItem(at: idx + 1)   // +1：index 0 是固定的「系統預設」
+        } else {
+            micDevicePopup.selectItem(at: 0)
+        }
+    }
+
+    @objc private func micDeviceChanged() {
+        AppSettings.recordMicrophoneDeviceID = micDevicePopup.selectedItem?.representedObject as? String
+        updateMicMonitorState()
+    }
+
+    /// 依目前開關＋選中裝置決定電平監看的啟停，唯一出口——換裝置、開關切換、頁面顯示/隱藏
+    /// 都走這裡：`MicLevelMonitor.start()` 內部自己會先 stop 舊的，換裝置直接重掛即可，不需要
+    /// 呼叫端自己拆成「先 stop 再 start」兩步。
+    private func updateMicMonitorState() {
+        guard AppSettings.recordMicrophone else {
+            micLevelMonitor.stop()
+            return
+        }
+        micLevelMonitor.start(deviceID: AppSettings.recordMicrophoneDeviceID)
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        updateMicMonitorState()
+    }
+
+    /// 分頁切走／設定視窗關閉都會走這裡（NSTabViewController 的 view containment：非顯示中
+    /// 分頁的 view 本來就不在階層內），停掉電平監看，不留著背景還開著麥克風 session。
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        micLevelMonitor.stop()
     }
 
     /// GIF 編碼幀率（沿用上方 watchdog popup 的建構/選中/action 模式，設計文件 §1.2）。
@@ -127,16 +213,22 @@ final class CaptureSettingsViewController: NSViewController {
     }
 
     /// 開啟時才要求麥克風權限；使用者拒絕就把設定值與 checkbox 都彈回關閉（不留假象的「開」）。
+    /// 漸進展開：核取方塊狀態同步連動下方裝置選擇＋電平表列的顯示，並掛/停電平監看。
     @objc private func recordMicToggled() {
         guard recordMicCheckbox.state == .on else {
             AppSettings.recordMicrophone = false
+            micDetailRow.isHidden = true
+            micLevelMonitor.stop()
             return
         }
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             DispatchQueue.main.async {
                 AppSettings.recordMicrophone = granted
                 self.recordMicCheckbox.state = granted ? .on : .off
-                if !granted {
+                self.micDetailRow.isHidden = !granted
+                if granted {
+                    self.updateMicMonitorState()
+                } else {
                     let alert = NSAlert()
                     alert.messageText = "需要麥克風權限"
                     alert.informativeText = "請到「系統設定 › 隱私權與安全性 › 麥克風」開啟 anypaint。"
@@ -248,5 +340,12 @@ final class CaptureSettingsViewController: NSViewController {
 
     @objc private func scrollMaxHeightChanged() {
         AppSettings.scrollMaxHeightPx = scrollMaxHeightPopup.selectedTag()
+    }
+}
+
+extension CaptureSettingsViewController: NSMenuDelegate {
+    /// 麥克風裝置 popup 展開前重新列舉（涵蓋熱插拔）——見 `populateMicDevicePopup` 的呼叫時機說明。
+    func menuWillOpen(_ menu: NSMenu) {
+        populateMicDevicePopup()
     }
 }
