@@ -1333,5 +1333,6 @@ goertzelTests()
 recordAudioTracksEndToEndTests()
 audioInputDeviceTests()
 levelMathTests()
+levelMeterViewTests()
 
 T.finish()
