@@ -27,6 +27,7 @@ final class RecordAudioTracks {
         config.capturesAudio = options.captureSystemAudio
         config.excludesCurrentProcessAudio = options.excludesOwnAudio
         config.captureMicrophone = options.captureMicrophone
+        config.microphoneCaptureDeviceID = options.microphoneDeviceID
     }
 
     func attach(to writer: AVAssetWriter) {

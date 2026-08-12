@@ -29,6 +29,17 @@ func recordOptionsTests() {
     T.checkEq("options.fromSettings 麥克風跟著設定變", toggled.captureMicrophone, true)
     UserDefaults.standard.removeObject(forKey: "recordSystemAudio")
     UserDefaults.standard.removeObject(forKey: "recordMicrophone")
+
+    // 清鍵後 recordMicrophoneDeviceID 預設 nil。
+    UserDefaults.standard.removeObject(forKey: "recordMicrophoneDeviceID")
+    let noDevice = RecordOptions.fromSettings()
+    T.checkTrue("options.fromSettings 麥克風 deviceID 預設 nil", noDevice.microphoneDeviceID == nil)
+
+    // 設鍵後 fromSettings() 跟著變。
+    UserDefaults.standard.set("my-device-id", forKey: "recordMicrophoneDeviceID")
+    let withDevice = RecordOptions.fromSettings()
+    T.checkEq("options.fromSettings 麥克風 deviceID 跟著設定變", withDevice.microphoneDeviceID, "my-device-id")
+    UserDefaults.standard.removeObject(forKey: "recordMicrophoneDeviceID")
 }
 
 nonisolated func makeStreamConfigurationTests() {
@@ -54,4 +65,15 @@ nonisolated func makeStreamConfigurationTests() {
     T.checkTrue("config: 排除自家音效", a.excludesCurrentProcessAudio)
     T.checkTrue("config: 麥克風開", a.captureMicrophone)
     T.checkTrue("config: 預設仍全關", !c.capturesAudio && !c.captureMicrophone)
+
+    let withDeviceID = RecordFrameSource.makeStreamConfiguration(
+        sourceRect: .zero, pixelWidth: 8, pixelHeight: 8,
+        options: RecordOptions(showsCursor: false, useHEVC: false,
+                               captureMicrophone: true, microphoneDeviceID: "test-device-id"))
+    T.checkEq("config: 麥克風 deviceID 設定", withDeviceID.microphoneCaptureDeviceID, "test-device-id")
+
+    let noDeviceID = RecordFrameSource.makeStreamConfiguration(
+        sourceRect: .zero, pixelWidth: 8, pixelHeight: 8,
+        options: RecordOptions(showsCursor: false, useHEVC: false, captureMicrophone: true))
+    T.checkEq("config: 麥克風 deviceID 未設定為 nil", noDeviceID.microphoneCaptureDeviceID, nil)
 }

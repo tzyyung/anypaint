@@ -9,15 +9,18 @@ public struct RecordOptions: Equatable, Sendable {
     public var captureMicrophone: Bool
     /// 正式流程 true（不錄自家音效）；只有音訊自檢設 false（要聽到自己播的檢測音）。
     public var excludesOwnAudio: Bool
+    /// 麥克風裝置 ID（nil＝系統預設）。
+    public var microphoneDeviceID: String?
 
     public init(showsCursor: Bool, useHEVC: Bool,
                 captureSystemAudio: Bool = false, captureMicrophone: Bool = false,
-                excludesOwnAudio: Bool = true) {
+                excludesOwnAudio: Bool = true, microphoneDeviceID: String? = nil) {
         self.showsCursor = showsCursor
         self.useHEVC = useHEVC
         self.captureSystemAudio = captureSystemAudio
         self.captureMicrophone = captureMicrophone
         self.excludesOwnAudio = excludesOwnAudio
+        self.microphoneDeviceID = microphoneDeviceID
     }
 
     // AppSettings 本身無隔離標註，nonisolated 如實反映；勿改回 @MainActor。
@@ -26,7 +29,8 @@ public struct RecordOptions: Equatable, Sendable {
         RecordOptions(showsCursor: AppSettings.recordShowsCursor,
                       useHEVC: AppSettings.recordUseHEVC,
                       captureSystemAudio: AppSettings.recordSystemAudio,
-                      captureMicrophone: AppSettings.recordMicrophone)
+                      captureMicrophone: AppSettings.recordMicrophone,
+                      microphoneDeviceID: AppSettings.recordMicrophoneDeviceID)
     }
 
     /// 自檢固定配方：判準確定性，不吃設定。

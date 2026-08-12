@@ -253,6 +253,20 @@ public enum AppSettings {
         set { UserDefaults.standard.set(newValue, forKey: recordMicrophoneKey) }
     }
 
+    private static let recordMicrophoneDeviceIDKey = "recordMicrophoneDeviceID"
+
+    /// 錄製麥克風裝置 ID（nil＝系統預設）。
+    public static var recordMicrophoneDeviceID: String? {
+        get { UserDefaults.standard.string(forKey: recordMicrophoneDeviceIDKey) }
+        set {
+            if let v = newValue {
+                UserDefaults.standard.set(v, forKey: recordMicrophoneDeviceIDKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: recordMicrophoneDeviceIDKey)
+            }
+        }
+    }
+
     // MARK: - UI 自動化
 
     private static let allowLocalAutomationKey = "allowLocalAutomation"
