@@ -14,11 +14,19 @@ public enum RecordError: Error {
 /// Aperture 一致）；補尾格＋endSession（nonstrict stop() 原碼）；status 檢查（QuickRecorder）。
 ///
 /// ### 執行緒約定（`@unchecked Sendable` 的成立條件，比照 `ScrollStitchEngine`）
-/// 這個類別的**所有**成員只能在呼叫端的單一序列佇列（`RecordFrameSource.sampleQueue`）上被
-/// 觸碰：`append` 在 stream handler 裡（已派進該佇列）呼叫；`finish`／`cancel` 由
-/// `stopAndFinish`／`abort` 用 `sampleQueue.async` 派工呼叫，不直接在 MainActor 上碰內部狀態。
-/// 內部沒有任何跨佇列直接讀寫的路徑，因此把整個型別標成 Sendable 是安全的——真正的隔離
-/// 邊界在呼叫端（誰負責派工進 sampleQueue），不是靠編譯器逐一檢查每個 stored property。
+/// 建構發生在呼叫端執行緒（實際上是 `RecordFrameSource.start()` 所在的 MainActor）；建構完成、
+/// 賦值給 `RecordFrameSource.box` 之後，這個類別的**所有**成員只能在呼叫端的單一序列佇列
+/// （`RecordFrameSource.sampleQueue`）上被觸碰：`append` 在 stream handler 裡（已派進該佇列）
+/// 呼叫；`finish`／`cancel` 由 `stopAndFinish`／`abort` 用 `sampleQueue.async` 派工呼叫，不直接
+/// 在 MainActor 上碰內部狀態。MainActor 建構、交棒給 sampleQueue 之間的 happens-before 靠
+/// `self.box = boxLocal` 這次賦值本身（Swift 的 memory model 保證單一變數賦值與之後任何讀取
+/// 之間有序，不需要額外的鎖或 barrier）。內部沒有任何跨佇列直接讀寫的路徑，因此把整個型別
+/// 標成 Sendable 是安全的——真正的隔離邊界在呼叫端（誰負責派工進 sampleQueue），不是靠編譯器
+/// 逐一檢查每個 stored property。
+///
+/// 公開（`public`）僅為了讓 selftest（獨立 target，只能走 `AnypaintKit` 的公開介面）做端到端
+/// 驗證；**唯一合法呼叫者是 `RecordFrameSource`**，其餘呼叫端若要用這個類別，必須自備跟
+/// `sampleQueue` 同等的單一序列佇列，否則上述執行緒約定不成立。
 public final class WriterBox: @unchecked Sendable {
     private let writer: AVAssetWriter
     private let input: AVAssetWriterInput
@@ -136,6 +144,9 @@ public final class WriterBox: @unchecked Sendable {
     }
 
     /// 取消：丟掉母帶。
+    /// `cancelWriting()` 對含 audio inputs 的 writer 一併拆掉（實測 probe 證實）；**不要**在此
+    /// 補 `audio.markFinished()`——`markAsFinished` 是 `finishWriting` 的前置動作，不是
+    /// `cancelWriting` 的，兩者不對稱。之後若被當成疏漏想「補上」，先重跑 probe 再動。
     func cancel() {
         guard !isTerminal else { return }   // 已經 finish 或 cancel 過一次——冪等
         isTerminal = true

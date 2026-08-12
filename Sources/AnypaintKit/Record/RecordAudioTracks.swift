@@ -36,9 +36,17 @@ final class RecordAudioTracks {
 
     /// gate：session 未啟動前丟（startSession 前 append 是 ObjC exception）；
     /// not-ready 丟 buffer（同影像 realtime 契約）。
+    /// 路由用顯式 switch、不用 fallback——非 .audio/.microphone 的 type（例如呼叫端傳錯把
+    /// 影像 buffer 誤送進這裡）直接丟棄，不能落到 systemInput：塞進 AAC input 的非音訊 buffer
+    /// 是 AVFoundation 的 ObjC exception，Swift 攔不到。
     func append(_ sb: CMSampleBuffer, type: SCStreamOutputType, sessionStarted: Bool) {
         guard sessionStarted else { return }
-        let input: AVAssetWriterInput? = (type == .microphone) ? micInput : systemInput
+        let input: AVAssetWriterInput?
+        switch type {
+        case .audio: input = systemInput
+        case .microphone: input = micInput
+        default: return
+        }
         guard let input, input.isReadyForMoreMediaData else { return }
         input.append(sb)
     }

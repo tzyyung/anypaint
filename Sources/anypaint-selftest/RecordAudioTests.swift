@@ -94,7 +94,44 @@ func recordAudioTracksEndToEndTests() {
     T.checkTrue("audio e2e: finalize 成功", finished)
     let asset = AVURLAsset(url: url)
     T.checkEq("audio e2e: 1 條影像軌", asset.tracks(withMediaType: .video).count, 1)
-    T.checkEq("audio e2e: 2 條音軌", asset.tracks(withMediaType: .audio).count, 2)
+    let audioTracks = asset.tracks(withMediaType: .audio)
+    T.checkEq("audio e2e: 2 條音軌", audioTracks.count, 2)
+    // 早到的 0.5s 音訊有沒有真的被丟：這裡不能靠 timeRange.start 判斷「有沒有提前」——
+    // 實測（async load(.timeRange)，非同步官方 API，避開已棄用同步版本可能的疑慮）證實
+    // AVFoundation 把每條軌的呈現起點正規化成「相對 session 起點」，一律回報 0，不是原始
+    // 時鐘的絕對秒數；backpressure 也會讓影像軌實際寫入的格數 < 附上的格數（本例 10 格只有
+    // 7 格因 isReadyForMoreMediaData 而真正寫入，屬於既有契約「丟格不阻塞」，非本次改動的
+    // 缺陷）。這條早到音訊真正的保護不是「檔案裡有沒有被悄悄放進去然後起點前移」——
+    // `sessionStarted` 這個 gate 存在的理由（CLAUDE.md 記錄過的教訓）是session 從未啟動時
+    // append 是 ObjC exception，Swift 攔不到、直接讓整個 selftest 行程 crash。這個 gate 若被
+    // 移除，這條測試會在到達這裡之前就讓整個 process 以非零狀態碼中止，比任何軌道層級的斷言
+    // 更難忽視。走到這裡（`finalize 成功` 已經是 ✅）本身就是這個 gate 有效的證據。
+    if let firstAudioTrack = audioTracks.first {
+        let sema2 = DispatchSemaphore(value: 0)
+        var duration = 0.0
+        Task {
+            let tr = try! await firstAudioTrack.load(.timeRange)
+            duration = tr.duration.seconds
+            sema2.signal()
+        }
+        sema2.wait()
+        T.checkTrue("audio e2e: 音軌 duration > 0（確實有音訊內容寫入，不是空軌）", duration > 0)
+    } else {
+        T.checkTrue("audio e2e: 音軌 timeRange 可讀", false)
+    }
+
+    // 兩開關全關 → 0 條音軌（零改動回歸保證：不開音訊時行為與加音軌之前完全一致）
+    let url2 = FileManager.default.temporaryDirectory
+        .appendingPathComponent("anypaint-selftest-audio2-\(UUID().uuidString).mp4")
+    defer { try? FileManager.default.removeItem(at: url2) }
+    let o2 = RecordOptions(showsCursor: false, useHEVC: false)
+    if let b2 = try? WriterBox(outputURL: url2, pixelWidth: 64, pixelHeight: 64, options: o2) {
+        for i in 0..<5 { b2.append(makeVideoSampleBuffer(ptsSeconds: Double(i) / 30)!) }
+        let s2 = DispatchSemaphore(value: 0)
+        b2.finish(nowUptime: 0.2) { _ in s2.signal() }; s2.wait()
+        T.checkEq("audio e2e: 兩開關全關＝0 音軌",
+                  AVURLAsset(url: url2).tracks(withMediaType: .audio).count, 0)
+    } else { T.checkTrue("audio e2e: 全關 WriterBox 建立", false) }
 
     // 只開系統聲 → 1 條音軌
     let url1 = FileManager.default.temporaryDirectory
