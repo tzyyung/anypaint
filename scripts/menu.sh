@@ -69,6 +69,11 @@ scroll_selfcheck() {
     pkill -x "${APP_NAME}" 2>/dev/null || true
 }
 
+verify_all() {
+    echo "==> 一鍵驗證（L1 selftest → build → L2 錄影自檢）"
+    bash "${ROOT}/scripts/verify.sh"
+}
+
 uninstall_app() {
     if [ -d "${INSTALLED_APP}" ]; then
         echo "==> 從 /Applications 移除 ${APP_NAME}"
@@ -92,6 +97,7 @@ while true; do
   6) 建立持久簽章身分（避免權限每次重置）
   7) 從 /Applications 移除 anypaint
   8) 滾動截圖自檢（自動，不需互動）
+  9) 一鍵驗證（L1 selftest ＋ build ＋ L2 錄影自檢）
   0) 離開
 ===================================
 MENU
@@ -106,6 +112,7 @@ MENU
         6) make_cert; pause ;;
         7) uninstall_app; pause ;;
         8) scroll_selfcheck; pause ;;
+        9) verify_all; pause ;;
         0|q|Q) echo "掰。"; break ;;
         *) echo "無效選項：${choice}" ;;
     esac
