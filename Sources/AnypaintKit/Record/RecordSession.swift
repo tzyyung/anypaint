@@ -112,9 +112,8 @@ public final class RecordSession {
             guard let self else { return }
             do {
                 try await self.frameSource.start(selectionGlobal: selectionGlobal, screen: screen,
-                                                 showsCursor: AppSettings.recordShowsCursor,
                                                  ringWindowNumber: ringNumber, outputURL: url,
-                                                 useHEVC: AppSettings.recordUseHEVC)
+                                                 options: RecordOptions.fromSettings())
             } catch {
                 // state != .recording 代表 await 期間已經被 cancel()／stopRecording() 处理過
                 // （各自的路徑已經 teardown＋發過 onFinished，不能在這裡重發第二次）。

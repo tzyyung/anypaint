@@ -70,9 +70,9 @@ public final class RecordSelfCheck {
         Task { @MainActor in
             do {
                 try await source.start(selectionGlobal: selection, screen: screen,
-                                       showsCursor: true, ringWindowNumber: nil,
+                                       ringWindowNumber: nil,
                                        outputURL: outputURL, excludeSelf: false,
-                                       useHEVC: false)   // 判準確定性，不吃設定（設計文件 §1.8）
+                                       options: .selfCheck)   // 判準確定性，不吃設定（設計文件 §1.8）
                 emit("stream 已啟動")
                 startContentUpdates()
                 armStop()
