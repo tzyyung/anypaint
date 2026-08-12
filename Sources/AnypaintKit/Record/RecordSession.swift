@@ -43,6 +43,36 @@ public final class RecordSession {
 
     public func begin() {
         guard state == .idle, let screen = ScrollCaptureSession.screenUnderMouse() else { return }
+        enterSelecting(on: screen) { overlay.present(on: screen) }
+    }
+
+    /// RPC 自動化入口（`UITestServer` `startRecord` 命令消費）：跳過拉框互動，直接以給定
+    /// 全域矩形進入 armed 並開始錄製——與熱鍵入口 `begin()` 共用 `enterSelecting`／
+    /// `enterArmed`／`startRecording` 這幾段既有程式碼（不複製邏輯），差別只在選區來源是
+    /// 參數而不是滑鼠拖曳：`ScrollSelectionOverlayController.presentLocked` 觸發與滑鼠
+    /// `mouseUp` 鎖定完全相同的 `onSelectionLocked` 回呼，進而呼叫 `enterArmed`。
+    ///
+    /// 矩形寬或高超出目標螢幕時 `presentLocked` 回 `false`（不建視窗）：`lockProgrammatically`
+    /// 底下的 `clampToBounds` 對這種輸入會算出負 origin，`presentLocked` 已經在呼叫它之前擋掉
+    /// （review fix round 1 Important 6）。這裡收到 false 就 `teardown()` 收乾淨、退回 `.idle`——
+    /// `enterSelecting` 已經把 state 撥到 `.selecting`／掛好 Esc monitor／看門狗，沒建成視窗
+    /// 不能留著這些半吊子狀態。
+    /// - Parameter rect: AppKit 全域座標（點，左下原點）。
+    public func startProgrammatically(rect: CGRect) {
+        guard state == .idle, let screen = Self.screen(containing: rect) else { return }
+        var locked = false
+        enterSelecting(on: screen) { locked = overlay.presentLocked(rect, on: screen) }
+        guard locked else { teardown(); return }
+        // 自動化沒有滑鼠可按「開始」鍵：選區夠大時直接接著走完 armed → recording。
+        // 選區太小時 enterArmed 早退，state 停在 enterSelecting 剛設的 .selecting（不是
+        // .armed——早退分支完全沒碰 state），只顯示訊息；這裡不強行往下推，行為與互動路徑一致。
+        if state == .armed { startRecording() }
+    }
+
+    /// selecting 進場共用碼（`begin()`／`startProgrammatically(rect:)` 唯一差異只在怎麼把選區
+    /// 餵給 overlay，回呼接線／Esc monitor／看門狗完全相同——抽出來避免兩份逐字複製隨時間漂移）。
+    /// - Parameter present: 建視窗＋（可能）鎖定選區的那一步，各自傳對應的 overlay 呼叫。
+    private func enterSelecting(on screen: NSScreen, present: () -> Void) {
         self.screen = screen
         state = .selecting
         overlay.onSelectionLocked = { [weak self] sel, scr in self?.enterArmed(sel, scr) }
@@ -53,33 +83,9 @@ public final class RecordSession {
             self.enterArmed(sel, scr)
         }
         overlay.onCancelRequested = { [weak self] in self?.cancel() }
-        overlay.present(on: screen)
+        present()
         installEscMonitor()   // 逐行對照 ScrollCaptureSession.installEscMonitor（含註解理由）
         armWatchdog(seconds: AppSettings.overlayWatchdogSeconds)
-    }
-
-    /// RPC 自動化入口（`UITestServer` `startRecord` 命令消費）：跳過拉框互動，直接以給定
-    /// 全域矩形進入 armed 並開始錄製——與熱鍵入口 `begin()` 共用 `enterArmed`／`startRecording`
-    /// 這段既有啟動碼（不複製邏輯），差別只在選區來源是參數而不是滑鼠拖曳：
-    /// `ScrollSelectionOverlayController.presentLocked` 觸發與滑鼠 `mouseUp` 鎖定完全相同的
-    /// `onSelectionLocked` 回呼，進而呼叫 `enterArmed`。
-    /// - Parameter rect: AppKit 全域座標（點，左下原點）。
-    public func startProgrammatically(rect: CGRect) {
-        guard state == .idle, let screen = Self.screen(containing: rect) else { return }
-        self.screen = screen
-        state = .selecting
-        overlay.onSelectionLocked = { [weak self] sel, scr in self?.enterArmed(sel, scr) }
-        overlay.onSelectionChanged = { [weak self] sel in
-            guard let self, let scr = self.screen else { return }
-            self.enterArmed(sel, scr)
-        }
-        overlay.onCancelRequested = { [weak self] in self?.cancel() }
-        overlay.presentLocked(rect, on: screen)
-        installEscMonitor()
-        armWatchdog(seconds: AppSettings.overlayWatchdogSeconds)
-        // 自動化沒有滑鼠可按「開始」鍵：選區夠大時直接接著走完 armed → recording
-        // （選區太小時 enterArmed 只停在 armed 顯示訊息，這裡不強行往下推，行為與互動路徑一致）。
-        if state == .armed { startRecording() }
     }
 
     /// `rect` 中心點命中的螢幕；命中不到（跨螢幕邊界外、螢幕熱插拔瞬間）退回滑鼠所在螢幕
@@ -166,7 +172,6 @@ public final class RecordSession {
                 try await self.frameSource.start(selectionGlobal: selectionGlobal, screen: screen,
                                                  ringWindowNumber: ringNumber, outputURL: url,
                                                  options: options)
-                UITestServer.shared?.emit("recordingStarted", [:])   // 錄製真正開始（stream 已起）
             } catch {
                 // state != .recording 代表 await 期間已經被 cancel()／stopRecording() 处理過
                 // （各自的路徑已經 teardown＋發過 onFinished，不能在這裡重發第二次）。
@@ -185,7 +190,15 @@ public final class RecordSession {
             // start 成功返回，但 await 期間 state 已經被改掉（例如很快就按了停止/取消）：
             // frameSource 內部已經在 pendingStop 分支自我清理過，這裡的 abort() 只是確保
             // 兩邊帳目一致（abort() 對「其實沒有活 stream」的情況本身是 no-op，見其註解）。
-            if self.state != .recording { await self.frameSource.abort() }
+            // 同一個判斷也決定要不要發 recordingStarted：state 已經被改掉代表 await 期間搶跑了
+            // cancel()／stopRecording()，那兩條路徑各自已經發過 recordingAborted／後面會發
+            // recordingStopped，這裡再發 recordingStarted 就是「已經結束的錄製又冒出開始事件」
+            // 的假陽性（review fix round 1 Important 1）。
+            if self.state != .recording {
+                await self.frameSource.abort()
+            } else {
+                UITestServer.shared?.emit("recordingStarted", [:])   // 錄製真正開始（stream 已起）
+            }
         }
         armWatchdog(seconds: durationLimit ?? Self.maxRecordingSeconds)  // 限時或 10 分鐘上限
     }

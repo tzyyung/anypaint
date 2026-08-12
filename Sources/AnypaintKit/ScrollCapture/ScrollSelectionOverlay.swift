@@ -77,12 +77,21 @@ public final class ScrollSelectionOverlayController {
     /// 建視窗後直接以給定全域矩形鎖定選區——走與滑鼠 `mouseUp` 鎖定**完全相同**的
     /// `onSelectionLocked` 回呼路徑（`ScrollSelectionView.lockProgrammatically` 觸發同一個
     /// closure），呼叫端不必另外處理 armed 進場。呼叫前一樣要先設好回呼（同 `present()` 的規定）。
-    public func presentLocked(_ globalRect: CGRect, on screen: NSScreen) {
+    ///
+    /// 矩形寬或高超出這顆螢幕時回 `false`、**不建視窗**：`lockProgrammatically` 底下的
+    /// `clampToBounds` 只夾 origin，對「本體比 bounds 還大」的輸入會算出負 origin
+    /// （`max(0, x)` 之後又被 `min(…, bounds.width - r.width)` 這個負數壓回去）——必須在呼叫
+    /// 它之前擋掉，不能讓壞矩形進場（review fix round 1 Important 6）。
+    @discardableResult
+    public func presentLocked(_ globalRect: CGRect, on screen: NSScreen) -> Bool {
+        guard globalRect.width <= screen.frame.width,
+              globalRect.height <= screen.frame.height else { return false }
         present(on: screen)
         let local = CGRect(x: globalRect.minX - screen.frame.minX,
                            y: globalRect.minY - screen.frame.minY,
                            width: globalRect.width, height: globalRect.height)
         window?.selectionView?.lockProgrammatically(local)
+        return true
     }
 
     /// capturing：放行滑鼠／滾輪給底下的活畫面；view 淡出遮罩只剩框線。

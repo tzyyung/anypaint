@@ -317,18 +317,36 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleUITestCommand(_ command: UITestChannel.Command) -> [String: Any]? {
         switch command.cmd {
         case "startRecord":
+            // 不是 toggle：已有 session 在跑時 beginAnimatedCapture 會走 cancelIfActive 分支
+            // （錄製中再按＝停止收檔），那不是「開始」語意——這裡要明確拒絕，不能讓呼叫端
+            // 以為自己開了一個新錄製卻其實把舊的停掉了（review fix round 1 Important 3）。
+            guard !recordSession.isActive else { return ["ok": false, "error": "busy"] }
             guard let rectStr = command.json["rect"] as? String,
                   let rect = Self.parseRect(rectStr) else {
                 return ["ok": false, "error": "badRect"]
             }
             beginAnimatedCapture(rect: rect)
-            return ["ok": recordSession.isActive]
+            // beginAnimatedCapture 全程同步：呼叫回來後 state 已經是最終結果，不必等回呼。
+            switch recordSession.state {
+            case .recording:
+                return ["ok": true]
+            case .selecting:
+                // enterArmed 選區太小時早退，state 停在 .selecting（不是 .armed——早退分支
+                // 完全沒碰 state，見 RecordSession.startProgrammatically 的註解）。
+                return ["ok": false, "error": "selectionTooSmall"]
+            default:
+                // 其餘（.idle）＝矩形超出螢幕邊界（presentLocked 擋掉）或找不到目標螢幕。
+                return ["ok": false, "error": "badRect"]
+            }
         case "stopRecord":
             recordSession.cancelIfActive()   // 走與熱鍵相同入口：recording 中＝停止並保留母帶
             return ["ok": true]
         case "abortRecord":
             recordSession.abortIfActive()    // 不論哪個 active 狀態都丟棄（同 Esc／取消鈕）
-            return ["ok": true]
+            // `.finishing` 不接受取消（刻意保留的紀律，見 RecordSession.cancel 的註解）——
+            // abortIfActive 對它是 no-op，回值要老實反映「其實沒中止掉」，不能報 ok:true
+            // 卻讓呼叫端以為母帶已經丟棄（review fix round 1 Important 5）。
+            return ["ok": !recordSession.isActive, "state": "\(recordSession.state)"]
         case "openSettings":
             openSettings()
             return ["ok": true]
