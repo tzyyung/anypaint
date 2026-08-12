@@ -139,6 +139,23 @@ final class WriterBox: @unchecked Sendable {
 /// SCStream 封裝：吐出的 CMSampleBuffer 直接進 WriterBox（不轉像素、不合成——設計文件 §3）。
 @MainActor
 public final class RecordFrameSource: NSObject {
+    /// 組裝 SCStreamConfiguration 的純函式。**nonisolated**：selftest 需從非隔離環境呼叫。
+    /// Task 10 在此掛音訊。
+    nonisolated
+    public static func makeStreamConfiguration(sourceRect: CGRect, pixelWidth: Int,
+                                               pixelHeight: Int, options: RecordOptions) -> SCStreamConfiguration {
+        let config = SCStreamConfiguration()
+        config.sourceRect = sourceRect
+        config.width = pixelWidth        // 必設：否則縮進預設 1920×1080（CLAUDE.md）
+        config.height = pixelHeight
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        config.queueDepth = 6                // 保留 lastSampleBuffer 佔 1 張，3 不夠（設計文件 §3）
+        config.showsCursor = options.showsCursor
+        config.capturesAudio = false         // v1 不錄音訊：也不加 .audio output
+        config.pixelFormat = kCVPixelFormatType_32BGRA
+        config.colorSpaceName = CGColorSpace.sRGB
+        return config
+    }
     public var onStreamError: ((Error) -> Void)?
 
     private var stream: SCStream?
@@ -224,16 +241,11 @@ public final class RecordFrameSource: NSObject {
         let scale = CGFloat(filter.pointPixelScale)
         let geo = ScrollCoords.streamGeometry(selectionGlobal: selectionGlobal,
                                               screenFrameGlobal: screen.frame, scale: scale)
-        let config = SCStreamConfiguration()
-        config.sourceRect = geo.sourceRect
-        config.width = geo.pixelWidth        // 必設：否則縮進預設 1920×1080（CLAUDE.md）
-        config.height = geo.pixelHeight
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
-        config.queueDepth = 6                // 保留 lastSampleBuffer 佔 1 張，3 不夠（設計文件 §3）
-        config.showsCursor = showsCursor
-        config.capturesAudio = false         // v1 不錄音訊：也不加 .audio output
-        config.pixelFormat = kCVPixelFormatType_32BGRA
-        config.colorSpaceName = CGColorSpace.sRGB
+        let options = RecordOptions(showsCursor: showsCursor, useHEVC: useHEVC)
+        let config = Self.makeStreamConfiguration(sourceRect: geo.sourceRect,
+                                                   pixelWidth: geo.pixelWidth,
+                                                   pixelHeight: geo.pixelHeight,
+                                                   options: options)
 
         let boxLocal = try WriterBox(outputURL: outputURL,
                                      pixelWidth: geo.pixelWidth, pixelHeight: geo.pixelHeight,

@@ -1327,5 +1327,6 @@ overlayKeyDisplayStringTests()
 pasteboardPayloadTests()
 pasteboardRoundTripTests()
 recordOptionsTests()
+makeStreamConfigurationTests()
 
 T.finish()
