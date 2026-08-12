@@ -146,4 +146,25 @@ func recordAudioTracksEndToEndTests() {
         T.checkEq("audio e2e: 單開系統聲＝1 音軌",
                   AVURLAsset(url: url1).tracks(withMediaType: .audio).count, 1)
     } else { T.checkTrue("audio e2e: 單軌 WriterBox 建立", false) }
+
+    // 空音軌結論（docs/animated-capture.md §7）：開了 captureSystemAudio（因此建了
+    // systemInput）但整段只 append 影像、一個音訊 buffer 都不送——writer 仍要正常 finalize，
+    // 輸出檔對應那條音軌完全不出現（0，不是「開著但空」），這不是失敗路徑。
+    let url3 = FileManager.default.temporaryDirectory
+        .appendingPathComponent("anypaint-selftest-audio3-\(UUID().uuidString).mp4")
+    defer { try? FileManager.default.removeItem(at: url3) }
+    let o3 = RecordOptions(showsCursor: false, useHEVC: false, captureSystemAudio: true)
+    if let b3 = try? WriterBox(outputURL: url3, pixelWidth: 64, pixelHeight: 64, options: o3) {
+        for i in 0..<5 { b3.append(makeVideoSampleBuffer(ptsSeconds: Double(i) / 30)!) }
+        let s3 = DispatchSemaphore(value: 0)
+        var finished3 = false
+        b3.finish(nowUptime: 0.2) { result in
+            if case .success = result { finished3 = true }
+            s3.signal()
+        }
+        s3.wait()
+        T.checkTrue("audio e2e: 零音訊 buffer＋開系統聲＝finalize 仍成功", finished3)
+        T.checkEq("audio e2e: 零音訊 buffer＋開系統聲＝0 音軌（開了不代表有）",
+                  AVURLAsset(url: url3).tracks(withMediaType: .audio).count, 0)
+    } else { T.checkTrue("audio e2e: 零音訊 buffer WriterBox 建立", false) }
 }
