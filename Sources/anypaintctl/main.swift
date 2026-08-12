@@ -54,8 +54,11 @@ if cmd == "wait-event" {
 }
 
 var payload: [String: Any] = ["cmd": normalizeCommand(cmd)]
-if let extra = flag("--json"),
-   let obj = try? JSONSerialization.jsonObject(with: Data(extra.utf8)) as? [String: Any] {
+if let extra = flag("--json") {
+    guard let parsed = try? JSONSerialization.jsonObject(with: Data(extra.utf8)),
+          let obj = parsed as? [String: Any] else {
+        fail("--json 不是合法 JSON 物件: \(extra)")
+    }
     payload.merge(obj) { _, new in new }
 }
 guard let remote = CFMessagePortCreateRemote(nil, UITestChannel.portName as CFString) else {
