@@ -23,3 +23,17 @@ nonisolated func audioInputDeviceTests() {
         }
     }
 }
+
+nonisolated func levelMathTests() {
+    // dBFS：滿刻度 1.0 → 0 dB；0.001 → 約 -60；0 → clamp 至 -60
+    T.checkTrue("dB 滿刻度≈0", abs(RecordMath.dbFromRMS(1.0)) < 0.5)
+    T.checkTrue("dB 靜音 clamp -60", RecordMath.dbFromRMS(0) <= -59.9)
+    T.checkTrue("dB 單調遞增", RecordMath.dbFromRMS(0.5) > RecordMath.dbFromRMS(0.05))
+    // 格數：-60 dB → 0 格；0 dB → 滿格
+    T.checkEq("靜音 0 格", RecordMath.levelBars(db: -60, totalBars: 12), 0)
+    T.checkEq("滿刻度滿格", RecordMath.levelBars(db: 0, totalBars: 12), 12)
+    T.checkTrue("中間值在範圍內", (0...12).contains(RecordMath.levelBars(db: -30, totalBars: 12)))
+    // 無訊號判定：噪底量級靜音、人聲量級有訊號（門檻＝噪底數十倍，實作校準）
+    T.checkTrue("噪底判為靜音", RecordMath.isSilent(rms: 0.0001))
+    T.checkTrue("人聲判為有訊號", !RecordMath.isSilent(rms: 0.05))
+}

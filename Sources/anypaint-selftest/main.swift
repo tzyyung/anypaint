@@ -1332,5 +1332,6 @@ uitestProtocolTests()
 goertzelTests()
 recordAudioTracksEndToEndTests()
 audioInputDeviceTests()
+levelMathTests()
 
 T.finish()

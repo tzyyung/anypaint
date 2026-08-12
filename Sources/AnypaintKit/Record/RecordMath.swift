@@ -105,4 +105,21 @@ public enum RecordMath {
         let power = s1 * s1 + s2 * s2 - coeff * s1 * s2
         return power / Double(samples.count * samples.count)
     }
+
+    /// 線性 RMS（0..1）→ dBFS，clamp 到 [-60, 0]（電平表下限 -60 dB）。
+    public static func dbFromRMS(_ rms: Float) -> Float {
+        guard rms > 0 else { return -60 }
+        return max(-60, min(0, 20 * log10f(rms)))
+    }
+
+    /// dBFS（-60..0）→ 亮格數（0..totalBars），線性映射。
+    public static func levelBars(db: Float, totalBars: Int) -> Int {
+        let frac = (db + 60) / 60   // -60→0, 0→1
+        return max(0, min(totalBars, Int((frac * Float(totalBars)).rounded())))
+    }
+
+    /// 無訊號判定：RMS 低於門檻。門檻＝實測噪底（≈0.0001）的數十倍。
+    /// 校準來源：2026-08-12 除錯實測（內建麥克風/DaiLing G3 靜置 peak≈0.0001、人聲 0.01–0.5）。
+    public static let silenceThreshold: Float = 0.003
+    public static func isSilent(rms: Float) -> Bool { rms < silenceThreshold }
 }
