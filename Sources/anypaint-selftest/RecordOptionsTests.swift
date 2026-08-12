@@ -29,4 +29,13 @@ nonisolated func makeStreamConfigurationTests() {
     T.checkTrue("config 預設不錄音", !c.capturesAudio)
     T.checkEq("config.pixelFormat=BGRA", c.pixelFormat, kCVPixelFormatType_32BGRA)
     T.checkEq("config.colorSpace=sRGB", c.colorSpaceName, CGColorSpace.sRGB)
+
+    let a = RecordFrameSource.makeStreamConfiguration(
+        sourceRect: .zero, pixelWidth: 8, pixelHeight: 8,
+        options: RecordOptions(showsCursor: false, useHEVC: false,
+                               captureSystemAudio: true, captureMicrophone: true))
+    T.checkTrue("config: 系統聲開", a.capturesAudio)
+    T.checkTrue("config: 排除自家音效", a.excludesCurrentProcessAudio)
+    T.checkTrue("config: 麥克風開", a.captureMicrophone)
+    T.checkTrue("config: 預設仍全關", !c.capturesAudio && !c.captureMicrophone)
 }

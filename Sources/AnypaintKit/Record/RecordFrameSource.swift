@@ -161,7 +161,8 @@ public final class WriterBox: @unchecked Sendable {
 @MainActor
 public final class RecordFrameSource: NSObject {
     /// 組裝 SCStreamConfiguration 的純函式。**nonisolated**：selftest 需從非隔離環境呼叫。
-    /// Task 10 在此掛音訊。
+    /// 音訊相關欄位（capturesAudio／excludesCurrentProcessAudio／captureMicrophone）交給
+    /// `RecordAudioTracks.configure` 統一設，不在這裡逐一列。
     nonisolated
     public static func makeStreamConfiguration(sourceRect: CGRect, pixelWidth: Int,
                                                pixelHeight: Int, options: RecordOptions) -> SCStreamConfiguration {
@@ -172,7 +173,7 @@ public final class RecordFrameSource: NSObject {
         config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
         config.queueDepth = 6                // 保留 lastSampleBuffer 佔 1 張，3 不夠（設計文件 §3）
         config.showsCursor = options.showsCursor
-        config.capturesAudio = false         // v1 不錄音訊：也不加 .audio output
+        RecordAudioTracks.configure(config, options: options)
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.colorSpaceName = CGColorSpace.sRGB
         return config
@@ -274,6 +275,12 @@ public final class RecordFrameSource: NSObject {
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         do {
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
+            if options.captureSystemAudio {
+                try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
+            }
+            if options.captureMicrophone {
+                try stream.addStreamOutput(self, type: .microphone, sampleHandlerQueue: sampleQueue)
+            }
             try await stream.startCapture()
         } catch {
             // 這兩步任一步失敗（TCC 拒絕、noDisplays 類錯誤實機都常見）都要在丟出去之前自己
@@ -398,7 +405,10 @@ public final class RecordFrameSource: NSObject {
 extension RecordFrameSource: SCStreamOutput, SCStreamDelegate {
     nonisolated public func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer,
                                    of type: SCStreamOutputType) {
-        guard type == .screen else { return }
+        guard type == .screen else {
+            box?.appendAudio(sb, type: type)   // 音訊不帶 SCFrameStatus，不做 status gate
+            return
+        }
         // 只收 .complete；.idle/.blank 不可進 writer（否則黑首格＋時長錯——設計文件 §3）
         guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false)
                 as? [[SCStreamFrameInfo: Any]],
