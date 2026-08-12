@@ -36,6 +36,8 @@ fi
 pkill -x anypaint 2>/dev/null || true
 
 echo "== L2: 音訊自檢 =="
+pkill -x anypaint 2>/dev/null || true
+sleep 1
 rm -f /tmp/anypaint-audio-selfcheck.log
 open -n "$ROOT/build.noindex/anypaint.app" --args --audio-selfcheck
 for _ in $(seq 1 60); do [ -f /tmp/anypaint-audio-selfcheck.log ] && grep -q -- "----" /tmp/anypaint-audio-selfcheck.log 2>/dev/null && break; sleep 1; done

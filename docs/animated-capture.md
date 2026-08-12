@@ -7,8 +7,8 @@
 `docs/scroll-capture.md` 已經吃過這個虧）。
 `docs/superpowers/specs/2026-07-29-animated-capture-design.md` 是「當初為什麼這樣決定」的
 設計快照，不是現況——實作期間有幾處被 review 修正過（見各段落標註）。
-RPC 自動化命令表（`getState`／`startRecord` 等）獨立成 `docs/automation.md`，這裡只在 §7 提
-掛載點與事件語意。
+RPC 自動化命令表（`getState`／`startRecord` 等）與事件表獨立成 `docs/automation.md`，這裡只在
+§7 提 `RecordAudioTracks` 的掛載點與 A/V 對齊語意。
 
 最後更新：2026-08-12
 

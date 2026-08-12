@@ -141,6 +141,9 @@ public final class RecordAudioSelfCheck {
             var failures = 0
             do {
                 let url = try await source.stopAndFinish()
+                // defer（不是流程尾端才刪）：下面 decodeMonoSamples 若拋錯，控制權會直接跳到
+                // 下面的 catch，流程尾端那行 removeItem 就永遠執行不到——暫存檔留在磁碟上。
+                defer { try? FileManager.default.removeItem(at: url) }
                 emit("錄製完成 url=\(url.path)")
 
                 let asset = AVURLAsset(url: url)
@@ -178,8 +181,6 @@ public final class RecordAudioSelfCheck {
                     failures += 1
                     emit("❌ 檢查B 無音軌可解碼")
                 }
-
-                try? FileManager.default.removeItem(at: url)
             } catch {
                 failures += 1
                 emit("❌ 錄製收檔或解碼失敗 \(error)")

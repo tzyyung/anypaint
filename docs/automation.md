@@ -38,7 +38,7 @@ agent）不必操作滑鼠鍵盤就能查狀態、截自己的 UI、以及驅動
 | 命令 | 參數 | 成功回應 | 失敗回應 |
 |---|---|---|---|
 | `getState` | 無 | `{ok:true, windows:[{title,frame,class}], eventLog:"/tmp/anypaint-uitest-events.jsonl"}`（`windows` 只列 `isVisible` 的視窗） | — |
-| `dumpUI` | 無 | `{ok:true, tree:[{title,class,views:[...遞迴視圖樹...]}]}`（每個節點含 `class`／`frame`／`hidden`；`NSButton` 多帶 `title`／`enabled`，`NSTextField` 多帶 `text`） | — |
+| `dumpUI` | 無 | `{ok:true, tree:[{title,class,views:{...}}]}`——`tree` 陣列每項對應一個可見視窗；`views` 是該視窗 `contentView` 的**根節點物件**（不是陣列）。**兩層 key 名不同**：每個節點自己的欄位是 `class`／`frame`／`hidden`（`NSButton` 多帶 `title`／`enabled`，`NSTextField` 多帶 `text`），往下遞迴的子視圖放在 `subviews`（陣列，只有非空時才會出現這個 key）——最外層是 `views`（單數、單一物件），遞迴層是 `subviews`（複數、陣列），兩者不是同一個 key | — |
 | `screenshotSelf` | 無 | `{ok:true, paths:["/tmp/anypaint-uitest-shots/winN-<epoch>.png", ...]}`（對每個可見視窗的 `contentView` 各存一張 PNG） | — |
 | `openSettings` | 無 | `{ok:true}` | — |
 | `startRecord` | `rect`: `"x,y,w,h"`（AppKit 全域座標，點，左下原點） | `{ok:true}`（跳過拉框互動，直接以此矩形進 armed 並開始錄製——`RecordSession.startProgrammatically`） | `{ok:false, error:"busy"}`（已有錄製在跑，不是 toggle）／`{ok:false, error:"badRect"}`（`rect` 解析失敗、或矩形超出螢幕邊界、或找不到目標螢幕）／`{ok:false, error:"selectionTooSmall"}`（矩形合法但邊長 < `RecordSession.minSelectionEdgePt`） |
