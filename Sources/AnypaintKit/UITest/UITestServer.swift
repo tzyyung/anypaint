@@ -44,6 +44,11 @@ public final class UITestServer {
     }
 
     private func register() {
+        // seq 每次啟動都從 0 重新算，但事件檔是 append——上一輪實例（甚至上一次系統重開前的
+        // 殘留）留下的舊行如果不清掉，這次的 seq 會跟舊行的 seq 撞號，`wait-event --after` 的
+        // 游標保證（seq > after 才算新事件）就整條失效。一個實例＝一條乾淨時間軸：註冊當下先
+        // truncate。
+        try? "".write(toFile: UITestChannel.eventLogPath, atomically: true, encoding: .utf8)
         var ctx = CFMessagePortContext(version: 0,
             info: Unmanaged.passUnretained(self).toOpaque(),
             retain: nil, release: nil, copyDescription: nil)

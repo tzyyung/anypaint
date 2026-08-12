@@ -66,7 +66,19 @@ public final class RecordSession {
         // 自動化沒有滑鼠可按「開始」鍵：選區夠大時直接接著走完 armed → recording。
         // 選區太小時 enterArmed 早退，state 停在 enterSelecting 剛設的 .selecting（不是
         // .armed——早退分支完全沒碰 state），只顯示訊息；這裡不強行往下推，行為與互動路徑一致。
-        if state == .armed { startRecording() }
+        if state == .armed {
+            startRecording()
+            if state == .recording {
+                // 「RPC 錄影＝不限時直到 stopRecord」（docs/automation.md）：`startRecording()`
+                // 剛剛已經把 `durationLimit` 設成 `hud.durationSeconds`——那個秒數欄是跨 session
+                // 重用的同一個 HUD 面板（`dismiss()` 不會把 panel 設 nil），殘留上次互動錄製打進去
+                // 的秒數會原封不動沿用，讓這次 RPC 錄影被一個使用者根本沒設過的幽靈時限提早停掉。
+                // 這裡明確蓋掉並重新 arm 看門狗（`startRecording()` 結尾那顆已經用了舊值 arm 過）。
+                durationLimit = nil
+                armWatchdog(seconds: Self.maxRecordingSeconds)
+                hud.showTransientNotice("🤖 遠端自動化錄影")   // 混淆代理人對策 b：遠端觸發要有可見標示
+            }
+        }
     }
 
     /// selecting 進場共用碼（`begin()`／`startProgrammatically(rect:)` 唯一差異只在怎麼把選區
@@ -183,6 +195,7 @@ public final class RecordSession {
                     NSSound.beep()
                     self.teardown()
                     self.onFinished?(nil, screen.backingScaleFactor)
+                    UITestServer.shared?.emit("recordingFailed", ["reason": "startFailed: \(error)"])
                     NSLog("anypaint: 動畫截圖 stream 啟動失敗 %@", String(describing: error))
                 }
                 return
@@ -243,6 +256,7 @@ public final class RecordSession {
                 guard self.state == .finishing else { return }
                 self.teardown()
                 self.onFinished?(nil, scale)
+                UITestServer.shared?.emit("recordingFailed", ["reason": "finishFailed: \(error)"])
                 // NSLog 在未公證自簽 app 撈不到（CLAUDE.md 診斷原則）——不論哪種失敗都要有
                 // 使用者感知得到的回饋，否則整段錄製「憑空消失」使用者卻毫無所覺。
                 if case RecordError.noFrames = error { NSSound.beep() }   // 一格都沒錄到
@@ -286,6 +300,7 @@ public final class RecordSession {
                 NSSound.beep()
                 self.teardown()
                 self.onFinished?(nil, self.screen?.backingScaleFactor ?? 2)
+                UITestServer.shared?.emit("recordingFailed", ["reason": "finishingTimeout"])
             default:
                 self.cancel()                    // selecting/armed 逾時＝取消
             }

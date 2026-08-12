@@ -20,6 +20,7 @@ public struct RecordOptions: Equatable, Sendable {
         self.excludesOwnAudio = excludesOwnAudio
     }
 
+    // AppSettings 本身無隔離標註，nonisolated 如實反映；勿改回 @MainActor。
     nonisolated
     public static func fromSettings() -> RecordOptions {
         RecordOptions(showsCursor: AppSettings.recordShowsCursor,

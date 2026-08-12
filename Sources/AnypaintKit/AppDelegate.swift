@@ -333,6 +333,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                   let rect = Self.parseRect(rectStr) else {
                 return ["ok": false, "error": "badRect"]
             }
+            // RPC 路徑絕不能落進互動式權限流程：`beginAnimatedCapture` 首次無權限時會呼叫
+            // `CGRequestScreenCaptureAccess()` 彈系統框，那個呼叫在 CFMessagePort callback
+            // （主執行緒）上 runModal，會卡死整條 RPC 通道（呼叫端等回覆、回覆等系統框，
+            // 系統框又要等使用者互動——RPC 呼叫端沒有滑鼠可以按）。這裡先問过一次、沒有就直接
+            // 回錯，不進 `beginAnimatedCapture`。
+            guard CGPreflightScreenCaptureAccess() else {
+                return ["ok": false, "error": "noScreenRecordingPermission"]
+            }
             beginAnimatedCapture(rect: rect)
             // beginAnimatedCapture 全程同步：呼叫回來後 state 已經是最終結果，不必等回呼。
             switch recordSession.state {
@@ -347,6 +355,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 return ["ok": false, "error": "badRect"]
             }
         case "stopRecord":
+            // 精準化（比照 startRecord／abortRecord）：只有真的在 recording 中才算「成功停止」。
+            // selecting/armed 下呼叫 cancelIfActive() 會被解讀成使用者按了取消（發
+            // recordingAborted、丟棄選區），那不是 stopRecord 的語意——呼叫端明確表達「結束並
+            // 保留母帶」，不該在還沒開始錄製時被誤當成取消。因此不在這裡呼叫 cancelIfActive，
+            // 直接回報目前 state 讓呼叫端自己判斷。
+            guard recordSession.state == .recording else {
+                return ["ok": false, "state": "\(recordSession.state)"]
+            }
             recordSession.cancelIfActive()   // 走與熱鍵相同入口：recording 中＝停止並保留母帶
             return ["ok": true]
         case "abortRecord":

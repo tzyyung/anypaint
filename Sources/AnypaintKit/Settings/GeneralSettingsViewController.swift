@@ -12,7 +12,7 @@ final class GeneralSettingsViewController: NSViewController {
     private let allowLocalAutomationCheckbox = NSButton(checkboxWithTitle: "允許本機自動化（anypaintctl）",
                                                          target: nil, action: nil)
     private let allowLocalAutomationHint = NSTextField(labelWithString:
-        "開啟後本機程式可遙控 anypaint 截圖／錄影（重啟後生效）。")
+        "開啟後本機程式可遙控 anypaint 截圖／錄影；開啟／關閉皆需重新啟動 anypaint 後生效。")
 
     override func loadView() {
         launchCheckbox.target = self

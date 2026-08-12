@@ -78,14 +78,16 @@ public final class ScrollSelectionOverlayController {
     /// `onSelectionLocked` 回呼路徑（`ScrollSelectionView.lockProgrammatically` 觸發同一個
     /// closure），呼叫端不必另外處理 armed 進場。呼叫前一樣要先設好回呼（同 `present()` 的規定）。
     ///
-    /// 矩形寬或高超出這顆螢幕時回 `false`、**不建視窗**：`lockProgrammatically` 底下的
-    /// `clampToBounds` 只夾 origin，對「本體比 bounds 還大」的輸入會算出負 origin
+    /// 矩形沒有**完整落在**這顆螢幕的 `frame` 內時回 `false`、**不建視窗**：`lockProgrammatically`
+    /// 底下的 `clampToBounds` 只夾 origin，對「本體比 bounds 還大」的輸入會算出負 origin
     /// （`max(0, x)` 之後又被 `min(…, bounds.width - r.width)` 這個負數壓回去）——必須在呼叫
     /// 它之前擋掉，不能讓壞矩形進場（review fix round 1 Important 6）。
+    /// `CGRect.contains(_:)` 一次涵蓋尺寸與位置兩種越界：只檢查寬高（舊寫法）沒擋到「尺寸合法但
+    /// 中心／原點在螢幕外」的矩形——那種輸入一樣會被 `clampToBounds` 靜默搬移到螢幕內某處，
+    /// 呼叫端以為錄的是自己給的座標，實際錄到的是被搬移過的位置（review 判定為真缺陷）。
     @discardableResult
     public func presentLocked(_ globalRect: CGRect, on screen: NSScreen) -> Bool {
-        guard globalRect.width <= screen.frame.width,
-              globalRect.height <= screen.frame.height else { return false }
+        guard screen.frame.contains(globalRect) else { return false }
         present(on: screen)
         let local = CGRect(x: globalRect.minX - screen.frame.minX,
                            y: globalRect.minY - screen.frame.minY,
