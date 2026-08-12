@@ -592,20 +592,19 @@ final class RecordPreviewWindow: NSWindow {
                 self.setStatus("MP4 剪裁匯出失敗：無法建立匯出工作階段")
                 return
             }
-            session.outputURL = tmpURL
-            session.outputFileType = .mp4
             session.timeRange = trimRange
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                session.exportAsynchronously { continuation.resume() }
-            }
-            if session.status == .completed {
+            do {
+                // macOS 15 的 `export(to:as:)`（SDK header 實查 API_DEPRECATED_WITH_REPLACEMENT）：
+                // 取代 outputURL/outputFileType 賦值＋exportAsynchronously＋status/error 三件套。
+                // 失敗直接 throw——不再有「status 非 completed 但 error 為 nil」的模糊地帶。
+                try await session.export(to: tmpURL, as: .mp4)
                 let saved = self.output.saveCopy(from: tmpURL, ext: "mp4", vars: self.vars)
                 try? FileManager.default.removeItem(at: tmpURL)
                 if let saved { self.lastSavedURL = saved }
                 self.setStatus(saved.map { "已存 \($0.lastPathComponent)" } ?? "MP4 存檔失敗")
-            } else {
+            } catch {
                 try? FileManager.default.removeItem(at: tmpURL)
-                self.setStatus("MP4 剪裁匯出失敗：\(session.error?.localizedDescription ?? "未知錯誤")")
+                self.setStatus("MP4 剪裁匯出失敗：\(error.localizedDescription)")
             }
         }
     }

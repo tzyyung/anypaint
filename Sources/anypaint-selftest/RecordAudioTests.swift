@@ -69,6 +69,20 @@ func makeVideoSampleBuffer(ptsSeconds: Double, width: Int = 64, height: Int = 64
     return sb
 }
 
+/// 同步包裝 async `loadTracks`（selftest 是同步 CLI；semaphore＋Task 是同檔既有慣例，
+/// 測試函式為 nonisolated top-level，Task 繼承非隔離環境、跑在全域執行緒，wait 不會自鎖）。
+/// 不用已棄用的同步 `tracks(withMediaType:)`——零 warning 是硬約束。
+private func loadTracksSync(url: URL, mediaType: AVMediaType) -> [AVAssetTrack] {
+    var tracks: [AVAssetTrack] = []
+    let sema = DispatchSemaphore(value: 0)
+    Task {
+        tracks = (try? await AVURLAsset(url: url).loadTracks(withMediaType: mediaType)) ?? []
+        sema.signal()
+    }
+    sema.wait()
+    return tracks
+}
+
 func recordAudioTracksEndToEndTests() {
     let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("anypaint-selftest-audio-\(UUID().uuidString).mp4")
@@ -92,9 +106,8 @@ func recordAudioTracksEndToEndTests() {
     }
     sema.wait()
     T.checkTrue("audio e2e: finalize 成功", finished)
-    let asset = AVURLAsset(url: url)
-    T.checkEq("audio e2e: 1 條影像軌", asset.tracks(withMediaType: .video).count, 1)
-    let audioTracks = asset.tracks(withMediaType: .audio)
+    T.checkEq("audio e2e: 1 條影像軌", loadTracksSync(url: url, mediaType: .video).count, 1)
+    let audioTracks = loadTracksSync(url: url, mediaType: .audio)
     T.checkEq("audio e2e: 2 條音軌", audioTracks.count, 2)
     // 早到的 0.5s 音訊有沒有真的被丟：這裡不能靠 timeRange.start 判斷「有沒有提前」——
     // 實測（async load(.timeRange)，非同步官方 API，避開已棄用同步版本可能的疑慮）證實
@@ -130,7 +143,7 @@ func recordAudioTracksEndToEndTests() {
         let s2 = DispatchSemaphore(value: 0)
         b2.finish(nowUptime: 0.2) { _ in s2.signal() }; s2.wait()
         T.checkEq("audio e2e: 兩開關全關＝0 音軌",
-                  AVURLAsset(url: url2).tracks(withMediaType: .audio).count, 0)
+                  loadTracksSync(url: url2, mediaType: .audio).count, 0)
     } else { T.checkTrue("audio e2e: 全關 WriterBox 建立", false) }
 
     // 只開系統聲 → 1 條音軌
@@ -144,7 +157,7 @@ func recordAudioTracksEndToEndTests() {
         let s = DispatchSemaphore(value: 0)
         b1.finish(nowUptime: 0.2) { _ in s.signal() }; s.wait()
         T.checkEq("audio e2e: 單開系統聲＝1 音軌",
-                  AVURLAsset(url: url1).tracks(withMediaType: .audio).count, 1)
+                  loadTracksSync(url: url1, mediaType: .audio).count, 1)
     } else { T.checkTrue("audio e2e: 單軌 WriterBox 建立", false) }
 
     // 空音軌結論（docs/animated-capture.md §7）：開了 captureSystemAudio（因此建了
@@ -165,6 +178,6 @@ func recordAudioTracksEndToEndTests() {
         s3.wait()
         T.checkTrue("audio e2e: 零音訊 buffer＋開系統聲＝finalize 仍成功", finished3)
         T.checkEq("audio e2e: 零音訊 buffer＋開系統聲＝0 音軌（開了不代表有）",
-                  AVURLAsset(url: url3).tracks(withMediaType: .audio).count, 0)
+                  loadTracksSync(url: url3, mediaType: .audio).count, 0)
     } else { T.checkTrue("audio e2e: 零音訊 buffer WriterBox 建立", false) }
 }
