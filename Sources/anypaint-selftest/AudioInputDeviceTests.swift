@@ -40,21 +40,29 @@ nonisolated func levelMathTests() {
 }
 
 nonisolated func levelMeterViewTests() {
-    let v = LevelMeterView(frame: NSRect(x: 0, y: 0, width: 120, height: 20))
-    func litPixels(level: Float) -> Int {
-        v.level = level
-        v.layoutSubtreeIfNeeded()
-        guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return -1 }
-        v.cacheDisplay(in: v.bounds, to: rep)
-        var lit = 0
-        for x in 0..<rep.pixelsWide { for y in 0..<rep.pixelsHigh {
-            if let c = rep.colorAt(x: x, y: y), c.alphaComponent > 0.3,
-               (c.redComponent + c.greenComponent + c.blueComponent) > 0.5 { lit += 1 }
-        } }
-        return lit
+    // MainActor.assumeIsolated：selftest 執行檔全程跑在主執行緒（同 Sources/anypaint/main.swift
+    // 的既有慣例＋註解），main.swift 頂層呼叫鏈在本 target 的 Swift 5 language mode 下是
+    // nonisolated（若把這個函式整個標 @MainActor，main.swift 頂層呼叫它會變成要 async，
+    // 反而報錯）。NSView 建立與 cacheDisplay 本來就安全跑在這條唯一的主執行緒上，
+    // 只是編譯器在 nonisolated 呼叫鏈裡看不出來——用 assumeIsolated 明示，換掉逐行
+    // 「main actor-isolated ... 不能在 nonisolated context 用」的警告（零警告是硬約束）。
+    MainActor.assumeIsolated {
+        let v = LevelMeterView(frame: NSRect(x: 0, y: 0, width: 120, height: 20))
+        @MainActor func litPixels(level: Float) -> Int {
+            v.level = level
+            v.layoutSubtreeIfNeeded()
+            guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return -1 }
+            v.cacheDisplay(in: v.bounds, to: rep)
+            var lit = 0
+            for x in 0..<rep.pixelsWide { for y in 0..<rep.pixelsHigh {
+                if let c = rep.colorAt(x: x, y: y), c.alphaComponent > 0.3,
+                   (c.redComponent + c.greenComponent + c.blueComponent) > 0.5 { lit += 1 }
+            } }
+            return lit
+        }
+        let loud = litPixels(level: 0.9)
+        let quiet = litPixels(level: 0.0)
+        T.checkTrue("有訊號時電平表有亮格", loud > 0)
+        T.checkTrue("大訊號比靜音亮格多", loud > quiet)
     }
-    let loud = litPixels(level: 0.9)
-    let quiet = litPixels(level: 0.0)
-    T.checkTrue("有訊號時電平表有亮格", loud > 0)
-    T.checkTrue("大訊號比靜音亮格多", loud > quiet)
 }

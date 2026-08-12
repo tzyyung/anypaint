@@ -45,7 +45,13 @@ public final class LevelMeterView: NSView {
     }
 
     public override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.withAlphaComponent(0.25).setFill()
+        // 背景與未亮格一律用純黑（rgb 分量恆為 0）——格框靠深淺兩層黑色的 alpha 對比
+        // 呈現，不靠混進白色。踩過的坑：先前未亮格用「半透明白疊在黑背景上」，合成後
+        // rgb 和 ≈0.77、alpha≈0.31，剛好同時跨過自檢「alpha>0.3 且 rgb 和>0.5」兩個
+        // 門檻——這是合成色的假訊號，不是真的亮格，導致靜音時仍有大量像素被誤判為亮
+        // （2026-08-13 審查抓到：quiet 亮格佔比 79%）。黑色不管疊多少層 alpha，rgb 和
+        // 恆為 0，永遠不會被那個判準誤傷。
+        NSColor.black.withAlphaComponent(0.15).setFill()
         bounds.fill()
 
         guard totalBars > 0 else { return }
@@ -66,7 +72,8 @@ public final class LevelMeterView: NSView {
             } else if i < litBars {
                 color = zoneColor(for: i)
             } else {
-                color = NSColor.white.withAlphaComponent(0.08)
+                // 未亮格：比背景略深的黑，形成可見的格框，同樣不含白色分量。
+                color = NSColor.black.withAlphaComponent(0.35)
             }
             color.setFill()
             NSBezierPath(rect: barRect).fill()
