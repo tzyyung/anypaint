@@ -55,6 +55,8 @@ final class RecordPreviewWindow: NSWindow {
     private let statusLabel = NSTextField(labelWithString: "")
     private let restoreTrimButton = NSButton(title: "還原剪裁", target: nil, action: nil)
     private let openLocationButton = NSButton(title: "開啟位置", target: nil, action: nil)
+    // 喇叭切換鈕：僅當母帶有音軌才顯示（見 buildUI 建立處與 detectAudioTrack 的說明）。
+    private let audioButton = NSButton(title: "靜音切換", target: nil, action: nil)
     private var buttons: [NSButton] = []
     weak var controller: RecordPreviewWindowController?
 
@@ -80,6 +82,7 @@ final class RecordPreviewWindow: NSWindow {
         // 本身不需要，但我們兩者都要用）。
         acceptsMouseMovedEvents = true
         buildUI()
+        detectAudioTrack()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) 未實作") }
@@ -101,6 +104,7 @@ final class RecordPreviewWindow: NSWindow {
         let q = AVQueuePlayer()
         looper = AVPlayerLooper(player: q, templateItem: item)
         playerView.player = q
+        q.isMuted = true   // 循環播放不吵——spec §0，喇叭鈕（見下）讓使用者自行取消靜音
         q.play()
         player = q
         self.playerView = playerView
@@ -133,6 +137,15 @@ final class RecordPreviewWindow: NSWindow {
             guard let self else { return }
             self.statusLabel.stringValue = hint ?? self.lastStatusMessage
         }
+
+        // 喇叭切換鈕：不屬於下面「編輯」／「輸出」任一群，獨立放在最左（見 detectAudioTrack
+        // 的說明：只有偵測到母帶含音軌才會顯示，一開始先隱藏）。player 建立處已把 q.isMuted
+        // 設成 true（循環播放不吵——spec §0），這顆鈕讓使用者自行取消靜音。圖示初值對應
+        // 靜音狀態（speaker.slash），toggleAudio() 切換時同步換圖示。
+        configureSymbolButton(audioButton, symbol: "speaker.slash", accessibilityLabel: "取消靜音",
+                              action: #selector(toggleAudio))
+        setHelp("預覽預設靜音，點一下切換播放聲音", for: audioButton, in: hoverRow)
+        audioButton.isHidden = true   // 母帶是否含音軌要 async load 才知道，見 detectAudioTrack()
 
         // 左群（編輯）：剪裁／還原剪裁／拍快照。三顆都用 configureSymbolButton（照抄
         // SelectionToolbar.configureSymbolButton 的固定尺寸／borderless／cornerRadius 做法，
@@ -202,7 +215,7 @@ final class RecordPreviewWindow: NSWindow {
         setHelp("丟掉這段動畫截圖並關窗（需確認）", for: discardButton, in: hoverRow)
         // 「丟棄」刻意不給快捷鍵：破壞性動作（同 ScrollPreviewWindow.discardAction 的理由）。
 
-        buttons = [trimButton, restoreTrimButton, snapshotButton, savePopUpButton,
+        buttons = [audioButton, trimButton, restoreTrimButton, snapshotButton, savePopUpButton,
                    openLocationButton, discardButton]
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -214,8 +227,8 @@ final class RecordPreviewWindow: NSWindow {
         // 1pt 寬、16pt 高、白色 25% 透明度的細線。這裡不是深色 HUD 背景，25% 透明白線在淺色
         // 視窗背景下會太淡看不見；改用 `.separatorColor`（系統語意色，本身就是為了「分隔線」
         // 這個用途設計、自動適配淺色/深色外觀），視覺角色相同、色彩來源換成本視窗合適的版本。
-        let toolsRow = NSStackView(views: [trimButton, restoreTrimButton, snapshotButton, separator(),
-                                           savePopUpButton, openLocationButton, discardButton])
+        let toolsRow = NSStackView(views: [audioButton, trimButton, restoreTrimButton, snapshotButton,
+                                           separator(), savePopUpButton, openLocationButton, discardButton])
         toolsRow.orientation = .horizontal
         toolsRow.spacing = 4   // 同 SelectionToolbar.toolsRow 的 spacing（不是舊版文字按鈕的 8pt）
         toolsRow.translatesAutoresizingMaskIntoConstraints = false
@@ -291,6 +304,20 @@ final class RecordPreviewWindow: NSWindow {
         for b in buttons { b.isEnabled = enabled }
     }
 
+    /// 喇叭鈕只在母帶含音軌時才顯示（brief 要求）。用 `AVURLAsset.loadTracks(withMediaType:)`
+    /// 的 async 版本，不用已 deprecated 的同步 `tracks(withMediaType:)`——同檔 `loadNaturalSize`
+    /// 的一貫紀律，零 warning 是硬約束（見 CLAUDE.md 建置章節）。視窗一開先隱藏鈕（見 buildUI
+    /// 建立處），load 回來確認有音軌才 `isHidden = false`；沒有音軌就維持隱藏，不用額外處理。
+    private func detectAudioTrack() {
+        Task { [weak self] in
+            guard let self else { return }
+            let asset = AVURLAsset(url: self.movieURL)
+            guard let tracks = try? await asset.loadTracks(withMediaType: .audio),
+                  !tracks.isEmpty else { return }
+            self.audioButton.isHidden = false
+        }
+    }
+
     /// 所有「設定狀態訊息」的地方都呼叫這裡，不要直接寫 `statusLabel.stringValue`——
     /// 否則 hover 離開後 `HoverHintRow.onHint` 回復的 `lastStatusMessage` 會是舊的（見
     /// `lastStatusMessage` 屬性宣告處的說明）。
@@ -300,6 +327,16 @@ final class RecordPreviewWindow: NSWindow {
     }
 
     // MARK: - 按鈕語意
+
+    /// 靜音切換：player 建立時預設 `isMuted = true`（循環播放不吵——spec §0），這顆鈕讓使用者
+    /// 自行取消／恢復靜音，圖示同步換 slash/wave 兩態。只有偵測到母帶含音軌才會顯示（見
+    /// `detectAudioTrack()`），沒有音軌時這顆鈕維持隱藏，不會被按到。
+    @objc private func toggleAudio() {
+        guard let q = playerView?.player else { return }
+        q.isMuted.toggle()
+        audioButton.image = NSImage(systemSymbolName:
+            q.isMuted ? "speaker.slash" : "speaker.wave.2", accessibilityDescription: nil)
+    }
 
     /// 剪裁：原生 trim UI（設計文件 §1.6）。已查 AVKit header（`AVPlayerView.h`）：
     /// `canBeginTrimming` 唯讀屬性、`beginTrimmingWithCompletionHandler:` 只回傳
