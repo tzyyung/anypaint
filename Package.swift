@@ -34,6 +34,13 @@ let package = Package(
             dependencies: ["AnypaintKit"],
             path: "Sources/anypaint-selftest",
             swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        // CFMessagePort RPC 客戶端 CLI（供 UI 自動化與端到端驗證腳本用，見 UITestServer）
+        .executableTarget(
+            name: "anypaintctl",
+            dependencies: ["AnypaintKit"],
+            path: "Sources/anypaintctl",
+            swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]
 )
