@@ -1331,5 +1331,6 @@ makeStreamConfigurationTests()
 uitestProtocolTests()
 goertzelTests()
 recordAudioTracksEndToEndTests()
+audioInputDeviceTests()
 
 T.finish()
