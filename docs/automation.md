@@ -48,6 +48,10 @@ agent）不必操作滑鼠鍵盤就能查狀態、截自己的 UI、以及驅動
 | `startRecord` | `rect`: `"x,y,w,h"`（AppKit 全域座標，點，左下原點） | `{ok:true}`（跳過拉框互動，直接以此矩形進 armed 並開始錄製——`RecordSession.startProgrammatically`） | `{ok:false, error:"busy"}`（已有錄製在跑，不是 toggle）／`{ok:false, error:"noScreenRecordingPermission"}`（`CGPreflightScreenCaptureAccess()` 為 false——RPC 路徑不進互動式權限詢問，直接拒絕，避免在 CFMessagePort callback 上 runModal 卡死整條通道）／`{ok:false, error:"badRect"}`（`rect` 解析失敗、或矩形沒有完整落在目標螢幕的 `frame` 內、或找不到目標螢幕）／`{ok:false, error:"selectionTooSmall"}`（矩形合法但邊長 < `RecordSession.minSelectionEdgePt`） |
 | `stopRecord` | 無 | `{ok:true}`（正常停止，收檔保留——同熱鍵在 recording 狀態下再按一次） | `{ok:false, state:"<RecordSession.state 的字串描述>"}`（呼叫當下不是 `.recording`——例如還在 `selecting`／`armed`／`finishing`。**這種情況不會呼叫 `cancelIfActive()`**：若真的呼叫，`selecting`／`armed` 下會被解讀成取消並發出 `recordingAborted`，那不是 `stopRecord` 的語意，呼叫端明確表達的是「結束並保留母帶」，不該在還沒開始錄製時被誤當成取消） |
 | `abortRecord` | 無 | `{ok: <是否真的不在 active 狀態了>, state:"<RecordSession.state 的字串描述>"}` | `.finishing` 狀態不接受取消（刻意保留的紀律，見 `docs/animated-capture.md` §4），這時 `ok` 會是 `false`，`state` 仍是 `"finishing"`——不能因為呼叫成功就假設母帶已經被丟棄 |
+| `micDevices` | 無 | `{ok:true, devices:[{uniqueID,name,isDefault}], systemDefaultID:"<uniqueID>"或null}`（`AudioInputDeviceList.all()` 的直接映射；`systemDefaultID` 罕見情況可能是 `null`——見 `AudioInputDeviceList.systemDefaultID()` 對聚合裝置的邊界說明） | — |
+| `micProbeStart` | `deviceID`（可省略／空字串＝系統預設輸入） | `{ok:true, authorized:<Bool>}`——`authorized` 是**當下**的麥克風授權狀態（`AVCaptureDevice.authorizationStatus`）；`false` 時 `MicLevelMonitor.start()` 靜默不啟動任何 session（不 crash），之後 `micLevel` 會恆回 0，呼叫端要靠這個欄位分辨「已啟動只是還沒收到聲音」與「根本沒有授權」 | — |
+| `micLevel` | 無 | `{ok:true, level:<Float 0..1>}`（RPC 專用 `MicLevelMonitor` 的 `latestLevel`，未 `micProbeStart` 或已 `micProbeStop` 時恆為 0） | — |
+| `micProbeStop` | 無 | `{ok:true}` | — |
 | 其他未知命令 | — | — | `{ok:false, error:"unknownCommand:<cmd>"}` |
 
 `rect` 字串範例：`"100,140,260,160"`（四段皆須是合法數字，否則整體判定 `badRect`）。
@@ -56,6 +60,14 @@ agent）不必操作滑鼠鍵盤就能查狀態、截自己的 UI、以及驅動
 不會沿用 HUD 秒數欄殘留的設定（`RecordSession.startProgrammatically` 明確把 `durationLimit`
 壓成 `nil` 並重新 arm 看門狗，見 `docs/animated-capture.md`）。同時 HUD 上會短暫顯示「🤖 遠端
 自動化錄影」提示（3 秒自動消失），讓實機操作者知道這段錄製是被自動化觸發，不是使用者自己按的。
+
+**`micProbeStart`/`micLevel`/`micProbeStop` 用的是 `AppDelegate` 自己另外持有的一個
+`MicLevelMonitor` 實例**，與設定頁「截圖」分頁裡 `CaptureSettingsViewController` 自己的那個
+`MicLevelMonitor` 是**兩個獨立物件**（取簡，見 `AppDelegate.micProbeMonitor` 的註解）。
+`MicLevelMonitor` 沒有 singleton 防同裝置多 session——若設定頁同時開著、且勾了同一顆裝置，
+會有兩條 `AVCaptureSession` 各自對同一顆麥克風起 `AVCaptureDeviceInput`；實測（2026-08-13，
+兩者同時對 DaiLing G3 起 session）沒有 crash，兩邊各自拿到自己的樣本流。正常自動化情境設定頁
+通常沒開，這個重疊窗口很少發生。
 
 ---
 
@@ -108,3 +120,13 @@ sleep 2
 anypaintctl stopRecord
 anypaintctl wait-event recordingStopped --after 3 --timeout 15
 ```
+
+範例：列出麥克風裝置、對指定裝置起試音錶、輪詢電平：
+
+```bash
+anypaintctl micDevices                                            # 找出想測的 uniqueID
+anypaintctl micProbeStart --json '{"deviceID":"BuiltInMicrophoneDevice"}'
+anypaintctl micLevel                                              # {"ok":true,"level":0.0xx}
+anypaintctl micProbeStop
+```
+
