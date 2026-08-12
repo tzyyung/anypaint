@@ -1329,5 +1329,6 @@ pasteboardRoundTripTests()
 recordOptionsTests()
 makeStreamConfigurationTests()
 uitestProtocolTests()
+goertzelTests()
 
 T.finish()

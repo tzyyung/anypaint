@@ -89,4 +89,20 @@ public enum RecordMath {
         let s = Int(shown.rounded(.down))
         return String(format: "%02d:%02d", s / 60, s % 60)
     }
+
+    /// Goertzel 單頻能量（正規化）：音訊自檢判定「錄到的就是自己播的 440Hz」。
+    /// 純計算——輸入是裸樣本陣列，不碰 AVFoundation（分層原則）。
+    public static func goertzelPower(samples: [Float], sampleRate: Double,
+                                     targetHz: Double) -> Double {
+        guard !samples.isEmpty else { return 0 }
+        let w = 2 * Double.pi * targetHz / sampleRate
+        let coeff = 2 * cos(w)
+        var s1 = 0.0, s2 = 0.0
+        for x in samples {
+            let s0 = Double(x) + coeff * s1 - s2
+            s2 = s1; s1 = s0
+        }
+        let power = s1 * s1 + s2 * s2 - coeff * s1 * s2
+        return power / Double(samples.count * samples.count)
+    }
 }
