@@ -19,6 +19,10 @@ final class CaptureSettingsViewController: NSViewController {
     /// 在 `buildMicDetailRow()` 裡建構後才有值，`loadView` 一定先跑過那條路，之後才可能被
     /// 其他方法（`recordMicToggled` 等）存取。
     private var micDetailRow: NSView!
+    /// 分頁目前是否顯示中（`viewWillAppear`/`viewWillDisappear` 維護）。`updateMicMonitorState()`
+    /// 判斷「該不該開電平監看」時要一併看這個值——頁面被切走／設定視窗關閉時，即使「錄製麥克風」
+    /// 開關仍是開的，也不該重新掛起監看。
+    private var isViewVisible = false
 
     override func loadView() {
         micLevelMonitor.onLevel = { [weak self] level in
@@ -115,6 +119,10 @@ final class CaptureSettingsViewController: NSViewController {
         if let saved = AppSettings.recordMicrophoneDeviceID,
            !devices.contains(where: { $0.uniqueID == saved }) {
             AppSettings.recordMicrophoneDeviceID = nil
+            // 幽靈裝置清鍵後，底層監看可能還釘著那顆已消失的裝置（fix round 1，team-lead 審查
+            // 抓到：清鍵沒有連動重掛，電平表會凍結在最後一格）。走唯一出口，讓它以新的
+            // nil＝系統預設重新判斷啟停。
+            updateMicMonitorState()
         }
 
         micDevicePopup.removeAllItems()
@@ -137,11 +145,14 @@ final class CaptureSettingsViewController: NSViewController {
         updateMicMonitorState()
     }
 
-    /// 依目前開關＋選中裝置決定電平監看的啟停，唯一出口——換裝置、開關切換、頁面顯示/隱藏
-    /// 都走這裡：`MicLevelMonitor.start()` 內部自己會先 stop 舊的，換裝置直接重掛即可，不需要
-    /// 呼叫端自己拆成「先 stop 再 start」兩步。
+    /// 依「頁面是否顯示中」＋「開關」＋「選中裝置」決定電平監看的啟停，**真正的唯一出口**
+    /// ——換裝置、開關切換、幽靈裝置清鍵、頁面顯示/隱藏，全部只透過這個方法碰
+    /// `micLevelMonitor.start()`/`stop()`，呼叫端不直接呼叫兩者（fix round 1，team-lead 審查
+    /// 抓到先前 `recordMicToggled`／`viewWillDisappear` 繞過這裡、註解名實不符）。
+    /// `MicLevelMonitor.start()` 內部自己會先 stop 舊的，換裝置直接重掛即可，不需要呼叫端自己
+    /// 拆成「先 stop 再 start」兩步。
     private func updateMicMonitorState() {
-        guard AppSettings.recordMicrophone else {
+        guard isViewVisible, AppSettings.recordMicrophone else {
             micLevelMonitor.stop()
             return
         }
@@ -150,14 +161,17 @@ final class CaptureSettingsViewController: NSViewController {
 
     override func viewWillAppear() {
         super.viewWillAppear()
+        isViewVisible = true
         updateMicMonitorState()
     }
 
     /// 分頁切走／設定視窗關閉都會走這裡（NSTabViewController 的 view containment：非顯示中
-    /// 分頁的 view 本來就不在階層內），停掉電平監看，不留著背景還開著麥克風 session。
+    /// 分頁的 view 本來就不在階層內）。`isViewVisible = false` 讓 `updateMicMonitorState()`
+    /// 的 guard 直接落到 stop()，不留著背景還開著麥克風 session。
     override func viewWillDisappear() {
         super.viewWillDisappear()
-        micLevelMonitor.stop()
+        isViewVisible = false
+        updateMicMonitorState()
     }
 
     /// GIF 編碼幀率（沿用上方 watchdog popup 的建構/選中/action 模式，設計文件 §1.2）。
@@ -218,7 +232,7 @@ final class CaptureSettingsViewController: NSViewController {
         guard recordMicCheckbox.state == .on else {
             AppSettings.recordMicrophone = false
             micDetailRow.isHidden = true
-            micLevelMonitor.stop()
+            updateMicMonitorState()
             return
         }
         AVCaptureDevice.requestAccess(for: .audio) { granted in
@@ -226,9 +240,10 @@ final class CaptureSettingsViewController: NSViewController {
                 AppSettings.recordMicrophone = granted
                 self.recordMicCheckbox.state = granted ? .on : .off
                 self.micDetailRow.isHidden = !granted
-                if granted {
-                    self.updateMicMonitorState()
-                } else {
+                // granted＝false 時 AppSettings.recordMicrophone 已同步變 false，
+                // updateMicMonitorState() 的 guard 自然落到 stop()——不需要另外分支呼叫 stop()。
+                self.updateMicMonitorState()
+                if !granted {
                     let alert = NSAlert()
                     alert.messageText = "需要麥克風權限"
                     alert.informativeText = "請到「系統設定 › 隱私權與安全性 › 麥克風」開啟 anypaint。"
