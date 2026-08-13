@@ -371,8 +371,11 @@ public final class RecordFrameSource: NSObject {
         }
         self.stream = nil
         try? await stream.stopCapture()
-        // 先停 HAL 麥克風（AudioDeviceStop 會等 IOProc 收手），確保 finalize 期間不再有 mic 封包
-        // 灌進正在收尾的 writer。已排進 sampleQueue 的遲到封包由 WriterBox 的 isTerminal/status 擋。
+        // 停 HAL 麥克風。**注意**：`AudioInputTap.stop()` 是 fire-and-forget（HAL 拆卸派到背景 queue，
+        // 見該檔 finding #1），**不保證**回來時 IOProc 已收手——所以仍可能有 mic 封包已排進 sampleQueue、
+        // 甚至在 box.finish 之後才跑。真正的防線是 `WriterBox` 一進 finish/cancel 就設 `isTerminal=true`、
+        // 每個 appendAudio 都 gate 在 `!isTerminal`（全在 sampleQueue 序列化），遲到封包被丟、不會在
+        // markAsFinished 之後 append（那是不可攔的 ObjC 例外）。不要因為這裡有 stop() 就移除 isTerminal gate。
         micSource?.stop(); micSource = nil
         guard let box, let url = outputURL else { throw RecordError.noFrames }
         // 母帶的所有權在這裡整個轉交出去（box 與 outputURL 都清成 nil）：
@@ -420,7 +423,7 @@ public final class RecordFrameSource: NSObject {
         }
         self.stream = nil
         try? await stream.stopCapture()
-        micSource?.stop(); micSource = nil   // 同 stopAndFinish：先停麥克風 IOProc 再丟母帶
+        micSource?.stop(); micSource = nil   // fire-and-forget（見 stopAndFinish 說明）；遲到封包靠 isTerminal gate 擋
         let box = self.box
         self.box = nil
         let url = outputURL

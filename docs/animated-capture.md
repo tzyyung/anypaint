@@ -455,12 +455,13 @@ captureMicrophone: true, excludesOwnAudio: false)`（**`excludesOwnAudio: false`
    實測都在百萬級）；絕對門檻只當排除退化的低地板（1e-6，比噪底 ~1e-9 高千倍、又遠低於任何真實
    擷取）。**不可**把絕對門檻改成跟著實跑動態調（判準要確定性，見 §9）。
 4. **檢查D（時長對齊）**：麥克風軌 `timeRange.duration` 與錄製時長差 < 1s（無斷格）。
-5. **檢查E（起始 PTS 同 epoch）**：麥克風軌與影像軌第一個 sample 的 PTS 偏移 < 0.5s——直接打設計 §5
+5. **檢查E（起始 PTS 同 epoch）**：麥克風軌與影像軌第一個 sample 的 PTS 偏移 < 1.0s——直接打設計 §5
    的最大假設（HAL `mHostTime` 經 `CMClockMakeHostTimeFromSystemUnits` 是否與 SCK 影片時鐘同一
-   epoch）。抓的是「秒～小時級」的時鐘對錯 epoch；實測正常偏移 0.18～0.3s 是 mic IOProc 在
-   `startCapture` 之後才啟動的開場抖動（**非時鐘 bug**，也是輸出檔實際的開場 A/V 微小偏移），
-   0.5s 門檻留 2x 餘裕不誤殺。**注意 clamshell（螢幕蓋著）會停用內建麥克風**，此時檢查C 會失敗
-   （不是程式 bug，是硬體被蓋子關掉）。
+   epoch）。**只抓「秒～小時級」的時鐘對錯 epoch**（例如 mach host time 誤當媒體時間＝開機至今）；
+   實測正常偏移 0.12～0.42s，主要是 **SCK 影片首格延遲**（run-to-run 變動大），不是時鐘 bug，門檻
+   1.0s 遠高於這個抖動、又遠低於任何 epoch 錯位（0.5s 對首格延遲餘裕太薄會偶發誤殺）。**這不是精細
+   A/V 同步檢查**——真正「聲音跟畫面對不對」要靠人耳拍手測試（§8 手動清單第 14 項）。**注意 clamshell
+   （螢幕蓋著）會停用內建麥克風**，此時檢查C 會失敗（不是程式 bug，是硬體被蓋子關掉）。
 
 另外，自檢過程會把**第一個音訊 CMSampleBuffer 的 ASBD**（`RecordFrameSource.onFirstAudioBuffer`
 回呼，取自 `CMAudioFormatDescriptionGetStreamBasicDescription`）記進 log——這是 SCK 實際送來
