@@ -419,9 +419,83 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         case "micProbeStop":
             micProbeMonitor.stop()
             return ["ok": true]
+        case "captureRegion":
+            // 非互動選區截圖：擷取→裁切→複製剪貼簿(可選存檔)，非同步,完成發 captureCompleted 事件。
+            guard let rectStr = command.json["rect"] as? String,
+                  let rect = CoordinateUtils.parseRect(rectStr) else { return ["ok": false, "error": "badRect"] }
+            guard CGPreflightScreenCaptureAccess() else { return ["ok": false, "error": "noScreenRecordingPermission"] }
+            captureRegionRPC(rect, save: command.json["save"] as? Bool ?? false)
+            return ["ok": true]
+        case "recognizeText":
+            // 非互動選區 OCR：擷取→裁切→辨識,非同步,完成發 textRecognized 事件。
+            guard let rectStr = command.json["rect"] as? String,
+                  let rect = CoordinateUtils.parseRect(rectStr) else { return ["ok": false, "error": "badRect"] }
+            guard CGPreflightScreenCaptureAccess() else { return ["ok": false, "error": "noScreenRecordingPermission"] }
+            recognizeTextRPC(rect)
+            return ["ok": true]
+        case "pinClipboard":
+            // 貼剪貼簿圖成浮窗（同步：不需擷取螢幕）。滾動/錄影中拒絕（不疊加,spec §9.1）。
+            guard !scrollSession.isActive, !recordSession.isActive else { return ["ok": false, "error": "busy"] }
+            guard let image = pinboard.imageFromPasteboard() else { return ["ok": false, "error": "noImage"] }
+            pinController.pin(image: image, at: NSEvent.mouseLocation)
+            return ["ok": true]
         default:
             return nil
         }
+    }
+
+    /// 非互動選區截圖（RPC）：擷取所有螢幕→用 `AutomationCapture.cropPlan` 定位並裁切→複製剪貼簿
+    /// （可選存檔）→發 `captureCompleted`/`captureFailed` 事件。async(擷取只有 async API),故走事件。
+    private func captureRegionRPC(_ globalRect: CGRect, save: Bool) {
+        Task { @MainActor in
+            guard let cropped = await self.captureCropped(globalRect) else {
+                UITestServer.shared?.emit("captureFailed", ["reason": "captureOrCrop"]); return
+            }
+            let pointSize = CoordinateUtils.pointSize(pixelWidth: cropped.width, pixelHeight: cropped.height,
+                                                      scale: self.captureScale(for: globalRect))
+            let image = NSImage(cgImage: cropped, size: pointSize)
+            self.pinboard.copy(image: image)
+            var payload: [String: Any] = ["copied": true]
+            let vars = CaptureVars.makeVars(title: CaptureVars.currentFrontTitle())
+            if save, let url = self.output.saveExpanding(template: AppSettings.quickSavePathTemplate,
+                                                         image: image, vars: vars, quiet: true) {
+                payload["path"] = url.path
+            }
+            UITestServer.shared?.emit("captureCompleted", payload)
+        }
+    }
+
+    /// 非互動選區 OCR（RPC）：擷取→裁切→`TextRecognizer.recognizeContentSync`→發 `textRecognized`
+    /// （文字進剪貼簿,同互動版）/`captureFailed`。
+    private func recognizeTextRPC(_ globalRect: CGRect) {
+        Task { @MainActor in
+            guard let cropped = await self.captureCropped(globalRect) else {
+                UITestServer.shared?.emit("captureFailed", ["reason": "captureOrCrop"]); return
+            }
+            do {
+                let text = (try TextRecognizer.recognizeContentSync(cgImage: cropped)).joined
+                self.pinboard.copy(text: text)
+                UITestServer.shared?.emit("textRecognized", ["text": text])
+            } catch {
+                UITestServer.shared?.emit("captureFailed", ["reason": "ocr: \(error)"])
+            }
+        }
+    }
+
+    /// 共用：擷取所有螢幕、依 cropPlan 裁出選區的 CGImage（左上原點像素）；任一步失敗回 nil。
+    private func captureCropped(_ globalRect: CGRect) async -> CGImage? {
+        guard let snapshots = try? await capturer.captureAllDisplays() else { return nil }
+        let geoms = snapshots.map {
+            AutomationCapture.DisplayGeometry(frameGlobal: $0.frameGlobal, pointSize: $0.pointSize, scale: $0.scale)
+        }
+        guard let plan = AutomationCapture.cropPlan(globalRect: globalRect, displays: geoms) else { return nil }
+        return snapshots[plan.index].cgImage.cropping(to: plan.pixelCrop)
+    }
+
+    /// 選區所在螢幕的 pixel scale（找不到＝主螢幕 backingScaleFactor 或 2）。
+    private func captureScale(for globalRect: CGRect) -> CGFloat {
+        NSScreen.screens.first { $0.frame.contains(globalRect) }?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor ?? 2
     }
 
     /// 解析 `"x,y,w,h"`（AppKit 全域座標，點）。四段都要是合法數字，否則回 nil。

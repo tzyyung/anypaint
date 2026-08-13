@@ -1354,5 +1354,6 @@ annotationInputTests()
 miscPureTests()
 captureRoutingTests()
 scrollBottomLogicTests()
+automationCaptureTests()
 
 T.finish()

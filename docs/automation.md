@@ -52,7 +52,16 @@ agent）不必操作滑鼠鍵盤就能查狀態、截自己的 UI、以及驅動
 | `micProbeStart` | `deviceID`（可省略／空字串＝系統預設輸入） | `{ok:true, authorized:<Bool>}`——`authorized` 是**當下**的麥克風授權狀態（`AVCaptureDevice.authorizationStatus`）；`false` 時 `MicLevelMonitor.start()` 靜默不啟動任何 session（不 crash），之後 `micLevel` 會恆回 0，呼叫端要靠這個欄位分辨「已啟動只是還沒收到聲音」與「根本沒有授權」 | — |
 | `micLevel` | 無 | `{ok:true, level:<Float 0..1>}`（RPC 專用 `MicLevelMonitor` 的 `latestLevel`，未 `micProbeStart` 或已 `micProbeStop` 時恆為 0） | — |
 | `micProbeStop` | 無 | `{ok:true}` | — |
+| `captureRegion` | `rect`: `"x,y,w,h"`（全域座標，點）；`save`（Bool，可省，預設 false） | `{ok:true}`（**非同步**：立即回 ok，擷取/裁切/複製完成後發 `captureCompleted` 事件；`save:true` 時額外用 `quickSavePathTemplate` 存檔，路徑放事件 payload） | `{ok:false, error:"badRect"}`（`rect` 解析失敗）／`{ok:false, error:"noScreenRecordingPermission"}`（`CGPreflightScreenCaptureAccess()` 為 false，同 `startRecord` 的理由不進互動式權限流程） |
+| `recognizeText` | `rect`: `"x,y,w,h"`（全域座標，點） | `{ok:true}`（**非同步**：擷取該區→OCR，完成發 `textRecognized` 事件，文字同時進剪貼簿） | `badRect`／`noScreenRecordingPermission`（同 `captureRegion`） |
+| `pinClipboard` | 無 | `{ok:true}`（把剪貼簿裡的圖釘成置頂浮窗，**同步**：不需擷取螢幕） | `{ok:false, error:"noImage"}`（剪貼簿沒有可讀影像）／`{ok:false, error:"busy"}`（滾動/錄影進行中，不疊加） |
 | 其他未知命令 | — | — | `{ok:false, error:"unknownCommand:<cmd>"}` |
+
+**選區必須完整落在單一螢幕內**（`captureRegion`/`recognizeText` 的裁切用 `AutomationCapture.cropPlan`，
+跨螢幕選區找不到完整包住的螢幕＝視同 `badRect`，比照錄影 `presentLocked` 的紀律）。
+
+**滾動截圖（scroll capture）刻意不提供 RPC 命令**：它本質上需要**真實的捲動輸入**去逐格拼接長圖，
+純 RPC 通道無法驅動內容捲動，硬做只會得到單張影格。要自動化滾動截圖得另外送合成滾輪事件（不在本通道範圍）。
 
 `rect` 字串範例：`"100,140,260,160"`（四段皆須是合法數字，否則整體判定 `badRect`）。
 
@@ -74,7 +83,8 @@ agent）不必操作滑鼠鍵盤就能查狀態、截自己的 UI、以及驅動
 ## 3. 事件
 
 `UITestServer.emit(name:payload:)` 把事件寫進 `/tmp/anypaint-uitest-events.jsonl`（append，一行
-一個 JSON 物件，含 `seq`／`event`／payload 展開的其他鍵）。動畫截圖目前會發三種：
+一個 JSON 物件，含 `seq`／`event`／payload 展開的其他鍵）。非同步命令（錄影、`captureRegion`、
+`recognizeText`）完成時發對應事件，呼叫端用 `anypaintctl wait-event <name>` 等：
 
 | 事件 | payload | 發送時機 |
 |---|---|---|
@@ -82,6 +92,9 @@ agent）不必操作滑鼠鍵盤就能查狀態、截自己的 UI、以及驅動
 | `recordingStopped` | `{outputURL: "<path>"}` | 正常停止（手動鈕／倒數到／看門狗／stream error 五條路徑共用）且收檔成功 |
 | `recordingAborted` | `{}` | 取消（Esc／取消鈕／`abortRecord` 命令），母帶被丟棄 |
 | `recordingFailed` | `{reason: "<字串>"}` | 三條失敗路徑各自發一次：`startFailed: <error>`（`RecordFrameSource.start` 的 await 拋錯，例如 TCC 拒絕、`noDisplays`）、`finishFailed: <error>`（`stopAndFinish()` 失敗，包含 `RecordError.noFrames`／`.writerFailed`）、`finishingTimeout`（`.finishing` 的 30 秒看門狗放生——`stopAndFinish()` 鏈路卡死時的最後防線）。三者都與對應的 `onFinished?(nil, …)` 回呼同一次失敗綁在一起，不是額外的獨立事件流 |
+| `captureCompleted` | `{copied: true, path?: "<path>"}` | `captureRegion` 擷取+裁切+複製剪貼簿完成；`save:true` 且寫檔成功時才有 `path` |
+| `textRecognized` | `{text: "<辨識結果>"}` | `recognizeText` OCR 完成（空結果時 `text` 為空字串，同時文字已進剪貼簿） |
+| `captureFailed` | `{reason: "<字串>"}` | `captureRegion`/`recognizeText` 的擷取或裁切失敗（`captureOrCrop`）、或 OCR 失敗（`ocr: <error>`） |
 
 `channelReady`（`{}`）在伺服器註冊完成時發一次，可用來確認 app 已經準備好接收命令（比起輪詢
 `getState` 直到成功，等這個事件更直接）。

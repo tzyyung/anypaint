@@ -9,6 +9,9 @@ let commandAliases: [String: String] = [
     "getstate": "getState", "get-state": "getState",
     "dumpui": "dumpUI", "dump-ui": "dumpUI",
     "screenshotself": "screenshotSelf", "screenshot-self": "screenshotSelf",
+    "captureregion": "captureRegion", "capture-region": "captureRegion",
+    "recognizetext": "recognizeText", "recognize-text": "recognizeText",
+    "pinclipboard": "pinClipboard", "pin-clipboard": "pinClipboard",
 ]
 func normalizeCommand(_ raw: String) -> String {
     commandAliases[raw.lowercased()] ?? raw
