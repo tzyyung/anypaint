@@ -4,14 +4,38 @@ import CoreGraphics
 /// Capture 路由決策的純邏輯：resizeAxis（游標軸向）、toggledTool、hitTextObject。
 nonisolated func captureRoutingTests() {
     // SelectionGeometry.resizeAxis：控制點→游標軸向
-    T.checkEq("resizeAxis: 左上=NWSE", SelectionGeometry.resizeAxis(for: .topLeft), .nwse)
-    T.checkEq("resizeAxis: 右下=NWSE", SelectionGeometry.resizeAxis(for: .bottomRight), .nwse)
-    T.checkEq("resizeAxis: 右上=NESW", SelectionGeometry.resizeAxis(for: .topRight), .nesw)
-    T.checkEq("resizeAxis: 左下=NESW", SelectionGeometry.resizeAxis(for: .bottomLeft), .nesw)
+    T.checkEq("resizeAxis: 左上=NWSE", SelectionGeometry.resizeAxis(for: SelectionGeometry.ResizeEdge.topLeft), .nwse)
+    T.checkEq("resizeAxis: 右下=NWSE", SelectionGeometry.resizeAxis(for: SelectionGeometry.ResizeEdge.bottomRight), .nwse)
+    T.checkEq("resizeAxis: 右上=NESW", SelectionGeometry.resizeAxis(for: SelectionGeometry.ResizeEdge.topRight), .nesw)
+    T.checkEq("resizeAxis: 左下=NESW", SelectionGeometry.resizeAxis(for: SelectionGeometry.ResizeEdge.bottomLeft), .nesw)
     T.checkEq("resizeAxis: 左=EW", SelectionGeometry.resizeAxis(for: .left), .ew)
     T.checkEq("resizeAxis: 右=EW", SelectionGeometry.resizeAxis(for: .right), .ew)
     T.checkEq("resizeAxis: 上=NS", SelectionGeometry.resizeAxis(for: .top), .ns)
     T.checkEq("resizeAxis: 下=NS", SelectionGeometry.resizeAxis(for: .bottom), .ns)
+    // 四角版（標註縮放,只有對角）
+    T.checkEq("resizeAxis 角: 左上=NWSE", SelectionGeometry.resizeAxis(for: SelectionGeometry.Corner.topLeft), .nwse)
+    T.checkEq("resizeAxis 角: 右上=NESW", SelectionGeometry.resizeAxis(for: SelectionGeometry.Corner.topRight), .nesw)
+
+    // selectToolCursor：角 handle→resize;命中物件→openHand;否則 arrow
+    T.checkEq("selCursor: 角→resize", SelectionGeometry.selectToolCursor(cornerAxis: .nwse, hitAnyObject: true), .resize(.nwse))
+    T.checkEq("selCursor: 命中物件→openHand", SelectionGeometry.selectToolCursor(cornerAxis: nil, hitAnyObject: true), .openHand)
+    T.checkEq("selCursor: 空→arrow", SelectionGeometry.selectToolCursor(cornerAxis: nil, hitAnyObject: false), .arrow)
+
+    // cursorKind 主決策樹（層序）
+    func ck(toolbar: Bool = false, text: Bool = false, textHover: Bool = false, select: Bool = false,
+            selKind: SelectionGeometry.CursorKind = .arrow, drawing: Bool = false,
+            edge: SelectionGeometry.ResizeAxis? = nil, inside: Bool = false) -> SelectionGeometry.CursorKind {
+        SelectionGeometry.cursorKind(toolbarHit: toolbar, isTextTool: text, textHover: textHover,
+                                     isSelectTool: select, selectCursor: selKind, isDrawingTool: drawing,
+                                     edgeAxis: edge, insideSelection: inside)
+    }
+    T.checkEq("cursor: 工具列→arrow（最優先）", ck(toolbar: true, drawing: true, edge: .ew), .arrow)
+    T.checkEq("cursor: 文字工具 hover→openHand", ck(text: true, textHover: true), .openHand)
+    T.checkEq("cursor: select 工具→委派 selKind", ck(select: true, selKind: .resize(.nesw)), .resize(.nesw))
+    T.checkEq("cursor: 繪製工具→crosshair", ck(drawing: true), .crosshair)
+    T.checkEq("cursor: 命中控制點→resize", ck(edge: .ew), .resize(.ew))
+    T.checkEq("cursor: 選區內→openHand", ck(inside: true), .openHand)
+    T.checkEq("cursor: 預設→crosshair", ck(), .crosshair)
 
     // AnnotationInput.toggledTool：點當前工具→取消,點別的→切換
     T.checkTrue("toggledTool: 點當前→nil", AnnotationInput.toggledTool(tapped: .rect, active: .rect) == nil)

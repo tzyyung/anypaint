@@ -20,38 +20,43 @@ extension SelectionView {
     private static let cursorEW = NativeCursors.load("resizeeastwest") ?? .resizeLeftRight
     private static let cursorNS = NativeCursors.load("resizenorthsouth") ?? .resizeUpDown
 
-    func cursor(at point: CGPoint) -> NSCursor {
-        if !toolbar.isHidden, toolbar.frame.contains(point) { return .arrow }
-        // 文字工具懸浮在既有文字上＝可拖曳移動，用開手游標提示（驗收回饋 Fix 2）。
-        if activeTool == .text, hitTextObject(at: point) != nil { return .openHand }
-        if activeTool == .select { return selectCursor(at: point) }
-        if activeTool != nil { return .crosshair }   // 繪製工具＝十字線（spec）
-        if let sel = selection, !frameLocked {       // 鎖框時無控制點、不可移動
-            if let h = hitHandle(point, in: sel) {
-                switch SelectionGeometry.resizeAxis(for: h) {
-                case .nwse: return Self.cursorNWSE
-                case .nesw: return Self.cursorNESW
-                case .ew:   return Self.cursorEW
-                case .ns:   return Self.cursorNS
-                }
-            }
-            if sel.contains(point) { return .openHand }
+    /// CursorKind（純決策）→ 實際 NSCursor（含系統原生 resize 游標資源）。
+    private func nsCursor(for kind: SelectionGeometry.CursorKind) -> NSCursor {
+        switch kind {
+        case .arrow:     return .arrow
+        case .openHand:  return .openHand
+        case .crosshair: return .crosshair
+        case .resize(.nwse): return Self.cursorNWSE
+        case .resize(.nesw): return Self.cursorNESW
+        case .resize(.ew):   return Self.cursorEW
+        case .resize(.ns):   return Self.cursorNS
         }
-        return .crosshair
     }
 
-    /// select 工具游標：選取物件的四角 handle＝對角 resize；物件本體＝開手；其餘＝箭頭（spec）。
-    private func selectCursor(at point: CGPoint) -> NSCursor {
-        if let selID = annotations.selectedID,
-           let selected = annotations.objects.first(where: { $0.id == selID }),
-           let handle = hitAnnotationHandle(point, for: selected) {
-            switch handle {
-            case .topLeft, .bottomRight: return Self.cursorNWSE
-            case .topRight, .bottomLeft: return Self.cursorNESW
-            }
+    func cursor(at point: CGPoint) -> NSCursor {
+        // 鎖框時無控制點、不可移動 → edgeAxis/insideSelection 皆視為無。
+        var edgeAxis: SelectionGeometry.ResizeAxis?
+        var inside = false
+        if let sel = selection, !frameLocked {
+            edgeAxis = hitHandle(point, in: sel).map { SelectionGeometry.resizeAxis(for: $0) }
+            inside = sel.contains(point)
         }
-        if annotations.hitTest(at: point) != nil { return .openHand }
-        return .arrow
+        let kind = SelectionGeometry.cursorKind(
+            toolbarHit: !toolbar.isHidden && toolbar.frame.contains(point),
+            isTextTool: activeTool == .text, textHover: hitTextObject(at: point) != nil,
+            isSelectTool: activeTool == .select, selectCursor: selectCursorKind(at: point),
+            isDrawingTool: activeTool != nil, edgeAxis: edgeAxis, insideSelection: inside)
+        return nsCursor(for: kind)
+    }
+
+    /// select 工具游標（純決策部分）：選取物件四角 handle＝對角 resize；命中物件＝開手；其餘＝箭頭。
+    private func selectCursorKind(at point: CGPoint) -> SelectionGeometry.CursorKind {
+        let cornerAxis = annotations.selectedID
+            .flatMap { id in annotations.objects.first(where: { $0.id == id }) }
+            .flatMap { hitAnnotationHandle(point, for: $0) }
+            .map { SelectionGeometry.resizeAxis(for: $0) }
+        return SelectionGeometry.selectToolCursor(cornerAxis: cornerAxis,
+                                                  hitAnyObject: annotations.hitTest(at: point) != nil)
     }
 
     override func updateTrackingAreas() {
@@ -137,14 +142,9 @@ extension SelectionView {
         if activeTool == nil, selection == nil {
             let origin = snapshot.frameGlobal.origin
             let globalP = CGPoint(x: p.x + origin.x, y: p.y + origin.y)
-            let newCandidate: CGRect
-            if let hit = WindowDetector.hitTest(point: globalP, windows: snapshot.windows) {
-                newCandidate = CGRect(x: hit.origin.x - origin.x, y: hit.origin.y - origin.y,
-                                      width: hit.width, height: hit.height)
-                    .intersection(bounds)   // 跨螢幕視窗 clamp 進本螢幕（spec）
-            } else {
-                newCandidate = bounds       // 桌面＝整顆螢幕（使用者決策）
-            }
+            // 候選框的座標轉換＋跨螢幕 clamp 抽到 SelectionGeometry.windowCandidate（可測）。
+            let hit = WindowDetector.hitTest(point: globalP, windows: snapshot.windows)
+            let newCandidate = SelectionGeometry.windowCandidate(hit: hit, frameOrigin: origin, viewBounds: bounds)
             if newCandidate != windowCandidate {
                 windowCandidate = newCandidate
                 needsDisplay = true

@@ -47,6 +47,38 @@ public enum SelectionGeometry {
         }
     }
 
+    /// 四角 → 游標軸向（標註物件縮放只有對角,無 EW/NS）。
+    public static func resizeAxis(for corner: Corner) -> ResizeAxis {
+        switch corner {
+        case .topLeft, .bottomRight: return .nwse
+        case .topRight, .bottomLeft: return .nesw
+        }
+    }
+
+    /// 游標種類（view 把它映射成實際 NSCursor）。
+    public enum CursorKind: Equatable { case arrow, openHand, crosshair, resize(ResizeAxis) }
+
+    /// select 工具的游標：命中選取物件角落 handle→縮放游標;命中任一物件→openHand;否則 arrow。
+    public static func selectToolCursor(cornerAxis: ResizeAxis?, hitAnyObject: Bool) -> CursorKind {
+        if let cornerAxis { return .resize(cornerAxis) }
+        return hitAnyObject ? .openHand : .arrow
+    }
+
+    /// cursor(at:) 主決策樹（純：把 view 狀態濃縮成幾個旗標）。層序與原本逐條相同。
+    /// - edgeAxis：只有「有選取且未鎖框且命中控制點」時才非 nil（呼叫端負責 gate）。
+    /// - insideSelection：只有「有選取且未鎖框且點在選區內」時才 true。
+    public static func cursorKind(toolbarHit: Bool, isTextTool: Bool, textHover: Bool,
+                                  isSelectTool: Bool, selectCursor: CursorKind,
+                                  isDrawingTool: Bool, edgeAxis: ResizeAxis?, insideSelection: Bool) -> CursorKind {
+        if toolbarHit { return .arrow }
+        if isTextTool, textHover { return .openHand }
+        if isSelectTool { return selectCursor }
+        if isDrawingTool { return .crosshair }
+        if let edgeAxis { return .resize(edgeAxis) }
+        if insideSelection { return .openHand }
+        return .crosshair
+    }
+
     /// 由拖曳某控制點算新選取框；允許拖過頭翻轉,用 min/max 正規化。
     public static func resized(_ start: CGRect, edge: ResizeEdge, to p: CGPoint) -> CGRect {
         var minX = start.minX, maxX = start.maxX, minY = start.minY, maxY = start.maxY
@@ -149,6 +181,15 @@ public enum SelectionGeometry {
     /// 十字線水平帶。
     public static func crosshairBandHorizontal(atY y: CGFloat, width: CGFloat) -> CGRect {
         CGRect(x: 0, y: y - 2, width: width, height: 4)
+    }
+
+    /// 視窗偵測候選框（游標懸在某視窗上時提亮的區域）：命中某視窗＝把它的全域框轉成本 view 座標
+    /// （減 frameOrigin）再與 viewBounds 取交集（跨螢幕視窗 clamp 進本螢幕）；沒命中＝整個 viewBounds
+    /// （桌面＝整顆螢幕）。純座標運算,WindowDetector 的命中判定留在呼叫端。
+    public static func windowCandidate(hit: CGRect?, frameOrigin: CGPoint, viewBounds: CGRect) -> CGRect {
+        guard let hit else { return viewBounds }
+        return CGRect(x: hit.origin.x - frameOrigin.x, y: hit.origin.y - frameOrigin.y,
+                      width: hit.width, height: hit.height).intersection(viewBounds)
     }
 
     /// 程式化鎖定選區的驗證＋座標轉換：globalRect 必須落在該螢幕 frame 內,否則回 nil（拒絕鎖定）；

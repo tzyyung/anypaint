@@ -96,6 +96,21 @@ nonisolated func selectionGeometryTests() {
               SelectionGeometry.clampRectOrigin(CGRect(x: 190, y: 95, width: 40, height: 30), in: sz),
               CGRect(x: 160, y: 70, width: 40, height: 30))
 
+    // windowCandidate：命中視窗→轉本地座標＋clamp;沒命中→整個 viewBounds
+    let vb = CGRect(x: 0, y: 0, width: 1000, height: 800)
+    // 命中框全域 (200,150,300,200)、frameOrigin (100,100) → 本地 (100,50,300,200),在 bounds 內
+    T.checkEq("winCand: 命中→轉本地",
+              SelectionGeometry.windowCandidate(hit: CGRect(x: 200, y: 150, width: 300, height: 200),
+                                                frameOrigin: CGPoint(x: 100, y: 100), viewBounds: vb),
+              CGRect(x: 100, y: 50, width: 300, height: 200))
+    // 跨螢幕：本地框超出 bounds 右緣 → 交集 clamp
+    let clamped = SelectionGeometry.windowCandidate(hit: CGRect(x: 100, y: 100, width: 2000, height: 200),
+                                                    frameOrigin: CGPoint(x: 0, y: 0), viewBounds: vb)
+    T.checkEq("winCand: 超出→clamp 進 bounds 寬（交集 100..1000）", clamped.width, 900)
+    // 沒命中→整個 viewBounds（桌面）
+    T.checkEq("winCand: 沒命中→整個 bounds",
+              SelectionGeometry.windowCandidate(hit: nil, frameOrigin: .zero, viewBounds: vb), vb)
+
     // validateAndLocalize（presentLocked 驗證）：globalRect 在螢幕內→轉本地;不在→nil
     let scrFrame = CGRect(x: 100, y: 200, width: 1000, height: 800)
     let inside = CGRect(x: 150, y: 250, width: 300, height: 200)
