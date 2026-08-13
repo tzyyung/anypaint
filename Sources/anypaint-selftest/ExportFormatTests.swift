@@ -75,4 +75,15 @@ nonisolated func exportFormatTests() {
     T.checkEq("nextPeak: 相等→保持", RecordMath.nextPeak(bars: 5, currentPeak: 5), 5)
     T.checkEq("nextPeak: 更低→衰減一格", RecordMath.nextPeak(bars: 2, currentPeak: 5), 4)
     T.checkEq("nextPeak: 已在0→不為負", RecordMath.nextPeak(bars: 0, currentPeak: 0), 0)
+
+    // RecordMath.clampedExportDuration（原 GifExporter.prepareReader）
+    // 請求 5s、母帶 10s、範圍起點 3s → min(5, 10-3=7)=5
+    T.checkEq("exportDur: 請求短於剩餘→請求", RecordMath.clampedExportDuration(requested: 5, assetDuration: 10, rangeStart: 3), 5)
+    // 請求 8s 超過剩餘 7s → 夾到 7
+    T.checkEq("exportDur: 請求超剩餘→夾到剩餘", RecordMath.clampedExportDuration(requested: 8, assetDuration: 10, rangeStart: 3), 7)
+
+    // RecordMath.outputPointLength（原 GifExporter 像素→點）
+    T.checkEq("outLen: 2880px@2x→1440", RecordMath.outputPointLength(pixels: 2880, pointScale: 2), 1440)
+    T.checkEq("outLen: 四捨五入", RecordMath.outputPointLength(pixels: 5, pointScale: 2), 3)   // 2.5→3
+    T.checkEq("outLen: 下限 1", RecordMath.outputPointLength(pixels: 1, pointScale: 10), 1)
 }

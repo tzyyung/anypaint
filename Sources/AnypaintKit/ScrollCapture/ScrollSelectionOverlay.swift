@@ -87,11 +87,10 @@ public final class ScrollSelectionOverlayController {
     /// 呼叫端以為錄的是自己給的座標，實際錄到的是被搬移過的位置（review 判定為真缺陷）。
     @discardableResult
     public func presentLocked(_ globalRect: CGRect, on screen: NSScreen) -> Bool {
-        guard screen.frame.contains(globalRect) else { return false }
+        // 驗證＋全域→本地座標抽到 SelectionGeometry.validateAndLocalize（可測）。
+        guard let local = SelectionGeometry.validateAndLocalize(globalRect: globalRect,
+                                                                screenFrame: screen.frame) else { return false }
         present(on: screen)
-        let local = CGRect(x: globalRect.minX - screen.frame.minX,
-                           y: globalRect.minY - screen.frame.minY,
-                           width: globalRect.width, height: globalRect.height)
         window?.selectionView?.lockProgrammatically(local)
         return true
     }

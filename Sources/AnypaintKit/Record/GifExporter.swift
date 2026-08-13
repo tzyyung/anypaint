@@ -270,7 +270,8 @@ public enum GifExporter {
             // 真正讀取的範圍——呼叫端傳進超出母帶尾端的請求範圍不會報錯，只會默默少讀，但這裡的
             // duration 若不clamp，grid／delay 計算會以「請求的長度」為準，吐出一支比實際內容
             // 更長（尾端補靜止格）的動畫。故取 min(請求長度, 母帶時長-範圍起點)。
-            duration = min(timeRange.duration.seconds, assetDuration - rangeStartSeconds)
+            duration = RecordMath.clampedExportDuration(requested: timeRange.duration.seconds,
+                                                        assetDuration: assetDuration, rangeStart: rangeStartSeconds)
         } else {
             rangeStartSeconds = 0
             duration = assetDuration
@@ -279,8 +280,8 @@ public enum GifExporter {
 
         let grid = RecordMath.gridTimes(duration: duration, fps: fps)
         let pxW = Int(naturalSize.width), pxH = Int(naturalSize.height)
-        let outW = max(1, Int((CGFloat(pxW) / pointScale).rounded()))
-        let outH = max(1, Int((CGFloat(pxH) / pointScale).rounded()))
+        let outW = RecordMath.outputPointLength(pixels: pxW, pointScale: pointScale)
+        let outH = RecordMath.outputPointLength(pixels: pxH, pointScale: pointScale)
         return FramePlan(reader: reader, output: output, grid: grid, duration: duration,
                          rangeStartSeconds: rangeStartSeconds, outW: outW, outH: outH)
     }

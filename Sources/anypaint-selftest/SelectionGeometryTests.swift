@@ -96,6 +96,16 @@ nonisolated func selectionGeometryTests() {
               SelectionGeometry.clampRectOrigin(CGRect(x: 190, y: 95, width: 40, height: 30), in: sz),
               CGRect(x: 160, y: 70, width: 40, height: 30))
 
+    // validateAndLocalize（presentLocked 驗證）：globalRect 在螢幕內→轉本地;不在→nil
+    let scrFrame = CGRect(x: 100, y: 200, width: 1000, height: 800)
+    let inside = CGRect(x: 150, y: 250, width: 300, height: 200)
+    T.checkEq("validateLocalize: 在螢幕內→減螢幕原點",
+              SelectionGeometry.validateAndLocalize(globalRect: inside, screenFrame: scrFrame),
+              CGRect(x: 50, y: 50, width: 300, height: 200))
+    let outside = CGRect(x: 50, y: 250, width: 300, height: 200)   // minX 50 < 螢幕 minX 100
+    T.checkTrue("validateLocalize: 超出螢幕→nil",
+                SelectionGeometry.validateAndLocalize(globalRect: outside, screenFrame: scrFrame) == nil)
+
     // isValidSelectionSize
     T.checkTrue("geo validSize: nil→false", !SelectionGeometry.isValidSelectionSize(nil, minSize: 5))
     T.checkTrue("geo validSize: 剛好等於 minSize→false（需 >）",

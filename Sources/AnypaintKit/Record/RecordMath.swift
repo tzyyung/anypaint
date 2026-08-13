@@ -150,4 +150,15 @@ public enum RecordMath {
     public static func nextPeak(bars: Int, currentPeak: Int) -> Int {
         bars >= currentPeak ? bars : max(0, currentPeak - 1)
     }
+
+    /// 匯出剪裁時長：請求長度與「母帶時長 − 範圍起點」取小（AVAssetReader 只讀交集,不 clamp 會
+    /// 吐出比實際內容更長、尾端補靜止格的動畫）。
+    public static func clampedExportDuration(requested: Double, assetDuration: Double, rangeStart: Double) -> Double {
+        min(requested, assetDuration - rangeStart)
+    }
+
+    /// 像素長度 → 輸出點長度（除以 pointScale,四捨五入,下限 1）。逐維套用。
+    public static func outputPointLength(pixels: Int, pointScale: CGFloat) -> Int {
+        max(1, Int((CGFloat(pixels) / pointScale).rounded()))
+    }
 }

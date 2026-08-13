@@ -146,6 +146,14 @@ public enum SelectionGeometry {
         CGRect(x: 0, y: y - 2, width: width, height: 4)
     }
 
+    /// 程式化鎖定選區的驗證＋座標轉換：globalRect 必須落在該螢幕 frame 內,否則回 nil（拒絕鎖定）；
+    /// 通過則轉成該螢幕的 overlay 本地座標（減去螢幕原點）。ScrollSelectionOverlay.presentLocked 用。
+    public static func validateAndLocalize(globalRect: CGRect, screenFrame: CGRect) -> CGRect? {
+        guard screenFrame.contains(globalRect) else { return nil }
+        return CGRect(x: globalRect.minX - screenFrame.minX, y: globalRect.minY - screenFrame.minY,
+                      width: globalRect.width, height: globalRect.height)
+    }
+
     /// HUD 浮層位置：預設在選區下緣外 12pt、水平置中；下方超出可視區 → 翻到上緣外；
     /// 最後水平 clamp 進可視區（避免貼邊選區把 HUD 推出畫面）。ScrollHUD 與 RecordHUD 共用。
     public static func hudOrigin(selection: CGRect, panelSize: CGSize, visibleFrame: CGRect) -> CGPoint {
