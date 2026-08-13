@@ -295,9 +295,8 @@ public final class RecordFrameSource: NSObject {
                                                    pixelHeight: geo.pixelHeight,
                                                    options: options)
 
-        // 麥克風走 HAL：開 tap（IOProc 在 startCapture 成功、且沒被 pendingStop 打斷後才啟動，見下）。
-        // 一律降混成 mono，mic AAC 軌固定單聲道（見 RecordMicSource）。裝置不存在／忙 → start() 回
-        // false，mic 軌會是空軌、錄影照常（設計文件 §6）。
+        // 麥克風走 HAL，一律降混成 mono、mic AAC 軌固定單聲道（見 RecordMicSource）。裝置不存在／忙
+        // → start() 回 false，mic 軌會是空軌、錄影照常（設計文件 §6）。
         if options.captureMicrophone {
             self.micSource = RecordMicSource(deviceID: options.microphoneDeviceID)
         }
@@ -305,6 +304,11 @@ public final class RecordFrameSource: NSObject {
                                      pixelWidth: geo.pixelWidth, pixelHeight: geo.pixelHeight,
                                      options: options)
         self.box = boxLocal
+        // 麥克風 IOProc 與 startCapture **並行**啟動（不是等它之後）：這樣第一個影格錨定 writer session
+        // 時麥克風已在供料，開場 A/V 偏移縮到一個 buffer 週期。session 未啟動前到達的 mic 封包由
+        // `RecordAudioTracks.append` 的 `sessionStarted` gate 丟棄，安全。啟動失敗／被 pendingStop 取消
+        // 的所有路徑都會把 self.box 設回 nil，觸發上面 defer 的 `micSource.stop()`，不會空轉。
+        _ = self.micSource?.start(deliveringTo: boxLocal, on: sampleQueue)
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         do {
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
@@ -346,10 +350,6 @@ public final class RecordFrameSource: NSObject {
             }
             return
         }
-        // 錄影確實開跑、且沒被 pendingStop 打斷 → 啟動麥克風 IOProc，把 CMSampleBuffer 直接派進
-        // sampleQueue 交給這個 box。放在這裡（而非 startCapture 之前）確保：startCapture 失敗或
-        // 啟動期間被取消時，mic tap 由上面的 defer 收掉、不會空轉。
-        _ = self.micSource?.start(deliveringTo: boxLocal, on: sampleQueue)
         self.stream = stream
     }
 
