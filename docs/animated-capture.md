@@ -371,30 +371,37 @@ Enter 觸發，避免誤觸）與「強制關閉」。
 
 系統聲與麥克風是兩個**互相獨立**的設定開關（`AppSettings.recordSystemAudio`／
 `recordMicrophone`），`RecordOptions.captureSystemAudio`／`captureMicrophone` 各自承載一個。
+**兩條軌來源不同**（2026-08-13 起）：系統聲走 SCK（`SCStreamConfiguration.capturesAudio`），
+麥克風走 **CoreAudio HAL**（`RecordMicSource` + `AudioInputTap`）——**不走 SCK `.microphone`**，
+因為 macOS 26 本機實測 AVFoundation capture 家族（AVCaptureSession／SCK `.microphone`）對麥克風
+完全收不到封包（session 正常啟動、無錯、卻零 buffer），而 HAL 那層穩定拿得到。整段定位與決策見
+`docs/superpowers/specs/2026-08-13-mic-hal-capture-design.md` §0。
 `RecordAudioTracks`（掛在 `WriterBox` 之下，見 §2 架構圖）依開關數量建立 0～2 條
-`AVAssetWriterInput`（`systemInput`／`micInput`），全部固定 AAC、48kHz、雙聲道、128kbps——
-**不論 SCK 實際餵進來的格式是什麼**，`AVAssetWriterInput` 內部的 audio converter 負責轉換
-（見下方「與正式編碼設定的差異」）。兩者互不影響：只開系統聲＝1 條音軌，兩者都開＝2 條，
-兩者都關＝0 條（`RecordAudioTracksTests`／`recordAudioTracksEndToEndTests` 三種組合都有
-selftest 覆蓋）。
+`AVAssetWriterInput`（`systemInput`／`micInput`），固定 AAC、48kHz、128kbps；聲道數：系統聲 2、
+**麥克風＝裝置實際聲道數**（`WriterBox(micChannels:)` 由 `RecordMicSource.channels` 傳入，內建麥克風＝1，
+不再硬寫 2）。`AVAssetWriterInput` 內部的 audio converter 負責格式轉換（見下方「與正式編碼設定的差異」）。
+兩者互不影響：只開系統聲＝1 條音軌，兩者都開＝2 條，兩者都關＝0 條
+（`recordAudioTracksEndToEndTests` 三種組合都有 selftest 覆蓋）。
 
 ### 掛載點
 
-- **SCStreamConfiguration**：`RecordAudioTracks.configure(_:options:)` 統一設
-  `capturesAudio`／`excludesCurrentProcessAudio`／`captureMicrophone` 三個欄位，被
-  `RecordFrameSource.makeStreamConfiguration` 呼叫——`RecordFrameSource` 本身不逐一列這些欄位
-  （分層原則：音訊相關設定全部收斂進 `RecordAudioTracks`）。
-- **AVAssetWriter 掛載**：`WriterBox.init` 建立 `RecordAudioTracks(options:)` 後立刻
+- **SCStreamConfiguration**：`RecordAudioTracks.configure(_:options:)` 只設
+  `capturesAudio`／`excludesCurrentProcessAudio`（**系統聲**）；**不設 `captureMicrophone`**
+  ——麥克風不走 SCK。被 `RecordFrameSource.makeStreamConfiguration` 呼叫。
+- **AVAssetWriter 掛載**：`WriterBox.init` 建立 `RecordAudioTracks(options:micChannels:)` 後立刻
   `audio.attach(to: writer)`，跟影像 input 同一時間 `writer.add(...)`，都在 `writer.startWriting()`
   之前完成。
-- **收格路徑**：`RecordFrameSource.stream(_:didOutputSampleBuffer:of:)` 用 `type` 分流——
-  `.screen` 走影像那條（status gate＋`box.append`），`.audio`／`.microphone` 直接
-  `box.appendAudio(sb, type:)`，**不做 `SCFrameStatus` 檢查**（音訊 buffer 不帶這個 attachment，
-  跟影像格是不同的契約）。`WriterBox.appendAudio` 只把關 `isTerminal`／`writer.status`，實際路由
-  （挑 `systemInput` 還是 `micInput`）交給 `RecordAudioTracks.append(_:type:sessionStarted:)`
-  的顯式 `switch`——非 `.audio`／`.microphone` 的型別直接丟棄，不落到任何一個 input（塞錯型別的
-  buffer 進 AAC input 是 Swift 攔不到的 ObjC exception，見 `RecordAudioTracks.swift` 的
-  對應註解）。
+- **收格路徑（系統聲）**：`RecordFrameSource.stream(_:didOutputSampleBuffer:of:)` 用 `type` 分流——
+  `.screen` 走影像那條（status gate＋`box.append`），`.audio`（系統聲）直接
+  `box.appendAudio(sb, type:)`，**不做 `SCFrameStatus` 檢查**（音訊 buffer 不帶這個 attachment）。
+- **收格路徑（麥克風）**：`RecordMicSource` 的 HAL IOProc callback 把 PCM 包成 `CMSampleBuffer`
+  （PTS 由裝置 host time 經 `CMClockMakeHostTimeFromSystemUnits` 轉成與 SCK 影片同一條 host-time
+  時間軸），派進同一條 `sampleQueue` → `box.appendAudio(sb, type: .microphone)`。錄影 stop/abort
+  時先 `micSource.stop()`（AudioDeviceStop 等 IOProc 收手）再 finalize。
+- `WriterBox.appendAudio` 只把關 `isTerminal`／`writer.status`，實際路由（挑 `systemInput` 還是
+  `micInput`）交給 `RecordAudioTracks.append(_:type:sessionStarted:)` 的顯式 `switch`——非
+  `.audio`／`.microphone` 的型別直接丟棄，不落到任何一個 input（塞錯型別的 buffer 進 AAC input
+  是 Swift 攔不到的 ObjC exception，見 `RecordAudioTracks.swift` 的對應註解）。
 
 ### A/V 對齊語意
 
@@ -424,13 +431,15 @@ session 未啟動），從不改寫時間戳、也不會把「被跳過那段時
 `RecordAudioSelfCheck`（`--audio-selfcheck`，結構鏡射 `RecordSelfCheck`，見 §8）用
 `AVAudioSourceNode` 播一顆 440Hz 純音（0.5 振幅）貫穿全程 4 秒，同時用
 `RecordOptions(showsCursor: false, useHEVC: false, captureSystemAudio: true,
-excludesOwnAudio: false)`（**`excludesOwnAudio: false`**——自檢要聽到自己播的檢測音，跟正式
-流程預設 `true`（不錄自家音效）相反）錄下自己的系統聲，停止後：
+captureMicrophone: true, excludesOwnAudio: false)`（**`excludesOwnAudio: false`**——自檢要聽到
+自己播的檢測音，跟正式流程預設 `true`（不錄自家音效）相反；`captureMicrophone: true`——同時驗麥克風軌）
+錄下**系統聲＋麥克風**。為了讓「內建喇叭播 → 內建麥克風收」的聲學耦合穩定，自檢開始時把系統預設
+輸入輸出**切到內建裝置**（`AudioHardwareControl`，以 transport type 解析、不硬寫 UID），跑完在
+`finishNow` 還原。停止後：
 
-1. **檢查A**：`asset.loadTracks(withMediaType: .audio).count == 1`（只開了系統聲）。
-2. **檢查B**：`AVAssetReader` + LPCM float32 輸出設定解碼音軌，交錯的雙聲道**混平均**成單聲道
-   `[Float]`（不是取任一聲道——理論上兩聲道內容相同，混平均對「未來聲道內容不同」更穩健，
-   成本可忽略），餵進 `RecordMath.goertzelPower`：440Hz 的能量必須同時滿足
+1. **檢查A**：`asset.loadTracks(withMediaType: .audio).count == 2`（系統聲＋麥克風）。
+2. **檢查B（系統聲軌）**：`AVAssetReader` + LPCM float32 輸出設定解碼音軌，交錯/planar **混平均**成單聲道
+   `[Float]`，餵進 `RecordMath.goertzelPower`：440Hz 的能量必須同時滿足
    （a）**是 987Hz 能量的 100 倍以上**——987 跟 440 沒有整數倍關係，比純音的 2 倍頻 880 更
    乾淨（AAC 編碼／喇叭與麥克風的耦合都可能在諧波上漏一點能量，880 會讓比值判準不穩）；
    （b）**絕對值 > 0.017381496309072295**——這是 2026-08-12 首次實跑（本機喇叭輸出 → SCK
@@ -438,6 +447,12 @@ excludesOwnAudio: false)`（**`excludesOwnAudio: false`**——自檢要聽到�
    Goertzel 對頻率誤差極敏感（`goertzelPower` 的判準本身在 selftest 用 439.5Hz 的音源量到掉了
    六成能量），完全靜音時 987Hz 的能量也會趨近 0，比值可能被除法雜訊撐出一個無意義的大數字，
    絕對門檻補上這個退化情況。
+3. **檢查C（麥克風軌）**：解碼第 2 條音軌（走全新 HAL 路 `RecordMicSource` 錄下的、內建麥克風
+   聲學收到的 440Hz），同樣 Goertzel 判 440 遠高於 987。門檻另定：比值 10x、絕對值
+   > 0.000037256（首次實跑 mic power440＝0.00037256 的 1/10）——聲學耦合能量遠低於系統聲 loopback。
+4. **檢查D（時長對齊）**：麥克風軌 `timeRange.duration` 與錄製時長差 < 1s——證明 HAL 的 host-time
+   PTS 有對齊 SCK 影片時間軸、沒漏封包。**注意 clamshell（螢幕蓋著）會停用內建麥克風**，此時檢查C
+   會失敗（不是程式 bug，是硬體被蓋子關掉）。
 
 另外，自檢過程會把**第一個音訊 CMSampleBuffer 的 ASBD**（`RecordFrameSource.onFirstAudioBuffer`
 回呼，取自 `CMAudioFormatDescriptionGetStreamBasicDescription`）記進 log——這是 SCK 實際送來
@@ -523,7 +538,7 @@ open -n -a "$PWD/build.noindex/anypaint.app" --args --record-selfcheck
 | 11 | gifski 兩況 | 裝 gifski（`brew install gifski`）：存 GIF 走外部引擎，畫質明顯優於內建（無明顯調色盤 banding）；不裝（或暫時改名模擬移除）：存 GIF 正常回退內建路徑，行為與第一輪相同 |
 | 12 | img2webp（三項） | `-d`（per-frame delay）語法在真實 img2webp 上行為與 libwebp 官方文件描述一致（本機未裝，尚未實測，見 §6）；產出的 WebP 讀回檢視畫面/fps/循環都正確；「存 WebP」鈕從偵測到匯出到開啟位置的預覽全流程正常 |
 | 13 | APNG 在目標平台可動 | 匯出的 APNG 在預期會用到的平台/軟體（macOS 預覽、瀏覽器、聊天軟體等）上正確播放動畫而非靜態單張（支援度因軟體而異，是已知風險不是 bug） |
-| 14 | 麥克風真人聲＋TCC 拒絕＋預覽喇叭鈕（音訊 L3） | 開麥克風設定、對著麥克風說話錄一段 → 用 QuickTime 開匯出的 MP4，確認除了系統聲那條，還有第二條麥克風音軌、內容是剛才講的話（自檢只測系統聲，這條沒有自動化覆蓋）；首次開啟麥克風時系統彈出 TCC 詢問，選「不允許」後錄製應該正常繼續（少一條音軌而不是整個失敗，`RecordAudioTracks` 對兩個開關互相獨立）；預覽視窗的喇叭/靜音鈕實際切換播放時的可聽性，不只是圖示變化 |
+| 14 | 麥克風真人聲＋TCC 拒絕＋預覽喇叭鈕（音訊 L3） | 開麥克風設定、對著麥克風說話錄一段 → 用 QuickTime 開匯出的 MP4，確認除了系統聲那條，還有第二條麥克風音軌、內容是剛才講的話（**麥克風軌現在也有自動化覆蓋**：`--audio-selfcheck` 的檢查C／D 播 440Hz 到內建喇叭、用內建麥克風錄，Goertzel 驗 440Hz＋時長對齊——見 §7；此手動項專驗「真人聲、非內建裝置、clamshell 以外」）；首次開啟麥克風時系統彈出 TCC 詢問，選「不允許」後錄製應該正常繼續（少一條音軌而不是整個失敗，`RecordAudioTracks` 對兩個開關互相獨立）；**注意 clamshell（螢幕蓋著）會停用內建麥克風**——測內建麥克風務必開蓋；預覽視窗的喇叭/靜音鈕實際切換播放時的可聽性，不只是圖示變化 |
 
 ---
 
