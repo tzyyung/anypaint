@@ -1353,5 +1353,6 @@ pinSettingsGeomTests()
 annotationInputTests()
 miscPureTests()
 captureRoutingTests()
+scrollBottomLogicTests()
 
 T.finish()

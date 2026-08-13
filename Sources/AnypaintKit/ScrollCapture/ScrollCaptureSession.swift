@@ -173,7 +173,7 @@ public final class ScrollCaptureSession {
                 return
             }
             self.wheelAccumulator += abs(e.scrollingDeltaY)
-            if e.scrollingDeltaY != 0 { self.recentWheelDirection = e.scrollingDeltaY < 0 ? 1 : -1 }
+            if let dir = ScrollBottomLogic.wheelDirection(deltaY: e.scrollingDeltaY) { self.recentWheelDirection = dir }
             // AppKit 慣例：deltaY < 0 = 內容上移 = 頁面下捲（自然捲動）。實跑驗證後如相反，翻轉此行並註記。
             self.wheelTicksSinceCheck += 1
             self.resetWatchdogFromInteraction()
@@ -365,44 +365,38 @@ public final class ScrollCaptureSession {
 
     private func bottomTick() {
         guard state == .capturing else { return }
-        if ProcessInfo.processInfo.systemUptime - lastProgressAt > stallSeconds {
-            finish()                                  // 內容已完全變樣（切了 app／永久失去重疊）
-            return
-        }
-        let framesStalled = ProcessInfo.processInfo.systemUptime - frameSource.lastFrameAt > 1.0
         defer { wheelTicksSinceCheck = 0 }
-        guard wheelTicksSinceCheck > 0, framesStalled else {
-            if !framesStalled { bottomProbeCount = 0 }   // 影格還在流＝沒到底
+        let now = ProcessInfo.processInfo.systemUptime
+        // 到底探測的狀態機核心（regression 熱點：probeCount≥3、品質疑慮一次性、影格流歸零）抽到
+        // ScrollBottomLogic.bottomTickDecision（可測）；計時器讀值與 HUD 更新留在這裡。
+        let d = ScrollBottomLogic.bottomTickDecision(
+            stalledTooLong: now - lastProgressAt > stallSeconds,
+            framesStalled: now - frameSource.lastFrameAt > 1.0,
+            wheelTicks: wheelTicksSinceCheck, probeCount: bottomProbeCount,
+            hasQualityDoubt: lastEngineState?.hasQualityDoubt == true,
+            backscrollRequested: backscrollConfirmRequested)
+        bottomProbeCount = d.probeCount
+        backscrollConfirmRequested = d.backscrollRequested
+        switch d.result {
+        case .wait:
             return
+        case .probe:                                  // 累計一次探測（顯示「已到底,收尾中」）
+            showGuidance(.bottomProbing) { $0.bottomProbing() }
+        case .requestBackscroll:                      // 品質有疑慮 → 請回捲確認（雙向證實到底,設計裁決）
+            showGuidance(.confirmBottomByBackscroll) { $0.confirmBottom() }
+        case .finish:
+            finish()
         }
-        bottomProbeCount += 1
-        if var guidance {
-            hud.update(message: guidance.bottomProbing())
-            self.guidance = guidance
-        } else {
-            hud.update(message: .bottomProbing)
-        }
-        guard bottomProbeCount >= 3 else { return }      // 約 1.5 秒「捲了但畫面不動」
+    }
 
-        // 兩條證據的交叉驗證：滾輪說使用者還在捲（意圖），影像說畫面沒變（世界狀態）。
-        // 一般情況這樣就足以判定到底，直接無感收尾。
-        //
-        // 但若本次 session 曾發生匹配失敗或近似接合（長圖品質有疑慮），就改成請使用者
-        // **回捲一點再往下捲**：回捲會產生影像變化（可被步進估計匹配、可裁回），
-        // 再下捲若又回到完全無變化，到底這件事就被雙向證實了；順便也驗證了軌跡是對的。
-        // 只做一次、且只在有疑慮時做——每次都要求只是浪費使用者時間（設計裁決）。
-        if lastEngineState?.hasQualityDoubt == true, !backscrollConfirmRequested {
-            backscrollConfirmRequested = true
-            bottomProbeCount = 0
-            if var guidance {
-                hud.update(message: guidance.confirmBottom())
-                self.guidance = guidance
-            } else {
-                hud.update(message: .confirmBottomByBackscroll)
-            }
-            return          // 使用者若不理會，stallSeconds 的停滯門檻仍會收工並保留已拼內容
+    /// HUD 提示更新的小殼：有 guidance 就走它（會更新計數器狀態）,否則直接送 fallback 訊息。
+    private func showGuidance(_ fallback: GuidanceMessage, _ via: (inout ScrollGuidance) -> GuidanceMessage) {
+        if var g = guidance {
+            hud.update(message: via(&g))
+            self.guidance = g
+        } else {
+            hud.update(message: fallback)
         }
-        finish()
     }
 
     // MARK: 收尾／取消／看門狗
