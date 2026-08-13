@@ -1,5 +1,40 @@
 import AnypaintKit
+import CoreAudio
 import CoreMedia
+
+nonisolated func micHALDownmixTests() {
+    // 交錯立體聲：L=1.0、R=0.0 → mono 應為 0.5（平均），幀數保留。
+    let frames = 100
+    var interleaved = [Float](repeating: 0, count: frames * 2)
+    for i in 0..<frames { interleaved[i * 2] = 1.0; interleaved[i * 2 + 1] = 0.0 }
+    let asbd = AudioStreamBasicDescription(
+        mSampleRate: 48000, mFormatID: kAudioFormatLinearPCM,
+        mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+        mBytesPerPacket: 8, mFramesPerPacket: 1, mBytesPerFrame: 8,
+        mChannelsPerFrame: 2, mBitsPerChannel: 32, mReserved: 0)
+    interleaved.withUnsafeMutableBytes { raw in
+        var abl = AudioBufferList()
+        abl.mNumberBuffers = 1
+        abl.mBuffers = AudioBuffer(mNumberChannels: 2, mDataByteSize: UInt32(raw.count), mData: raw.baseAddress)
+        withUnsafePointer(to: &abl) { ptr in
+            let mono = RecordMicSource.downmixToMonoFloat32(ptr, asbd: asbd)
+            T.checkEq("downmix: 立體聲→mono 幀數", mono?.count ?? -1, frames)
+            T.checkTrue("downmix: (1+0)/2≈0.5", (mono?.first).map { abs($0 - 0.5) < 1e-6 } ?? false)
+            T.checkTrue("downmix: 末幀也對", (mono?.last).map { abs($0 - 0.5) < 1e-6 } ?? false)
+        }
+    }
+    // 非 Float32 → nil（只認 Float32）
+    var intAsbd = asbd
+    intAsbd.mFormatFlags = kAudioFormatFlagIsSignedInteger
+    interleaved.withUnsafeMutableBytes { raw in
+        var abl = AudioBufferList()
+        abl.mNumberBuffers = 1
+        abl.mBuffers = AudioBuffer(mNumberChannels: 2, mDataByteSize: UInt32(raw.count), mData: raw.baseAddress)
+        withUnsafePointer(to: &abl) { ptr in
+            T.checkTrue("downmix: 非 Float32 → nil", RecordMicSource.downmixToMonoFloat32(ptr, asbd: intAsbd) == nil)
+        }
+    }
+}
 
 nonisolated func micHALSampleBufferTests() {
     let frames = 480, channels = 1, sr = 48000.0

@@ -22,8 +22,7 @@ public final class MicLevelMonitor: NSObject {
     /// 擋掉 `stop()` 後仍在飛的遲到回呼把 `latestLevel` 蓋回舊值（原 AVCapture 版 fix round 1 的守衛，
     /// HAL 版一樣需要——IOProc callback 也可能在 stop 後排進的 Task 遲到執行）。
     private var generation = 0
-    private var lastCallbackTime: TimeInterval = 0
-    private let throttleInterval: TimeInterval = 0.05   // 20Hz
+    private let throttleInterval: TimeInterval = 0.05   // 20Hz（在 ioQueue 端節流）
 
     public override init() { super.init() }
     deinit { tap?.stop() }
@@ -37,8 +36,16 @@ public final class MicLevelMonitor: NSObject {
         generation += 1
         let gen = generation
         latestLevel = 0
-        lastCallbackTime = 0
+        // 節流搬到 realtime/ioQueue 端：IOProc callback ~90–190/s，若每次都 spawn 一個 MainActor Task
+        // 是 realtime 執行緒上的持續堆積配置（違反「callback 內只做最小事」，robustness 審查 finding #5）。
+        // `lastHop` 只在 tap 的 serial ioQueue 上讀寫（callback 天然序列化），無需額外同步。只有超過
+        // 節流間隔才算 RMS、才跳 MainActor。RPC 輪詢頻率遠低於 20Hz，`latestLevel` 這樣更新已足夠即時。
+        var lastHop = 0.0
+        let interval = throttleInterval
         let ok = newTap.start { [weak self] bufferList, _, asbd in
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastHop >= interval else { return }
+            lastHop = now
             let rms = Self.rms(fromInputBufferList: bufferList, asbd: asbd)
             Task { @MainActor [weak self] in self?.handleLevel(rms, generation: gen) }
         }
@@ -53,14 +60,11 @@ public final class MicLevelMonitor: NSObject {
         latestLevel = 0
     }
 
-    /// 節流＋更新：`latestLevel` 每次都更新，`onLevel` 依 `throttleInterval` 節流。
-    /// 世代不符＝舊 session 的遲到結果，整個丟棄。
+    /// 更新 `latestLevel`＋呼叫 `onLevel`（節流已在 ioQueue 端做，這裡不再重複）。
+    /// 世代不符＝舊 session 的遲到結果，整個丟棄（`stop()`／換裝置後仍在飛的 Task 不會蓋回舊值）。
     private func handleLevel(_ rms: Float, generation: Int) {
         guard generation == self.generation else { return }
         latestLevel = rms
-        let now = ProcessInfo.processInfo.systemUptime
-        guard now - lastCallbackTime >= throttleInterval else { return }
-        lastCallbackTime = now
         onLevel?(rms)
     }
 

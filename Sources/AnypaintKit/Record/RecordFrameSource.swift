@@ -45,8 +45,7 @@ public final class WriterBox: @unchecked Sendable {
     /// - Parameter options: `useHEVC` 決定 codec——false＝H.264（預設）、true＝HEVC。檔案仍是
     ///   .mp4（hevc-in-mp4 合法）。位元率因子隨 codec 切換：H.264 沿用 Azayaka 原公式 0.9；
     ///   HEVC 用 0.9×0.5＝0.45（同款 Azayaka 公式的 hevc 因子，設計文件 §1.8）。
-    public init(outputURL: URL, pixelWidth: Int, pixelHeight: Int, options: RecordOptions,
-                micChannels: Int = 1) throws {
+    public init(outputURL: URL, pixelWidth: Int, pixelHeight: Int, options: RecordOptions) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
         // Azayaka 位元率公式 + QuickRecorder 20 萬下限；30fps、Rec.709
         let bitrateFactor = options.useHEVC ? 0.45 : 0.9
@@ -68,7 +67,7 @@ public final class WriterBox: @unchecked Sendable {
         input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         input.expectsMediaDataInRealTime = true   // 全部實戰專案一致；ready=false 時丟格不排隊
         writer.add(input)
-        audio = RecordAudioTracks(options: options, micChannels: micChannels)
+        audio = RecordAudioTracks(options: options)
         audio.attach(to: writer)
         writer.startWriting()                     // 立刻 startWriting；session 懶啟動（防黑首格）
     }
@@ -296,19 +295,15 @@ public final class RecordFrameSource: NSObject {
                                                    pixelHeight: geo.pixelHeight,
                                                    options: options)
 
-        // 麥克風走 HAL：先開 tap 拿到裝置實際聲道數（決定 mic AAC 軌聲道數），tap 的 IOProc
-        // 在 startCapture 成功、且沒被 pendingStop 打斷後才啟動（見下）。sink 讀 self.box（同 SCK
-        // handler 的既有讀法）派進 sampleQueue。裝置不存在／忙 → src.channels==0、start() 回 false，
-        // mic 軌會是空軌、錄影照常（設計文件 §6）。
-        var micChannels = 1
+        // 麥克風走 HAL：開 tap（IOProc 在 startCapture 成功、且沒被 pendingStop 打斷後才啟動，見下）。
+        // 一律降混成 mono，mic AAC 軌固定單聲道（見 RecordMicSource）。裝置不存在／忙 → start() 回
+        // false，mic 軌會是空軌、錄影照常（設計文件 §6）。
         if options.captureMicrophone {
-            let src = RecordMicSource(deviceID: options.microphoneDeviceID)
-            micChannels = max(1, src.channels)
-            self.micSource = src
+            self.micSource = RecordMicSource(deviceID: options.microphoneDeviceID)
         }
         let boxLocal = try WriterBox(outputURL: outputURL,
                                      pixelWidth: geo.pixelWidth, pixelHeight: geo.pixelHeight,
-                                     options: options, micChannels: micChannels)
+                                     options: options)
         self.box = boxLocal
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         do {

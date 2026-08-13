@@ -7,9 +7,10 @@ final class RecordAudioTracks {
     private var systemInput: AVAssetWriterInput?
     private var micInput: AVAssetWriterInput?
 
-    /// - Parameter micChannels: 麥克風軌 AAC 聲道數＝實際裝置聲道數（`RecordMicSource` 開 HAL tap
-    ///   後查到，內建麥克風＝1）。不再硬寫 2——mic 走 HAL、聲道數由裝置決定。
-    init(options: RecordOptions, micChannels: Int) {
+    /// 系統聲固定雙聲道；**麥克風固定單聲道**（`RecordMicSource` 一律降混成 mono——單聲道 AAC 永遠
+    /// 不需要 `AVChannelLayoutKey`，避開 >2 聲道裝置建 input 時缺 layout 的 crash，見 `RecordMicSource`
+    /// 註解與 robustness 審查 finding #1）。
+    init(options: RecordOptions) {
         func makeInput(channels: Int) -> AVAssetWriterInput {
             let input = AVAssetWriterInput(mediaType: .audio, outputSettings: [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
@@ -21,7 +22,7 @@ final class RecordAudioTracks {
             return input
         }
         if options.captureSystemAudio { systemInput = makeInput(channels: 2) }
-        if options.captureMicrophone { micInput = makeInput(channels: max(1, micChannels)) }
+        if options.captureMicrophone { micInput = makeInput(channels: 1) }
     }
 
     /// SCK 音訊相關 config：**只設系統聲**。麥克風不再走 SCK `.microphone`（那條在本 app 收不到
@@ -32,9 +33,16 @@ final class RecordAudioTracks {
         config.excludesCurrentProcessAudio = options.excludesOwnAudio
     }
 
+    /// 掛載前先 `canAdd` 把關：`writer.add` 對不合法 input（例如聲道設定與 layout 不符）是不可攔的
+    /// ObjC 例外（robustness 審查 finding #1 的防線）。canAdd 為假就把該 input 清成 nil、當作沒這條軌
+    /// （`append` 會自動略過），寧可少一條軌也不要整個 app 崩。
     func attach(to writer: AVAssetWriter) {
-        if let systemInput { writer.add(systemInput) }
-        if let micInput { writer.add(micInput) }
+        if let systemInput {
+            if writer.canAdd(systemInput) { writer.add(systemInput) } else { self.systemInput = nil }
+        }
+        if let micInput {
+            if writer.canAdd(micInput) { writer.add(micInput) } else { self.micInput = nil }
+        }
     }
 
     /// gate：session 未啟動前丟（startSession 前 append 是 ObjC exception）；

@@ -15,8 +15,6 @@ final class AudioInputTap {
     private var running = false
     /// IOProc 派工佇列（HAL 要求一個 serial queue；realtime callback 在此跑）。
     private let ioQueue = DispatchQueue(label: "anypaint.audioinputtap.io")
-    /// 強持有 callback，確保 IOProc 存活期間不被釋放。
-    private var onInput: ((UnsafePointer<AudioBufferList>, UInt64, AudioStreamBasicDescription) -> Void)?
 
     /// `deviceUID` nil ＝ 系統預設輸入。裝置不存在／查不到格式 → 回 nil（呼叫端靜默降級）。
     init?(deviceUID: String?) {
@@ -29,36 +27,46 @@ final class AudioInputTap {
     deinit { stop() }
 
     /// 開 IOProc + AudioDeviceStart。回 false＝失敗（裝置忙等），不 crash、不丟例外。
-    func start(onInput: @escaping (UnsafePointer<AudioBufferList>, UInt64, AudioStreamBasicDescription) -> Void) -> Bool {
+    ///
+    /// callback 由 IOProc block **直接捕獲**（不存進共用屬性）——這樣 ioQueue（realtime）與呼叫端
+    /// 之間沒有任何共用可變狀態要同步：block 強持有 cb，CoreAudio 持有 block 直到
+    /// `AudioDeviceDestroyIOProcID`，cb 的生命週期就綁在 IOProc 上，不需要 `onInput` 屬性、也就沒有
+    /// 「一邊讀一邊被 stop() 清 nil」的資料競爭（robustness 審查 finding #2）。
+    func start(onInput cb: @escaping (UnsafePointer<AudioBufferList>, UInt64, AudioStreamBasicDescription) -> Void) -> Bool {
         guard !running else { return true }
-        self.onInput = onInput
         let fmt = format
         var pid: AudioDeviceIOProcID?
         let createStatus = AudioDeviceCreateIOProcIDWithBlock(&pid, deviceID, ioQueue) {
-            [weak self] _, inInputData, inInputTime, _, _ in
-            guard let self, let cb = self.onInput else { return }
+            _, inInputData, inInputTime, _, _ in
             // mHostTime 有效才用；否則以當下 host time 補（避免 PTS 亂跳）。
             let ts = inInputTime.pointee
             let host = ts.mFlags.contains(.hostTimeValid) ? ts.mHostTime : mach_absolute_time()
             cb(inInputData, host, fmt)
         }
-        guard createStatus == noErr, let pid else { self.onInput = nil; return false }
+        guard createStatus == noErr, let pid else { return false }
         procID = pid
         guard AudioDeviceStart(deviceID, pid) == noErr else {
             AudioDeviceDestroyIOProcID(deviceID, pid)
-            procID = nil; self.onInput = nil; return false
+            procID = nil; return false
         }
         running = true
         return true
     }
 
+    /// `AudioDeviceStop`／`AudioDeviceDestroyIOProcID` 是對 `coreaudiod` 的**同步**往返（可能數~數十 ms）。
+    /// 派到 `ioQueue.async` 上做，**不阻塞呼叫端（多半是 MainActor）**（robustness 審查 finding #4）：
+    /// teardown block 排在 IOProc block 後面（serial queue），自然等任何 in-flight block 收手才拆。
+    /// 只捕獲 dev/pid（不捕獲 self），`deinit` 呼叫也安全（不會在釋放中復活 self）。
     func stop() {
         guard running, let pid = procID else { return }
-        AudioDeviceStop(deviceID, pid)
-        AudioDeviceDestroyIOProcID(deviceID, pid)
-        procID = nil
         running = false
-        onInput = nil
+        procID = nil
+        let dev = deviceID
+        let q = ioQueue
+        q.async {
+            AudioDeviceStop(dev, pid)
+            AudioDeviceDestroyIOProcID(dev, pid)
+        }
     }
 
     // MARK: - CoreAudio 查詢（全部先驗過 header，見計畫 Global Constraints）
