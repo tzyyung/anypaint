@@ -28,11 +28,11 @@ extension SelectionView {
         if activeTool != nil { return .crosshair }   // 繪製工具＝十字線（spec）
         if let sel = selection, !frameLocked {       // 鎖框時無控制點、不可移動
             if let h = hitHandle(point, in: sel) {
-                switch h {
-                case .topLeft, .bottomRight: return Self.cursorNWSE
-                case .topRight, .bottomLeft: return Self.cursorNESW
-                case .left, .right:          return Self.cursorEW
-                case .top, .bottom:          return Self.cursorNS
+                switch SelectionGeometry.resizeAxis(for: h) {
+                case .nwse: return Self.cursorNWSE
+                case .nesw: return Self.cursorNESW
+                case .ew:   return Self.cursorEW
+                case .ns:   return Self.cursorNS
                 }
             }
             if sel.contains(point) { return .openHand }

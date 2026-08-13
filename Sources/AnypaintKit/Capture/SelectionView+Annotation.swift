@@ -27,9 +27,7 @@ extension SelectionView {
     /// 命中既有文字物件（由上到下找第一個）；點擊路由與 hover 提示共用（驗收回饋 Fix 2；
     /// threshold 統一 4，與 hover 虛線框 inset 一致——清理項）。
     func hitTextObject(at p: CGPoint) -> Annotation? {
-        annotations.objects.reversed().first(where: {
-            if case .text = $0.shape { return $0.hitTest(p, threshold: 4) } else { return false }
-        })
+        annotations.hitTextObject(at: p, threshold: 4)
     }
 
     /// select 工具 mouseDown 路由：命中已選取物件的四角 handle → 進入縮放；

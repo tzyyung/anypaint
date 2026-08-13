@@ -238,7 +238,7 @@ final class SelectionToolbar: NSView {
     @objc private func toolTapped(_ sender: NSButton) {
         guard let id = sender.identifier?.rawValue,
               let tool = AnnotationTool(rawValue: id) else { return }
-        let newTool: AnnotationTool? = (tool == activeTool) ? nil : tool
+        let newTool = AnnotationInput.toggledTool(tapped: tool, active: activeTool)
         setActiveTool(newTool)
         onToolSelected?(newTool)
     }

@@ -1352,5 +1352,6 @@ scrollGuidanceDisplayTests()
 pinSettingsGeomTests()
 annotationInputTests()
 miscPureTests()
+captureRoutingTests()
 
 T.finish()

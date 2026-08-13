@@ -102,6 +102,14 @@ public final class AnnotationDocument {
         objects.reversed().first { $0.hitTest(point, threshold: threshold) }
     }
 
+    /// 由上而下命中**文字**物件（文字工具 hover/拖曳用）；非文字物件跳過。
+    public func hitTextObject(at point: CGPoint, threshold: CGFloat = 4) -> Annotation? {
+        objects.reversed().first {
+            if case .text = $0.shape { return $0.hitTest(point, threshold: threshold) }
+            return false
+        }
+    }
+
     /// 序號標記的編號＝「它是文件裡第幾個 counter」（1 起算）。
     /// 渲染時計算、不存死在物件裡 → 刪除/undo 後編號天然正確。
     public func counterNumber(for id: UUID) -> Int? {

@@ -34,6 +34,19 @@ public enum SelectionGeometry {
         case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left
     }
 
+    /// 控制點對應的縮放游標軸向（對角 NWSE/NESW、水平 EW、垂直 NS）。
+    public enum ResizeAxis: Equatable { case nwse, nesw, ew, ns }
+
+    /// 控制點 → 游標軸向（cursor(at:) 的純對應部分）。
+    public static func resizeAxis(for edge: ResizeEdge) -> ResizeAxis {
+        switch edge {
+        case .topLeft, .bottomRight: return .nwse
+        case .topRight, .bottomLeft: return .nesw
+        case .left, .right:          return .ew
+        case .top, .bottom:          return .ns
+        }
+    }
+
     /// 由拖曳某控制點算新選取框；允許拖過頭翻轉,用 min/max 正規化。
     public static func resized(_ start: CGRect, edge: ResizeEdge, to p: CGPoint) -> CGRect {
         var minX = start.minX, maxX = start.maxX, minY = start.minY, maxY = start.maxY

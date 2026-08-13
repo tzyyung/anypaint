@@ -21,6 +21,11 @@ public enum AnnotationInput {
         }
     }
 
+    /// 工具列點擊的切換規則：點到當前工具＝取消（回 nil）、點到別的＝切過去。
+    public static func toggledTool(tapped: AnnotationTool, active: AnnotationTool?) -> AnnotationTool? {
+        tapped == active ? nil : tapped
+    }
+
     /// 滾輪調粗細的累加器：把連續 scrollingDeltaY 累加進 `accum`,每滿 ±`step` 就吐一格
     /// （正＝加粗、負＝變細）。回傳「這次要調幾格」與「消化後剩餘的累加值」。
     /// 抽成純函式讓「累加到門檻才動一格、剩餘留到下次」這條可單元測試。
