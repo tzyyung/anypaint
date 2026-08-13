@@ -125,7 +125,8 @@ public final class ScrollSelectionOverlayController {
 /// 邊角縮放（命中半徑 ~6pt）。無標註、無放大鏡；單螢幕 clamp 在自身 bounds＝screen.frame 內。
 final class ScrollSelectionView: NSView {
     enum Mode { case selecting, armed, capturing }
-    enum Handle: CaseIterable { case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left }
+    // 8 向控制點與 SelectionGeometry.ResizeEdge 相同（順序一致）→ typealias,幾何共用零轉換。
+    typealias Handle = SelectionGeometry.ResizeEdge
     private enum Drag {
         case creating(anchor: CGPoint)
         case moving(startMouse: CGPoint, startRect: CGRect)
@@ -151,41 +152,17 @@ final class ScrollSelectionView: NSView {
 
     // MARK: 拖曳幾何
 
-    private func clampPoint(_ p: CGPoint) -> CGPoint {
-        CGPoint(x: min(max(0, p.x), bounds.width), y: min(max(0, p.y), bounds.height))
-    }
-    private func clampToBounds(_ r: CGRect) -> CGRect {
-        var r = r
-        r.origin.x = min(max(0, r.origin.x), bounds.width - r.width)
-        r.origin.y = min(max(0, r.origin.y), bounds.height - r.height)
-        return r
-    }
+    // 純幾何委派 SelectionGeometry（與 SelectionView 共用同一份、可單元測試）。
+    private func clampPoint(_ p: CGPoint) -> CGPoint { SelectionGeometry.clampPoint(p, in: bounds.size) }
+    private func clampToBounds(_ r: CGRect) -> CGRect { SelectionGeometry.clampRectOrigin(r, in: bounds.size) }
     private func resize(_ start: CGRect, handle: Handle, to p: CGPoint) -> CGRect {
-        var minX = start.minX, maxX = start.maxX, minY = start.minY, maxY = start.maxY
-        switch handle {
-        case .topLeft:     minX = p.x; maxY = p.y
-        case .top:         maxY = p.y
-        case .topRight:    maxX = p.x; maxY = p.y
-        case .right:       maxX = p.x
-        case .bottomRight: maxX = p.x; minY = p.y
-        case .bottom:      minY = p.y
-        case .bottomLeft:  minX = p.x; minY = p.y
-        case .left:        minX = p.x
-        }
-        let r = CGRect(x: min(minX, maxX), y: min(minY, maxY), width: abs(maxX - minX), height: abs(maxY - minY))
-        return clampToBounds(r)
+        // 與 SelectionView 的差異：這裡 resize 後**再 clamp 進 bounds**（框選層不許超出螢幕）。
+        clampToBounds(SelectionGeometry.resized(start, edge: handle, to: p))
     }
-    private func handlePoints(_ r: CGRect) -> [CGPoint] {
-        [CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.midX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY),
-         CGPoint(x: r.maxX, y: r.midY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.midX, y: r.minY),
-         CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.minX, y: r.midY)]
-    }
+    private func handlePoints(_ r: CGRect) -> [CGPoint] { SelectionGeometry.handlePoints(r) }
     private func hitHandle(_ point: CGPoint, in r: CGRect) -> Handle? {
-        for (i, p) in handlePoints(r).enumerated() {
-            let box = CGRect(x: p.x - hitRadius, y: p.y - hitRadius, width: hitRadius * 2, height: hitRadius * 2)
-            if box.contains(point) { return Handle.allCases[i] }
-        }
-        return nil
+        // size 0 + tolerance=hitRadius ⇒ 命中框＝控制點 ±hitRadius（與原行為一致）。
+        SelectionGeometry.hitHandleIndex(point, in: r, size: 0, tolerance: hitRadius).map { Handle.allCases[$0] }
     }
 
     // MARK: 滑鼠
