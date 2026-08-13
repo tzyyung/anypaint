@@ -33,6 +33,28 @@ public enum AnnotationInput {
         selection.map { bounds.intersects($0) } ?? false
     }
 
+    /// overlay keyDown 的高階動作（純路由：keyCode+修飾鍵+字元 → 意圖,不含 view 狀態分支）。
+    public enum KeyAction: Equatable {
+        case undo, redo, bringToFront, sendToBack, escape, copy, paste, delete, passthrough
+    }
+    /// keyDown 路由：⌘Z/⌘⇧Z、⌘]/⌘[（皆排除 option/control）、Esc(53)、Return/Enter(36/76,Shift=貼)、
+    /// Delete(51/117),其餘 passthrough。
+    public static func keyAction(keyCode: UInt16, chars: String?,
+                                 command: Bool, shift: Bool, option: Bool, control: Bool) -> KeyAction {
+        if command, !option, !control {
+            let lower = chars?.lowercased()
+            if lower == "z" { return shift ? .redo : .undo }
+            if chars == "]" { return .bringToFront }
+            if chars == "[" { return .sendToBack }
+        }
+        switch keyCode {
+        case 53: return .escape
+        case 36, 76: return shift ? .paste : .copy
+        case 51, 117: return .delete
+        default: return .passthrough
+        }
+    }
+
     /// 工具列點擊的切換規則：點到當前工具＝取消（回 nil）、點到別的＝切過去。
     public static func toggledTool(tapped: AnnotationTool, active: AnnotationTool?) -> AnnotationTool? {
         tapped == active ? nil : tapped

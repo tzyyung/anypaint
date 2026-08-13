@@ -64,4 +64,22 @@ nonisolated func annotationInputTests() {
                                                   selection: CGRect(x: 0, y: 0, width: 20, height: 20)))
     T.checkTrue("inSel: 無選區→false",
                 !AnnotationInput.shapeInSelection(bounds: CGRect(x: 0, y: 0, width: 10, height: 10), selection: nil))
+
+    // keyAction：overlay keyDown 路由
+    func ka(_ code: UInt16, _ chars: String?, cmd: Bool = false, shift: Bool = false,
+            opt: Bool = false, ctrl: Bool = false) -> AnnotationInput.KeyAction {
+        AnnotationInput.keyAction(keyCode: code, chars: chars, command: cmd, shift: shift, option: opt, control: ctrl)
+    }
+    T.checkEq("key: ⌘Z→undo", ka(6, "z", cmd: true), .undo)
+    T.checkEq("key: ⌘⇧Z→redo", ka(6, "z", cmd: true, shift: true), .redo)
+    T.checkEq("key: ⌘]→bringToFront", ka(30, "]", cmd: true), .bringToFront)
+    T.checkEq("key: ⌘[→sendToBack", ka(33, "[", cmd: true), .sendToBack)
+    T.checkEq("key: ⌘⌥Z→passthrough（排除 option）", ka(6, "z", cmd: true, opt: true), .passthrough)
+    T.checkEq("key: Esc(53)→escape", ka(53, nil), .escape)
+    T.checkEq("key: Enter(36)→copy", ka(36, nil), .copy)
+    T.checkEq("key: ⇧Enter→paste", ka(36, nil, shift: true), .paste)
+    T.checkEq("key: Delete(51)→delete", ka(51, nil), .delete)
+    T.checkEq("key: fn+Delete(117)→delete", ka(117, nil), .delete)
+    T.checkEq("key: 其他→passthrough", ka(40, "k"), .passthrough)
+    T.checkEq("key: 純 z 無⌘→passthrough", ka(6, "z"), .passthrough)
 }

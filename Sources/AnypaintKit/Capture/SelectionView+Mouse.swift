@@ -371,57 +371,30 @@ extension SelectionView {
 
     override func keyDown(with event: NSEvent) {
         onInteraction?()
-        // ⌘Z / ⌘⇧Z：標註 undo/redo（手動攔，不經 menu——overlay 是 nonactivating panel）
-        if event.modifierFlags.contains(.command),
-           !event.modifierFlags.contains(.option),
-           !event.modifierFlags.contains(.control),
-           event.charactersIgnoringModifiers?.lowercased() == "z" {
-            if event.modifierFlags.contains(.shift) {
-                redoAnnotation()
-            } else {
-                undoAnnotation()
-            }
-            return
-        }
-        // ⌘] / ⌘[：選取物件移到最前/最後（比照 ⌘Z 的修飾鍵排除法）
-        if event.modifierFlags.contains(.command),
-           !event.modifierFlags.contains(.option),
-           !event.modifierFlags.contains(.control),
-           let chars = event.charactersIgnoringModifiers, chars == "]" || chars == "[" {
+        // 路由（keyCode+修飾鍵→意圖）抽到 AnnotationInput.keyAction（可測）；view 狀態分支留在這裡。
+        let m = event.modifierFlags
+        switch AnnotationInput.keyAction(keyCode: event.keyCode, chars: event.charactersIgnoringModifiers,
+                                         command: m.contains(.command), shift: m.contains(.shift),
+                                         option: m.contains(.option), control: m.contains(.control)) {
+        case .undo: undoAnnotation()
+        case .redo: redoAnnotation()
+        case .bringToFront:
+            if let id = annotations.selectedID { annotations.bringToFront(id: id); syncUndoButtons(); needsDisplay = true }
+        case .sendToBack:
+            if let id = annotations.selectedID { annotations.sendToBack(id: id); syncUndoButtons(); needsDisplay = true }
+        case .escape:        // 分層：編輯中完成編輯 → 有選取解除選取 → 否則取消（spec）
+            if isEditingText { commitTextEditing() }
+            else if hasSelection { deselect() }
+            else { onCancel?() }
+        case .copy: confirm()
+        case .paste: pinConfirm()   // Shift+Enter → 貼（spec 截圖完直接貼）
+        case .delete:
             if let id = annotations.selectedID {
-                if chars == "]" { annotations.bringToFront(id: id) } else { annotations.sendToBack(id: id) }
-                syncUndoButtons()
-                needsDisplay = true
-            }
-            return
-        }
-        switch event.keyCode {
-        case 53:            // Esc → 分層：編輯中完成編輯 → 有選取解除選取 → 否則取消（spec）
-            if isEditingText {
-                commitTextEditing()
-            } else if hasSelection {
-                deselect()
-            } else {
-                onCancel?()
-            }
-        case 36, 76:        // Return / Enter → 複製；Shift+Enter → 貼（spec 截圖完直接貼）
-            if event.modifierFlags.contains(.shift) {
-                pinConfirm()
-            } else {
-                confirm()
-            }
-        case 51, 117:       // Delete / fn+Delete → 移除選取物件
-            if let id = annotations.selectedID {
-                annotations.remove(id: id)
-                deselect()
-                syncUndoButtons()
-                needsDisplay = true
-                // 比照 undo/redo：刪除可能解鎖框（annotations 變空），手動依上次已知的
-                // 游標位置重算，讓控制點/游標立即復原（總審查 Minor）。
+                annotations.remove(id: id); deselect(); syncUndoButtons(); needsDisplay = true
+                // 刪除可能解鎖框（annotations 變空）→ 依上次游標位置重算,讓控制點/游標立即復原。
                 if let hp = hoverPoint { cursor(at: hp).set() }
             }
-        default:
-            super.keyDown(with: event)
+        case .passthrough: super.keyDown(with: event)
         }
     }
 
