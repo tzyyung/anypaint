@@ -40,10 +40,13 @@ public final class RecordAudioSelfCheck {
     private let absolutePowerThreshold = 0.017_381_496_309_072_295
 
     /// 麥克風軌判準：mic 走「內建喇叭→內建麥克風」聲學耦合，能量遠低於系統聲 loopback，門檻另定。
-    /// 比值門檻放寬到 10x（聲學路徑諧波/雜訊較多）；絕對門檻＝首次實跑（2026-08-13，lid 打開、
-    /// 內建喇叭↔內建麥克風）量到的 mic power440＝0.000_372_56 的 1/10，寫死（同檢查B 的定法）。
+    /// 麥克風走「內建喇叭→內建麥克風」聲學耦合，**絕對能量隨喇叭音量/環境大幅變動**（實測同機不同次
+    /// 0.000_02～0.000_4，差一個數量級），所以真正的判準是**比值**：440 的能量是對照頻的 10 倍以上。
+    /// 比值對噪音／音量免疫，是「440 純音真的有被錄到」的穩健證據（實測比值都在百萬級）。絕對門檻只當
+    /// **排除退化情況的低地板**——完全靜音時 440 與對照頻能量都趨近噪底（~1e-9），比值會被除法雜訊撐出
+    /// 假的大數字；1e-6 這個地板比噪底高千倍、又遠低於任何真實聲學擷取（最弱一次仍有 2e-5），兩邊都留足餘裕。
     private let micRatioThreshold = 10.0
-    private let micAbsolutePowerThreshold = 0.000_037_256
+    private let micAbsolutePowerThreshold = 0.000_001
 
     /// 自檢期間暫時切到內建裝置做聲學耦合，跑完還原（`finishNow`）。
     private var savedInputDevice: AudioObjectID?
@@ -162,6 +165,11 @@ public final class RecordAudioSelfCheck {
             var failures = 0
             do {
                 let url = try await source.stopAndFinish()
+                // 錄製已結束、不再需要內建裝置 → **立刻**還原系統預設，不等驗證階段。下面的
+                // decode／Goertzel／AVAssetReader 是相對容易踩到不可攔例外的路徑，萬一在那裡崩，
+                // 使用者的預設輸入輸出也已經還原了，不會被永久卡在內建（robustness 審查 finding #6：
+                // 把「裝置被切走」的風險窗口縮到只剩錄製本身，那條與正式流程同管線、較不易炸）。
+                restoreDefaultDevices()
                 // defer（不是流程尾端才刪）：下面 decodeMonoSamples 若拋錯，控制權會直接跳到
                 // 下面的 catch，流程尾端那行 removeItem 就永遠執行不到——暫存檔留在磁碟上。
                 defer { try? FileManager.default.removeItem(at: url) }
@@ -219,7 +227,7 @@ public final class RecordAudioSelfCheck {
                         failures += 1
                         emit("❌ 檢查C 麥克風軌 Goertzel power440=\(micP440) power987=\(micPOff) ratioOK=\(micRatioOK) absOK=\(micAbsOK)")
                     }
-                    // 檢查D：mic 軌時長 ≈ 錄製時長（HAL 時間軸對齊 SCK、無斷格）。
+                    // 檢查D：mic 軌時長 ≈ 錄製時長（無斷格）。
                     let micDur = try await micTrack.load(.timeRange).duration.seconds
                     if abs(micDur - totalSeconds) < 1.0 {
                         emit("✅ 檢查D 麥克風軌時長 \(micDur) ≈ 錄製 \(totalSeconds)")
@@ -227,9 +235,33 @@ public final class RecordAudioSelfCheck {
                         failures += 1
                         emit("❌ 檢查D 麥克風軌時長 \(micDur) 偏離 錄製 \(totalSeconds)")
                     }
+                    // 檢查E：mic 軌起始 PTS 與影像軌起始 PTS 的偏移在容忍內——直接打設計 §5 的最大假設
+                    //（HAL mHostTime 經 CMClockMakeHostTimeFromSystemUnits 是否真的對齊 SCK 影片時鐘）。
+                    // 只驗時長（檢查D）抓不到「固定偏移」：mic 整條平移 200ms 時長仍對、卻與畫面不同步
+                    //（robustness 審查 finding #7）。
+                    let videoTracks = try await asset.loadTracks(withMediaType: .video)
+                    if let videoTrack = videoTracks.first,
+                       let micPTS = try firstSamplePTSSeconds(track: micTrack, asset: asset),
+                       let vidPTS = try firstSamplePTSSeconds(track: videoTrack, asset: asset) {
+                        let offset = abs(micPTS - vidPTS)
+                        emit("起始 PTS mic=\(micPTS) video=\(vidPTS) 偏移=\(offset)")
+                        // 容忍 0.5s：這條要抓的是**時鐘對錯 epoch**（HAL mHostTime 若沒對齊 SCK 影片時鐘，
+                        // 偏移會是「秒～小時」級的巨大值，例如 mach host time 誤當媒體時間）。實測正常偏移
+                        // 0.18～0.23s 是 mic IOProc 在 SCK startCapture 之後才啟動的開場抖動，不是時鐘 bug；
+                        // 門檻設 0.5s 留 2x 餘裕、不誤殺這個抖動，又遠低於任何 epoch 錯位（robustness 審查 #7）。
+                        if offset < 0.5 {
+                            emit("✅ 檢查E mic/影像起始 PTS 偏移 \(offset)s < 0.5s（時鐘同一 epoch）")
+                        } else {
+                            failures += 1
+                            emit("❌ 檢查E mic/影像起始 PTS 偏移 \(offset)s ≥ 0.5s（時鐘可能沒對齊）")
+                        }
+                    } else {
+                        failures += 1
+                        emit("❌ 檢查E 讀不到 mic／影像起始 PTS")
+                    }
                 } else {
                     failures += 1
-                    emit("❌ 檢查C/D 無麥克風軌可驗")
+                    emit("❌ 檢查C/D/E 無麥克風軌可驗")
                 }
             } catch {
                 failures += 1
@@ -297,16 +329,34 @@ public final class RecordAudioSelfCheck {
         return (mono, sampleRate)
     }
 
+    /// 讀某條軌**第一個 sample 的 PTS**（秒），用來比對 mic 與影像的起始時間對齊（檢查E）。
+    /// `outputSettings: nil`＝原生取樣（不解碼），只要 PTS。
+    private func firstSamplePTSSeconds(track: AVAssetTrack, asset: AVAsset) throws -> Double? {
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+        output.alwaysCopiesSampleData = false
+        reader.add(output)
+        guard reader.startReading() else { throw RecordAudioSelfCheckError.readerFailed(reader.error) }
+        defer { reader.cancelReading() }
+        guard let sb = output.copyNextSampleBuffer() else { return nil }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+        return CMTIME_IS_VALID(pts) ? pts.seconds : nil
+    }
+
     private func emit(_ s: String) {
         lines.append(s)
         try? lines.joined(separator: "\n").write(toFile: "/tmp/anypaint-audio-selfcheck.log",
                                                  atomically: true, encoding: .utf8)
     }
 
-    private func finishNow(exitCode: Int32 = 1) {
-        // 還原被自檢切走的系統預設輸入輸出（冪等；所有結束路徑都經這裡）。
+    /// 還原被自檢切走的系統預設輸入輸出（冪等——nil 掉已還原的，重複呼叫無害）。
+    private func restoreDefaultDevices() {
         if let i = savedInputDevice { AudioHardwareControl.setDefaultInput(i); savedInputDevice = nil }
         if let o = savedOutputDevice { AudioHardwareControl.setDefaultOutput(o); savedOutputDevice = nil }
+    }
+
+    private func finishNow(exitCode: Int32 = 1) {
+        restoreDefaultDevices()
         window?.orderOut(nil)
         toneEngine?.stop()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(exitCode) }

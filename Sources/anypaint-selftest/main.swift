@@ -1336,5 +1336,6 @@ levelMathTests()
 levelMeterViewTests()
 micHALRMSTests()
 micHALSampleBufferTests()
+micHALDownmixTests()
 
 T.finish()

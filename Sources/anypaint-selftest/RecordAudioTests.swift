@@ -17,22 +17,23 @@ nonisolated func goertzelTests() {
 }
 
 /// 合成 LPCM stereo float32 CMSampleBuffer（模擬 SCK 音訊格式）。
-func makeAudioSampleBuffer(startSeconds: Double, seconds: Double) -> CMSampleBuffer? {
+func makeAudioSampleBuffer(startSeconds: Double, seconds: Double, channels: Int = 2) -> CMSampleBuffer? {
     let sr = 48000.0
+    let bpf = UInt32(channels * 4)
     var asbd = AudioStreamBasicDescription(
         mSampleRate: sr, mFormatID: kAudioFormatLinearPCM,
         mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
-        mBytesPerPacket: 8, mFramesPerPacket: 1, mBytesPerFrame: 8,
-        mChannelsPerFrame: 2, mBitsPerChannel: 32, mReserved: 0)
+        mBytesPerPacket: bpf, mFramesPerPacket: 1, mBytesPerFrame: bpf,
+        mChannelsPerFrame: UInt32(channels), mBitsPerChannel: 32, mReserved: 0)
     var fmt: CMAudioFormatDescription?
     guard CMAudioFormatDescriptionCreate(allocator: nil, asbd: &asbd, layoutSize: 0, layout: nil,
         magicCookieSize: 0, magicCookie: nil, extensions: nil, formatDescriptionOut: &fmt) == noErr,
         let fmt else { return nil }
     let frames = Int(seconds * sr)
-    var samples = [Float32](repeating: 0, count: frames * 2)
+    var samples = [Float32](repeating: 0, count: frames * channels)
     for i in 0..<frames {
         let v = Float32(sin(2 * .pi * 440 * Double(i) / sr)) * 0.5
-        samples[i * 2] = v; samples[i * 2 + 1] = v
+        for c in 0..<channels { samples[i * channels + c] = v }
     }
     let byteCount = samples.count * MemoryLayout<Float32>.size
     var block: CMBlockBuffer?
@@ -89,17 +90,15 @@ func recordAudioTracksEndToEndTests() {
     defer { try? FileManager.default.removeItem(at: url) }
     let options = RecordOptions(showsCursor: false, useHEVC: false,
                                 captureSystemAudio: true, captureMicrophone: true)
-    // micChannels: 2——本測試的合成 mic buffer 是立體聲（makeAudioSampleBuffer），mic AAC 軌
-    // 聲道數要對上。真實錄影由 RecordFrameSource 傳入裝置實際聲道數。
     guard let box = try? WriterBox(outputURL: url, pixelWidth: 64, pixelHeight: 64,
-                                   options: options, micChannels: 2) else {
+                                   options: options) else {
         T.checkTrue("audio e2e: WriterBox 建立", false); return
     }
     // 音訊早於首格影像 → 應被丟（session 未啟動）
     box.appendAudio(makeAudioSampleBuffer(startSeconds: 0.5, seconds: 0.2)!, type: .audio)
     for i in 0..<10 { box.append(makeVideoSampleBuffer(ptsSeconds: 1.0 + Double(i) / 30)!) }
     box.appendAudio(makeAudioSampleBuffer(startSeconds: 1.0, seconds: 0.3)!, type: .audio)
-    box.appendAudio(makeAudioSampleBuffer(startSeconds: 1.0, seconds: 0.3)!, type: .microphone)
+    box.appendAudio(makeAudioSampleBuffer(startSeconds: 1.0, seconds: 0.3, channels: 1)!, type: .microphone)   // mic 軌現在固定 mono
     let sema = DispatchSemaphore(value: 0)
     var finished = false
     box.finish(nowUptime: 1.4) { result in
