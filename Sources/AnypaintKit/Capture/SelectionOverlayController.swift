@@ -186,22 +186,24 @@ final class SelectionOverlayController {
                 // Esc 分層：有 view 在文字編輯中 → 一次完成「全部」視窗的編輯
                 //（多螢幕各開一個編輯器也保證最多兩下 Esc 離開）；否則取消 overlay。
                 let editing = views.filter { $0.isEditingText }
-                // IME 組字中（注音打到一半）：把 Esc 讓給輸入法清組字，
-                // 下一下 Esc 才輪到「完成編輯」——否則未組完的符號會被烙進字串。
-                if editing.contains(where: { $0.isComposingText }) {
+                // 分層決策抽到 SelectionOverlayLogic.escAction（可測）；副作用留在這裡。
+                // IME 組字中把 Esc 讓給輸入法清組字（否則未組完符號會被烙進字串）。
+                switch SelectionOverlayLogic.escAction(
+                    anyComposing: editing.contains(where: { $0.isComposingText }),
+                    anyEditing: !editing.isEmpty,
+                    anySelection: views.contains(where: { $0.hasSelection })) {
+                case .letIME:
                     return event
-                }
-                if !editing.isEmpty {
+                case .commitEditing:
                     editing.forEach { $0.commitTextEditing() }
                     return nil
-                }
-                // 有任一視窗選取著物件（select 工具）→ 先解除選取，Esc 不直接取消整個 overlay。
-                if views.contains(where: { $0.hasSelection }) {
+                case .deselect:
                     views.forEach { $0.deselect() }
                     return nil
+                case .cancel:
+                    self?.cancel()
+                    return nil
                 }
-                self?.cancel()
-                return nil
             }
             return event
         }

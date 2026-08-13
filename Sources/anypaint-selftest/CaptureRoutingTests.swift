@@ -64,4 +64,14 @@ nonisolated func captureRoutingTests() {
     T.checkEq("movedFront: 移到最前", SelectionOverlayLogic.movedToFront([1, 2, 3, 4]) { $0 == 3 }, [3, 1, 2, 4])
     T.checkEq("movedFront: 找不到→原序", SelectionOverlayLogic.movedToFront([1, 2, 3]) { $0 == 9 }, [1, 2, 3])
     T.checkEq("movedFront: 已在最前→不變", SelectionOverlayLogic.movedToFront([1, 2, 3]) { $0 == 1 }, [1, 2, 3])
+
+    // SelectionOverlayLogic.escAction：分層（組字>編輯>選取>取消）
+    T.checkEq("esc: 組字中→讓 IME",
+              SelectionOverlayLogic.escAction(anyComposing: true, anyEditing: true, anySelection: true), .letIME)
+    T.checkEq("esc: 編輯中（未組字）→完成編輯",
+              SelectionOverlayLogic.escAction(anyComposing: false, anyEditing: true, anySelection: true), .commitEditing)
+    T.checkEq("esc: 有選取→解除選取",
+              SelectionOverlayLogic.escAction(anyComposing: false, anyEditing: false, anySelection: true), .deselect)
+    T.checkEq("esc: 都沒有→取消",
+              SelectionOverlayLogic.escAction(anyComposing: false, anyEditing: false, anySelection: false), .cancel)
 }

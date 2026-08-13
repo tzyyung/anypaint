@@ -13,6 +13,16 @@ public enum SelectionOverlayLogic {
         !otherFrameLockedFlags.contains(true)
     }
 
+    /// Esc 分層動作（純：只看跨視窗的三個聚合旗標）。層序：組字中讓 IME → 編輯中先完成編輯 →
+    /// 有選取先解除選取 → 否則取消整個 overlay。
+    public enum EscAction: Equatable { case letIME, commitEditing, deselect, cancel }
+    public static func escAction(anyComposing: Bool, anyEditing: Bool, anySelection: Bool) -> EscAction {
+        if anyComposing { return .letIME }
+        if anyEditing { return .commitEditing }
+        if anySelection { return .deselect }
+        return .cancel
+    }
+
     /// 把符合條件的元素移到最前（看門狗搶救取像順序：最後互動的視窗優先）；
     /// 找不到符合者＝原順序不變。純陣列運算,泛型可測。
     public static func movedToFront<T>(_ items: [T], matching: (T) -> Bool) -> [T] {
