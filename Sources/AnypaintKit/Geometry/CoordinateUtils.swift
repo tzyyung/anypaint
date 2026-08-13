@@ -28,6 +28,19 @@ public enum CoordinateUtils {
         return CGSize(width: size.width * scale, height: size.height * scale)
     }
 
+    /// 預覽視窗內容寬（Record/Scroll 共用）：min(母帶點寬+40, 可視寬×0.6),再 clamp 到 [minWidth, 可視寬]。
+    public static func previewWidth(pixelWidth: CGFloat, scale: CGFloat,
+                                    visibleWidth: CGFloat, minWidth: CGFloat) -> CGFloat {
+        let ideal = min(pixelWidth / scale + 40, visibleWidth * 0.6)
+        return min(max(ideal, minWidth), visibleWidth)
+    }
+
+    /// 依長寬比算預覽高（Record）：寬×aspect + chrome（按鈕列固定量）,clamp 到 [minHeight, 可視高]。
+    public static func previewHeight(width: CGFloat, aspect: CGFloat, chrome: CGFloat,
+                                     minHeight: CGFloat, visibleHeight: CGFloat) -> CGFloat {
+        min(max(width * aspect + chrome, minHeight), visibleHeight)
+    }
+
     /// 像素尺寸 → 點尺寸（除以 pixel scale）。剪貼簿寫入解析度要用點,寫錯 Retina 貼出會變兩倍大。
     public static func pointSize(pixelWidth: Int, pixelHeight: Int, scale: CGFloat) -> CGSize {
         CGSize(width: CGFloat(pixelWidth) / scale, height: CGFloat(pixelHeight) / scale)

@@ -195,8 +195,9 @@ public final class ScrollPreviewWindowController {
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let scale = captureScale > 0 ? captureScale : 2.0
         // 下限優先於「貼合圖寬」：窄長圖也要放得下底部按鈕排；再夾回螢幕寬以防超出。
-        let ideal = min(CGFloat(image.width) / scale + 40, visible.width * 0.6)
-        let width = min(max(ideal, ScrollPreviewWindow.minContentWidth), visible.width)
+        let width = CoordinateUtils.previewWidth(pixelWidth: CGFloat(image.width), scale: scale,
+                                                 visibleWidth: visible.width,
+                                                 minWidth: ScrollPreviewWindow.minContentWidth)
         let height = max(visible.height * 0.8, ScrollPreviewWindow.minContentHeight)
         let contentRect = NSRect(x: 0, y: 0, width: width, height: height)
 

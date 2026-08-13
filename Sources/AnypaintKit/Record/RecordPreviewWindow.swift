@@ -934,11 +934,14 @@ public final class RecordPreviewWindowController {
         // 取 60 留一點餘裕），下限 minContentHeight；兩者都 clamp 進螢幕。這個常數改版前是 90
         // （文字按鈕列比 icon 列高、也沒有獨立的說明/狀態行，見 RecordPreviewWindow.buildUI
         // 這輪佈局改版的說明），icon 化＋按鈕列變窄變矮之後跟著往下調。
-        let ideal = min(naturalSize.width / scale + 40, visible.width * 0.6)
-        let width = min(max(ideal, RecordPreviewWindow.minContentWidth), visible.width)
+        let width = CoordinateUtils.previewWidth(pixelWidth: naturalSize.width, scale: scale,
+                                                 visibleWidth: visible.width,
+                                                 minWidth: RecordPreviewWindow.minContentWidth)
         let aspect = naturalSize.height / max(naturalSize.width, 1)
-        let idealHeight = width * aspect + 60
-        let height = min(max(idealHeight, RecordPreviewWindow.minContentHeight), visible.height)
+        // chrome 60＝playerView 下緣到 content 下緣的固定量（8+22+4+14+10≈58,留餘裕取 60）
+        let height = CoordinateUtils.previewHeight(width: width, aspect: aspect, chrome: 60,
+                                                   minHeight: RecordPreviewWindow.minContentHeight,
+                                                   visibleHeight: visible.height)
         let contentRect = NSRect(x: 0, y: 0, width: width, height: height)
 
         let window = RecordPreviewWindow(movieURL: movieURL, vars: vars, output: output, pinboard: pinboard,

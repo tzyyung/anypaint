@@ -37,4 +37,23 @@ nonisolated func pinSettingsGeomTests() {
     T.checkEq("nearest: Double 精確命中", AppSettings.nearestOption([0.0, 60, 300], to: 60.0), 60)
     T.checkEq("nearest: Int 選最近", AppSettings.nearestOption([10000, 30000, 50000], to: 25000), 30000)
     T.checkTrue("nearest: 空清單→nil", AppSettings.nearestOption([Int](), to: 5) == nil)
+
+    // previewWidth（Record/Scroll 共用）：min(px/scale+40, 可視×0.6),clamp 到 [minW, 可視]
+    // 母帶 2000px @2x = 1000pt+40=1040;可視 2000×0.6=1200 → ideal=1040;clamp[400,2000]=1040
+    T.checkEq("previewW: 一般情況",
+              CoordinateUtils.previewWidth(pixelWidth: 2000, scale: 2, visibleWidth: 2000, minWidth: 400), 1040)
+    // 超大母帶 → 被可視×0.6 夾住
+    T.checkEq("previewW: 大母帶夾到可視0.6",
+              CoordinateUtils.previewWidth(pixelWidth: 9999, scale: 1, visibleWidth: 1000, minWidth: 400), 600)
+    // 極小母帶 → 吃 minWidth 下限
+    T.checkEq("previewW: 小母帶吃下限",
+              CoordinateUtils.previewWidth(pixelWidth: 10, scale: 2, visibleWidth: 2000, minWidth: 400), 400)
+
+    // previewHeight（Record）：寬×aspect + chrome,clamp [minH, 可視高]
+    // 寬 500、aspect 0.5 → 250+60=310;clamp[200,900]=310
+    T.checkEq("previewH: 寬×aspect+chrome",
+              CoordinateUtils.previewHeight(width: 500, aspect: 0.5, chrome: 60, minHeight: 200, visibleHeight: 900), 310)
+    // 超高 → 夾到可視高
+    T.checkEq("previewH: 超高夾到可視",
+              CoordinateUtils.previewHeight(width: 500, aspect: 5, chrome: 60, minHeight: 200, visibleHeight: 900), 900)
 }
