@@ -110,6 +110,16 @@ public final class AnnotationDocument {
         }
     }
 
+    /// 每個 counter 物件 → 它的序號（渲染時查表用）；非 counter 不列入。
+    public func counterNumbersMap() -> [UUID: Int] {
+        var m: [UUID: Int] = [:]
+        for a in objects {
+            guard case .counter = a.shape, let n = counterNumber(for: a.id) else { continue }
+            m[a.id] = n
+        }
+        return m
+    }
+
     /// 序號標記的編號＝「它是文件裡第幾個 counter」（1 起算）。
     /// 渲染時計算、不存死在物件裡 → 刪除/undo 後編號天然正確。
     public func counterNumber(for id: UUID) -> Int? {

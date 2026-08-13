@@ -32,4 +32,16 @@ nonisolated func captureRoutingTests() {
     T.checkTrue("hitText: 非文字物件不算", doc.hitTextObject(at: CGPoint(x: 90, y: 90)) == nil)
     // 空文件 → nil
     T.checkTrue("hitText: 空文件→nil", AnnotationDocument().hitTextObject(at: .zero) == nil)
+
+    // AnnotationDocument.counterNumbersMap：只列 counter、值＝序號
+    let cdoc = AnnotationDocument()
+    let c1 = Annotation(shape: .counter(center: CGPoint(x: 0, y: 0)), style: style)
+    let c2 = Annotation(shape: .counter(center: CGPoint(x: 10, y: 0)), style: style)
+    let rr = Annotation(shape: .rect(CGRect(x: 0, y: 0, width: 5, height: 5)), style: style)
+    cdoc.add(c1); cdoc.add(rr); cdoc.add(c2)
+    let map = cdoc.counterNumbersMap()
+    T.checkEq("counterMap: 只含 2 個 counter", map.count, 2)
+    T.checkEq("counterMap: c1=1", map[c1.id], 1)
+    T.checkEq("counterMap: c2=2（跳過中間非 counter）", map[c2.id], 2)
+    T.checkTrue("counterMap: 非 counter 不列", map[rr.id] == nil)
 }

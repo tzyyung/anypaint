@@ -48,4 +48,20 @@ nonisolated func annotationInputTests() {
     let r4 = AnnotationInput.stepsFromScroll(accum: 0, delta: -11, step: 5)
     T.checkEq("scroll: -11→-2 格", r4.steps, -2)
     T.checkEq("scroll: 負向剩餘 -1", r4.newAccum, -1)
+
+    // textCommitAction：編輯既有＋空→remove;既有＋有字→update;新＋有字→add;新＋空→none
+    T.checkEq("textCommit: 既有+空→remove", AnnotationInput.textCommitAction(trimmed: "", hasExistingID: true), .remove)
+    T.checkEq("textCommit: 既有+有字→update", AnnotationInput.textCommitAction(trimmed: "hi", hasExistingID: true), .update)
+    T.checkEq("textCommit: 新+有字→add", AnnotationInput.textCommitAction(trimmed: "hi", hasExistingID: false), .add)
+    T.checkEq("textCommit: 新+空→none", AnnotationInput.textCommitAction(trimmed: "", hasExistingID: false), .none)
+
+    // shapeInSelection：交集→true;無交集→false;無選區→false
+    T.checkTrue("inSel: 交集→true",
+                AnnotationInput.shapeInSelection(bounds: CGRect(x: 5, y: 5, width: 10, height: 10),
+                                                 selection: CGRect(x: 0, y: 0, width: 20, height: 20)))
+    T.checkTrue("inSel: 無交集→false",
+                !AnnotationInput.shapeInSelection(bounds: CGRect(x: 100, y: 100, width: 10, height: 10),
+                                                  selection: CGRect(x: 0, y: 0, width: 20, height: 20)))
+    T.checkTrue("inSel: 無選區→false",
+                !AnnotationInput.shapeInSelection(bounds: CGRect(x: 0, y: 0, width: 10, height: 10), selection: nil))
 }

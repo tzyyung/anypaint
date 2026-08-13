@@ -21,6 +21,18 @@ public enum AnnotationInput {
         }
     }
 
+    /// 文字編輯提交的決策（純：只看「字串空不空」與「是否編輯既有物件」）。
+    public enum TextCommitAction: Equatable { case remove, update, add, none }
+    public static func textCommitAction(trimmed: String, hasExistingID: Bool) -> TextCommitAction {
+        if hasExistingID { return trimmed.isEmpty ? .remove : .update }
+        return trimmed.isEmpty ? .none : .add
+    }
+
+    /// 新標註是否落在選區內（框外不入庫的 guard）；無選區＝不入庫。
+    public static func shapeInSelection(bounds: CGRect, selection: CGRect?) -> Bool {
+        selection.map { bounds.intersects($0) } ?? false
+    }
+
     /// 工具列點擊的切換規則：點到當前工具＝取消（回 nil）、點到別的＝切過去。
     public static func toggledTool(tapped: AnnotationTool, active: AnnotationTool?) -> AnnotationTool? {
         tapped == active ? nil : tapped

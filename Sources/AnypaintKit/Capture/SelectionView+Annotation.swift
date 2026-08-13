@@ -17,7 +17,7 @@ extension SelectionView {
     /// 序號：點擊即生成下一號（編號渲染時算）；框外不入庫；進熱狀態（滾輪調大小）。
     func addCounter(at p: CGPoint) {
         let a = Annotation(shape: .counter(center: p), style: currentStyle)
-        guard let sel = selection, a.bounds.intersects(sel) else { return }
+        guard AnnotationInput.shapeInSelection(bounds: a.bounds, selection: selection) else { return }
         annotations.add(a)
         syncUndoButtons()
         hotAnnotationID = a.id
@@ -82,20 +82,23 @@ extension SelectionView {
         guard let editor = textEditor else { return }
         let string = editor.string.trimmingCharacters(in: .whitespacesAndNewlines)
         let origin = editor.textOrigin   // 驗收回饋 Fix 1：直接讀 make() 記錄的值，不從 frame 反推
-        if let id = editingTextID {
-            if string.isEmpty {
-                annotations.remove(id: id)
-            } else {
+        switch AnnotationInput.textCommitAction(trimmed: string, hasExistingID: editingTextID != nil) {
+        case .remove:
+            if let id = editingTextID { annotations.remove(id: id) }
+        case .update:
+            if let id = editingTextID {
                 annotations.update(id: id) { a in
                     if case .text(let o, _) = a.shape { a.shape = .text(origin: o, string: string) }
                 }
             }
-        } else if !string.isEmpty {
+        case .add:
             let a = Annotation(shape: .text(origin: origin, string: string), style: currentStyle)
-            if let sel = selection, a.bounds.intersects(sel) {   // 框外不入庫 guard 沿用
+            if AnnotationInput.shapeInSelection(bounds: a.bounds, selection: selection) {   // 框外不入庫
                 annotations.add(a)
                 hotAnnotationID = a.id
             }
+        case .none:
+            break
         }
         editor.removeFromSuperview()
         textEditor = nil
@@ -143,15 +146,7 @@ extension SelectionView {
     }
 
     /// 序號編號查表（渲染時算、不存死——刪除/undo 天然正確）。
-    func counterNumbersMap() -> [UUID: Int] {
-        var m: [UUID: Int] = [:]
-        for a in annotations.objects {
-            if case .counter = a.shape, let n = annotations.counterNumber(for: a.id) {
-                m[a.id] = n
-            }
-        }
-        return m
-    }
+    func counterNumbersMap() -> [UUID: Int] { annotations.counterNumbersMap() }
 
     /// 馬賽克取樣：view 點座標矩形 → 原始凍結影像該區像素圖（非破壞鐵則：永遠取原始底圖）。
     /// 先與可視範圍（view bounds）取交集：矩形超出底圖（多螢幕拖過邊界）時只取交集，
