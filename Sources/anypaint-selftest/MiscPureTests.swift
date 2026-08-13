@@ -51,4 +51,16 @@ nonisolated func miscPureTests() {
     let p3 = AudioInputDeviceList.popupSelection(saved: nil, deviceIDs: ids)
     T.checkTrue("micPopup: nil→非幽靈", !p3.isGhost)
     T.checkEq("micPopup: nil→系統預設(0)", p3.index, 0)
+
+    // RecordSession.cancelAction：狀態→動作
+    T.checkEq("cancelAction: 錄影中→stop", RecordSession.cancelAction(for: .recording), .stop)
+    T.checkEq("cancelAction: armed→cancel", RecordSession.cancelAction(for: .armed), .cancel)
+    T.checkEq("cancelAction: selecting→cancel", RecordSession.cancelAction(for: .selecting), .cancel)
+    T.checkEq("cancelAction: finishing→cancel", RecordSession.cancelAction(for: .finishing), .cancel)
+    T.checkEq("cancelAction: idle→none", RecordSession.cancelAction(for: .idle), .none)
+
+    // FilenameTemplate.chooseAppName
+    T.checkEq("appName: Finder 名優先", FilenameTemplate.chooseAppName(finderName: "預覽程式", fileName: "Preview", bundleNames: ["X"]), "預覽程式")
+    T.checkEq("appName: Finder 名等於檔名→用 bundle", FilenameTemplate.chooseAppName(finderName: "Preview", fileName: "Preview", bundleNames: ["", "顯示名"]), "顯示名")
+    T.checkEq("appName: 都沒有→退回檔名", FilenameTemplate.chooseAppName(finderName: "", fileName: "Preview", bundleNames: []), "Preview")
 }

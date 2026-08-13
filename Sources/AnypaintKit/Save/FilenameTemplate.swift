@@ -74,6 +74,14 @@ public enum FilenameTemplate {
         return "~/" + trimmed
     }
 
+    /// 「存檔並開啟」App 的顯示名選擇（純）：Finder 顯示名非空且與檔名不同＝優先用它;
+    /// 否則取第一個非空 bundle 名（CFBundleDisplayName/CFBundleName…）;都沒有＝退回檔名。
+    public static func chooseAppName(finderName: String, fileName: String, bundleNames: [String]) -> String {
+        if !finderName.isEmpty, finderName != fileName { return finderName }
+        if let n = bundleNames.first(where: { !$0.isEmpty }) { return n }
+        return fileName
+    }
+
     /// 已做過 tilde 展開的路徑：絕對路徑原樣;相對路徑補上 `home/`（launchd 啟動時 cwd=`/` 不可靠）。
     /// 純函式（home 顯式傳入）——tilde 展開本身留在呼叫端（讀真實家目錄）。
     public static func ensureAbsolute(_ path: String, home: String) -> String {

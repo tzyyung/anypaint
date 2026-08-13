@@ -231,20 +231,17 @@ final class OutputSettingsViewController: NSViewController {
     /// 任何一條失敗都還有可讀的名字，不會出現空白選項。
     private func appDisplayName(at url: URL) -> String {
         let fileName = url.deletingPathExtension().lastPathComponent
-        let finderName = (FileManager.default.displayName(atPath: url.path) as NSString)
-            .deletingPathExtension
-        if !finderName.isEmpty, finderName != fileName { return finderName }
+        let finderName = (FileManager.default.displayName(atPath: url.path) as NSString).deletingPathExtension
+        // bundle 名稱候選（localizedInfoDictionary 優先於 infoDictionary,DisplayName 優先於 Name）
+        var bundleNames: [String] = []
         if let bundle = Bundle(url: url) {
             for key in ["CFBundleDisplayName", "CFBundleName"] {
-                if let name = bundle.localizedInfoDictionary?[key] as? String, !name.isEmpty {
-                    return name
-                }
-                if let name = bundle.infoDictionary?[key] as? String, !name.isEmpty {
-                    return name
-                }
+                if let n = bundle.localizedInfoDictionary?[key] as? String { bundleNames.append(n) }
+                if let n = bundle.infoDictionary?[key] as? String { bundleNames.append(n) }
             }
         }
-        return fileName
+        // 選名的純邏輯抽到 FilenameTemplate.chooseAppName（可測）。
+        return FilenameTemplate.chooseAppName(finderName: finderName, fileName: fileName, bundleNames: bundleNames)
     }
 
     @objc private func openWithChanged() {

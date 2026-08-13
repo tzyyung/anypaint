@@ -114,9 +114,19 @@ public final class RecordSession {
     /// 再按快鍵的語意：recording 中＝停止收檔（不是丟棄——使用者按快鍵最可能想結束並拿結果）；
     /// 其餘 active 狀態（selecting/armed/finishing）＝取消。finishing 由 `cancel()` 自己擋掉
     /// （不接受取消，見該方法），這裡不必特判。
+    /// 取消請求在各狀態下的動作（純路由,可測）：錄影中＝正常停止收檔;其餘進行中＝丟棄取消;閒置＝不動。
+    public enum CancelAction: Equatable { case stop, cancel, none }
+    public nonisolated static func cancelAction(for state: State) -> CancelAction {
+        if state == .recording { return .stop }
+        return state == .idle ? .none : .cancel
+    }
+
     public func cancelIfActive() {
-        if state == .recording { stopRecording(); return }
-        if isActive { cancel() }
+        switch Self.cancelAction(for: state) {
+        case .stop: stopRecording()
+        case .cancel: cancel()
+        case .none: break
+        }
     }
 
     /// RPC `abortRecord`：不論目前處於哪個 active 狀態都強制取消並丟棄母帶（同 Esc／取消鈕）。
