@@ -47,9 +47,9 @@ public final class WriterBox: @unchecked Sendable {
     ///   HEVC 用 0.9×0.5＝0.45（同款 Azayaka 公式的 hevc 因子，設計文件 §1.8）。
     public init(outputURL: URL, pixelWidth: Int, pixelHeight: Int, options: RecordOptions) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        // Azayaka 位元率公式 + QuickRecorder 20 萬下限；30fps、Rec.709
-        let bitrateFactor = options.useHEVC ? 0.45 : 0.9
-        let bitrate = max(200_000, Int(Double(pixelWidth * pixelHeight) * (30.0 / 8.0) * bitrateFactor))
+        // Azayaka 位元率公式 + QuickRecorder 20 萬下限；30fps、Rec.709（公式抽到 RecordMath.videoBitrate）
+        let bitrate = RecordMath.videoBitrate(pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+                                              useHEVC: options.useHEVC)
         let settings: [String: Any] = [
             AVVideoCodecKey: options.useHEVC ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
             AVVideoWidthKey: pixelWidth,

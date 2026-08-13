@@ -51,4 +51,28 @@ nonisolated func exportFormatTests() {
     T.checkTrue("parseRect: 欄位不足→nil", CoordinateUtils.parseRect("1,2,3") == nil)
     T.checkTrue("parseRect: 非數字→nil", CoordinateUtils.parseRect("a,b,c,d") == nil)
     T.checkTrue("parseRect: 空字串→nil", CoordinateUtils.parseRect("") == nil)
+
+    // RecordMath.videoBitrate（原 WriterBox.init 內嵌公式）
+    // 1920×1080 H.264：2073600*3.75*0.9 = 6998400
+    T.checkEq("bitrate: 1080p H.264", RecordMath.videoBitrate(pixelWidth: 1920, pixelHeight: 1080, useHEVC: false), 6_998_400)
+    // HEVC 是 H.264 的一半
+    T.checkEq("bitrate: HEVC=H264 的一半",
+              RecordMath.videoBitrate(pixelWidth: 1920, pixelHeight: 1080, useHEVC: true), 3_499_200)
+    // 極小尺寸吃 20 萬下限
+    T.checkEq("bitrate: 小尺寸吃下限 200k", RecordMath.videoBitrate(pixelWidth: 16, pixelHeight: 16, useHEVC: false), 200_000)
+
+    // RecordMath.parseRecordDuration（原 RecordHUD.durationSeconds）
+    T.checkTrue("duration: 空白→nil", RecordMath.parseRecordDuration("") == nil)
+    T.checkTrue("duration: 非整數→nil", RecordMath.parseRecordDuration("2.5") == nil)
+    T.checkTrue("duration: 0→nil", RecordMath.parseRecordDuration("0") == nil)
+    T.checkTrue("duration: 負→nil", RecordMath.parseRecordDuration("-3") == nil)
+    T.checkEq("duration: 5→5", RecordMath.parseRecordDuration("5"), 5)
+    T.checkEq("duration: 700→夾到600", RecordMath.parseRecordDuration("700"), 600)
+    T.checkEq("duration: 含空白 ' 8 '→8", RecordMath.parseRecordDuration(" 8 "), 8)
+
+    // RecordMath.nextPeak（原 LevelMeterView peak-hold）
+    T.checkEq("nextPeak: 更高→更新", RecordMath.nextPeak(bars: 8, currentPeak: 5), 8)
+    T.checkEq("nextPeak: 相等→保持", RecordMath.nextPeak(bars: 5, currentPeak: 5), 5)
+    T.checkEq("nextPeak: 更低→衰減一格", RecordMath.nextPeak(bars: 2, currentPeak: 5), 4)
+    T.checkEq("nextPeak: 已在0→不為負", RecordMath.nextPeak(bars: 0, currentPeak: 0), 0)
 }

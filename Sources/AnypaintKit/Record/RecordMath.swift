@@ -131,4 +131,23 @@ public enum RecordMath {
     /// 校準來源：2026-08-12 除錯實測（內建麥克風/DaiLing G3 靜置 peak≈0.0001、人聲 0.01–0.5）。
     public static let silenceThreshold: Float = 0.003
     public static func isSilent(rms: Float) -> Bool { rms < silenceThreshold }
+
+    /// 影片位元率（bps）：Azayaka 公式 `w*h*(30/8)*factor` + QuickRecorder 20 萬下限；
+    /// factor＝H.264 0.9／HEVC 0.45（設計文件 §1.8）。純整數運算,抽出供 selftest 驗證。
+    public static func videoBitrate(pixelWidth: Int, pixelHeight: Int, useHEVC: Bool) -> Int {
+        let factor = useHEVC ? 0.45 : 0.9
+        return max(200_000, Int(Double(pixelWidth * pixelHeight) * (30.0 / 8.0) * factor))
+    }
+
+    /// 限時錄影秒數輸入解析（RecordHUD 秒數欄）：空白／非整數／≤0 → nil；否則 clamp 1...600。
+    public static func parseRecordDuration(_ text: String) -> Double? {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        guard let v = Int(t), v > 0 else { return nil }
+        return Double(min(600, max(1, v)))
+    }
+
+    /// 電平表 peak-hold：本格亮格數 ≥ 當前 peak → 更新到本格；否則 peak 衰減一格（不低於 0）。
+    public static func nextPeak(bars: Int, currentPeak: Int) -> Int {
+        bars >= currentPeak ? bars : max(0, currentPeak - 1)
+    }
 }

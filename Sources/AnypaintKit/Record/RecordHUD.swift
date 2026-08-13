@@ -47,9 +47,7 @@ public final class RecordHUDController: NSObject {
     /// （`showMessage` 是給選區太小用的），與其半吊子地只挑得出某些無效輸入來提示、
     /// 不如統一「無效輸入＝不限」這一種行為，簡單且可預期。
     public var durationSeconds: Double? {
-        let t = durationField.stringValue.trimmingCharacters(in: .whitespaces)
-        guard let v = Int(t), v > 0 else { return nil }
-        return Double(min(600, max(1, v)))
+        RecordMath.parseRecordDuration(durationField.stringValue)
     }
 
     /// 位置：選區下緣外 12pt；貼近螢幕底時翻到上緣外；水平 clamp 進螢幕（避免貼邊選區把 HUD 推出畫面）。

@@ -36,11 +36,7 @@ public final class LevelMeterView: NSView {
         let db = RecordMath.dbFromRMS(level)
         let bars = RecordMath.levelBars(db: db, totalBars: totalBars)
         litBars = bars
-        if bars >= peakBar {
-            peakBar = bars
-        } else if peakBar > 0 {
-            peakBar -= 1
-        }
+        peakBar = RecordMath.nextPeak(bars: bars, currentPeak: peakBar)
         setNeedsDisplay(bounds)
     }
 
