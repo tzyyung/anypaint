@@ -12,6 +12,8 @@ final class CaptureSettingsViewController: NSViewController {
     private let recordUseHEVCCheckbox = NSButton(checkboxWithTitle: "MP4 使用 HEVC（檔案較小，舊裝置相容性較差）", target: nil, action: nil)
     private let recordSystemAudioCheckbox = NSButton(checkboxWithTitle: "錄製系統聲音", target: nil, action: nil)
     private let recordMicCheckbox = NSButton(checkboxWithTitle: "錄製麥克風", target: nil, action: nil)
+    /// 「錄影」直接落地的存檔資料夾顯示（Task B1/B3）。
+    private let recordSaveDirLabel = NSTextField(labelWithString: "")
     private let micDevicePopup = NSPopUpButton()
     private let micLevelMeter = LevelMeterView()
     private let micLevelMonitor = MicLevelMonitor()
@@ -83,13 +85,51 @@ final class CaptureSettingsViewController: NSViewController {
         let micRow = buildMicDetailRow()
         micDetailRow = micRow
 
+        let recordHeading = NSTextField(labelWithString: "錄影（直接存檔）")
+        recordHeading.font = .systemFont(ofSize: 12, weight: .semibold)
+
         let stack = NSStackView(views: [heading, recordCursorCheckbox, recordClickRingCheckbox,
                                         buildRecordGifFpsRow(), buildGifskiHintLabel(), recordUseHEVCCheckbox,
-                                        recordSystemAudioCheckbox, recordMicCheckbox, micRow])
+                                        recordSystemAudioCheckbox, recordMicCheckbox, micRow,
+                                        recordHeading, buildRecordSaveDirRow()])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         return stack
+    }
+
+    /// 「錄影」直接落地的存檔資料夾列（Task B1/B3）：顯示目前路徑＋選擇／回預設。
+    private func buildRecordSaveDirRow() -> NSView {
+        let title = NSTextField(labelWithString: "存檔資料夾：")
+        recordSaveDirLabel.stringValue = AppSettings.recordSaveDirectory ?? "~/Movies/anypaint"
+        recordSaveDirLabel.lineBreakMode = .byTruncatingMiddle
+        recordSaveDirLabel.textColor = .secondaryLabelColor
+        recordSaveDirLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let pick = NSButton(title: "選擇…", target: self, action: #selector(pickRecordSaveDir))
+        pick.bezelStyle = .rounded
+        let reset = NSButton(title: "預設", target: self, action: #selector(resetRecordSaveDir))
+        reset.bezelStyle = .rounded
+        let row = NSStackView(views: [title, recordSaveDirLabel, pick, reset])
+        row.orientation = .horizontal
+        row.spacing = 6
+        return row
+    }
+
+    @objc private func pickRecordSaveDir() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "選擇"
+        if panel.runModal() == .OK, let url = panel.url {
+            AppSettings.recordSaveDirectory = url.path
+            recordSaveDirLabel.stringValue = url.path
+        }
+    }
+
+    @objc private func resetRecordSaveDir() {
+        AppSettings.recordSaveDirectory = nil
+        recordSaveDirLabel.stringValue = "~/Movies/anypaint"
     }
 
     /// 麥克風裝置下拉＋即時電平表：漸進展開列，「錄製麥克風」勾上才顯示（`recordMicToggled`）。

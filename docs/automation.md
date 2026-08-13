@@ -45,7 +45,7 @@ agent）不必操作滑鼠鍵盤就能查狀態、截自己的 UI、以及驅動
 | `dumpUI` | 無 | `{ok:true, tree:[{title,class,views:{...}}]}`——`tree` 陣列每項對應一個可見視窗；`views` 是該視窗 `contentView` 的**根節點物件**（不是陣列）。**兩層 key 名不同**：每個節點自己的欄位是 `class`／`frame`／`hidden`（`NSButton` 多帶 `title`／`enabled`，`NSTextField` 多帶 `text`），往下遞迴的子視圖放在 `subviews`（陣列，只有非空時才會出現這個 key）——最外層是 `views`（單數、單一物件），遞迴層是 `subviews`（複數、陣列），兩者不是同一個 key | — |
 | `screenshotSelf` | 無 | `{ok:true, paths:["/tmp/anypaint-uitest-shots/winN-<epoch>.png", ...]}`（對每個可見視窗的 `contentView` 各存一張 PNG） | — |
 | `openSettings` | 無 | `{ok:true}` | — |
-| `startRecord` | `rect`: `"x,y,w,h"`（AppKit 全域座標，點，左下原點） | `{ok:true}`（跳過拉框互動，直接以此矩形進 armed 並開始錄製——`RecordSession.startProgrammatically`） | `{ok:false, error:"busy"}`（已有錄製在跑，不是 toggle）／`{ok:false, error:"noScreenRecordingPermission"}`（`CGPreflightScreenCaptureAccess()` 為 false——RPC 路徑不進互動式權限詢問，直接拒絕，避免在 CFMessagePort callback 上 runModal 卡死整條通道）／`{ok:false, error:"badRect"}`（`rect` 解析失敗、或矩形沒有完整落在目標螢幕的 `frame` 內、或找不到目標螢幕）／`{ok:false, error:"selectionTooSmall"}`（矩形合法但邊長 < `RecordSession.minSelectionEdgePt`） |
+| `startRecord` | `rect`: `"x,y,w,h"`（AppKit 全域座標，點，左下原點）；`direct`（Bool，可省，預設 false） | `{ok:true}`（跳過拉框互動，直接以此矩形進 armed 並開始錄製——`RecordSession.startProgrammatically`）。**`direct:true`＝錄影**（停止後直接存 MP4 到 `recordSaveDirectory`，發 `recordSaved`）；`direct:false`＝動畫截圖（停止後開預覽） | `{ok:false, error:"busy"}`（已有錄製在跑，不是 toggle）／`{ok:false, error:"noScreenRecordingPermission"}`（`CGPreflightScreenCaptureAccess()` 為 false——RPC 路徑不進互動式權限詢問，直接拒絕，避免在 CFMessagePort callback 上 runModal 卡死整條通道）／`{ok:false, error:"badRect"}`（`rect` 解析失敗、或矩形沒有完整落在目標螢幕的 `frame` 內、或找不到目標螢幕）／`{ok:false, error:"selectionTooSmall"}`（矩形合法但邊長 < `RecordSession.minSelectionEdgePt`） |
 | `stopRecord` | 無 | `{ok:true}`（正常停止，收檔保留——同熱鍵在 recording 狀態下再按一次） | `{ok:false, state:"<RecordSession.state 的字串描述>"}`（呼叫當下不是 `.recording`——例如還在 `selecting`／`armed`／`finishing`。**這種情況不會呼叫 `cancelIfActive()`**：若真的呼叫，`selecting`／`armed` 下會被解讀成取消並發出 `recordingAborted`，那不是 `stopRecord` 的語意，呼叫端明確表達的是「結束並保留母帶」，不該在還沒開始錄製時被誤當成取消） |
 | `abortRecord` | 無 | `{ok: <是否真的不在 active 狀態了>, state:"<RecordSession.state 的字串描述>"}` | `.finishing` 狀態不接受取消（刻意保留的紀律，見 `docs/animated-capture.md` §4），這時 `ok` 會是 `false`，`state` 仍是 `"finishing"`——不能因為呼叫成功就假設母帶已經被丟棄 |
 | `micDevices` | 無 | `{ok:true, devices:[{uniqueID,name,isDefault}], systemDefaultID:"<uniqueID>"或null}`（`AudioInputDeviceList.all()` 的直接映射；`systemDefaultID` 罕見情況可能是 `null`——見 `AudioInputDeviceList.systemDefaultID()` 對聚合裝置的邊界說明） | — |
@@ -94,7 +94,8 @@ agent）不必操作滑鼠鍵盤就能查狀態、截自己的 UI、以及驅動
 | `recordingFailed` | `{reason: "<字串>"}` | 三條失敗路徑各自發一次：`startFailed: <error>`（`RecordFrameSource.start` 的 await 拋錯，例如 TCC 拒絕、`noDisplays`）、`finishFailed: <error>`（`stopAndFinish()` 失敗，包含 `RecordError.noFrames`／`.writerFailed`）、`finishingTimeout`（`.finishing` 的 30 秒看門狗放生——`stopAndFinish()` 鏈路卡死時的最後防線）。三者都與對應的 `onFinished?(nil, …)` 回呼同一次失敗綁在一起，不是額外的獨立事件流 |
 | `captureCompleted` | `{copied: true, path?: "<path>"}` | `captureRegion` 擷取+裁切+複製剪貼簿完成；`save:true` 且寫檔成功時才有 `path` |
 | `textRecognized` | `{text: "<辨識結果>"}` | `recognizeText` OCR 完成（空結果時 `text` 為空字串，同時文字已進剪貼簿） |
-| `captureFailed` | `{reason: "<字串>"}` | `captureRegion`/`recognizeText` 的擷取或裁切失敗（`captureOrCrop`）、或 OCR 失敗（`ocr: <error>`） |
+| `captureFailed` | `{reason: "<字串>"}` | `captureRegion`/`recognizeText` 的擷取或裁切失敗（`captureOrCrop`）、或 OCR 失敗（`ocr: <error>`）、或錄影存檔失敗（`recordSave`） |
+| `recordSaved` | `{path: "<path>"}` | `startRecord{direct:true}`（錄影）停止後，MP4 已存到 `recordSaveDirectory`（預設 `~/Movies/anypaint/`） |
 
 `channelReady`（`{}`）在伺服器註冊完成時發一次，可用來確認 app 已經準備好接收命令（比起輪詢
 `getState` 直到成功，等這個事件更直接）。

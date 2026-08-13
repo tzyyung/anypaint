@@ -492,8 +492,9 @@ final class RecordPreviewWindow: NSWindow {
                                        let saved = self.output.saveCopy(from: tmpURL, ext: "webp", vars: self.vars)
                                        try? FileManager.default.removeItem(at: tmpURL)
                                        if let saved { self.lastSavedURL = saved }
-                                       self.setStatus(saved.map { "已存 \($0.lastPathComponent)" }
-                                           ?? "WebP 存檔失敗")
+                                       let hint = RecordOutputService.silentFormatWarning(ext: "webp", hasAudio: !self.audioButton.isHidden)
+                                       self.setStatus((saved.map { "已存 \($0.lastPathComponent)" } ?? "WebP 存檔失敗")
+                                           + (hint.map { " · " + $0 } ?? ""))
                                    case .failure(let e):
                                        // 不回退（設計文件 §1.7b：沒有內建 WebP 編碼器）——直接顯示錯誤，
                                        // GifExporter.exportWebP 內部已經把同款診斷寫進 RecordSessionLog。
@@ -528,8 +529,10 @@ final class RecordPreviewWindow: NSWindow {
                                    let saved = self.output.saveCopy(from: tmpURL, ext: ext, vars: self.vars)
                                    try? FileManager.default.removeItem(at: tmpURL)
                                    if let saved { self.lastSavedURL = saved }
-                                   self.setStatus(saved.map { "已存 \($0.lastPathComponent)" }
-                                       ?? "\(label) 存檔失敗")
+                                   // 無聲格式提醒（Task B3）：母帶有音軌(audioButton 可見)卻選了無聲格式 → 附提示,不擋。
+                                   let hint = RecordOutputService.silentFormatWarning(ext: ext, hasAudio: !self.audioButton.isHidden)
+                                   self.setStatus((saved.map { "已存 \($0.lastPathComponent)" } ?? "\(label) 存檔失敗")
+                                       + (hint.map { " · " + $0 } ?? ""))
                                case .failure(let e):
                                    self.setStatus("\(label) 匯出失敗：\(e)")
                                }

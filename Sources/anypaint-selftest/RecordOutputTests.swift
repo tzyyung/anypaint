@@ -37,4 +37,12 @@ nonisolated func recordOutputTests() {
         return false
     })
     T.checkTrue("finalURL: 碰撞→檔名補 -2", u2.lastPathComponent.contains("-2.mp4"))
+
+    // silentFormatWarning（Task B3）：有音軌＋無聲格式→提醒;MP4 或無音軌→nil
+    T.checkTrue("silentFmt: gif+有音軌→提醒", RecordOutputService.silentFormatWarning(ext: "gif", hasAudio: true) != nil)
+    T.checkTrue("silentFmt: png(APNG)+有音軌→提醒", RecordOutputService.silentFormatWarning(ext: "png", hasAudio: true) != nil)
+    T.checkTrue("silentFmt: webp+有音軌→提醒", RecordOutputService.silentFormatWarning(ext: "webp", hasAudio: true) != nil)
+    T.checkTrue("silentFmt: mp4+有音軌→nil（含聲音）", RecordOutputService.silentFormatWarning(ext: "mp4", hasAudio: true) == nil)
+    T.checkTrue("silentFmt: gif+無音軌→nil", RecordOutputService.silentFormatWarning(ext: "gif", hasAudio: false) == nil)
+    T.checkTrue("silentFmt: 大小寫容忍 GIF", RecordOutputService.silentFormatWarning(ext: "GIF", hasAudio: true) != nil)
 }

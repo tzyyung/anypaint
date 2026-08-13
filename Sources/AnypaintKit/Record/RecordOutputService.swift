@@ -15,6 +15,13 @@ public final class RecordOutputService {
     /// 「錄影」直接落地的預設檔名樣板（無副檔名,由 finalMovieURL 補 .mp4）。
     public static let recordDefaultName = "anypaint $yyyy-MM-dd HH.mm.ss$"
 
+    /// 無聲格式提醒（Task B3）：母帶有音軌、卻匯出不含聲音的格式（GIF/APNG=png/WebP）→ 回提示字串;
+    /// MP4 或無音軌→nil。純函式,不擋匯出（只提醒）。
+    public static func silentFormatWarning(ext: String, hasAudio: Bool) -> String? {
+        let silent = ["gif", "png", "webp"]
+        return (hasAudio && silent.contains(ext.lowercased())) ? "此格式不含聲音，保留聲音請選 MP4" : nil
+    }
+
     /// 「錄影」的最終存檔路徑（純函式,可測）：目錄用 `saveDirectory`（nil/空→`~/Movies/anypaint`）,
     /// 展開 `~`／相對路徑補 `home`;檔名用時間戳樣板＋`.mp4`;同名碰撞遞增（`exists` 注入）。
     public static func finalMovieURL(saveDirectory: String?, vars: [String: String], date: Date,

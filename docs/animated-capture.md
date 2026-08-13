@@ -10,9 +10,31 @@
 RPC 自動化命令表（`getState`／`startRecord` 等）與事件表獨立成 `docs/automation.md`，這裡只在
 §7 提 `RecordAudioTracks` 的掛載點與 A/V 對齊語意。
 
-最後更新：2026-08-12
+最後更新：2026-08-14
 
 ---
+
+## 0. 兩個入口：動畫截圖 vs 錄影（Task B1/B2）
+
+同一條 `SCStream → WriterBox` 底層，**兩個選單列入口**，只在**收尾**分叉（`AppDelegate.beginRecord(direct:)`）：
+
+| | 動畫截圖（⌘⇧R） | 錄影（⌘⇧M＝Movie） |
+|---|---|---|
+| 停止後 | 開**預覽視窗**，手動匯出 GIF/APNG/WebP/MP4、剪裁、快照 | **直接存 MP4**，不開預覽，發存檔通知 |
+| 存哪 | 使用者在預覽裡選（`quickSavePathTemplate`／另存） | `AppSettings.recordSaveDirectory`（未設＝`~/Movies/anypaint/`）＋時間戳檔名（`RecordOutputService.finalMovieURL`，純函式可測） |
+| 選單標題切換 | 「動畫截圖」↔「停止動畫截圖」 | 「錄影」↔「停止錄影」 |
+| 互斥 | 錄製中彼此的快鍵都 disable，只有進行中那個入口能停 | 同左 |
+| RPC | `startRecord`（`direct:false`） | `startRecord{direct:true}`→存檔後發 `recordSaved`；設定頁有「錄影存檔資料夾」選擇 |
+
+**麥克風待命/錄製電平表（Task B2）**：錄影/動畫截圖 armed 時，若「錄製麥克風」開，HUD 顯示裝置名＋
+`LevelMeterView`：待命由 `MicLevelMonitor` 掛在錄影裝置上驅動；按開始後 stop 待命試音錶，改由
+`RecordMicSource` 從**同一份降混後 mono 樣本**算 RMS（`RecordMath.rms`，20Hz 節流，經 `RecordFrameSource.onMicLevel`
+屬性→`RecordSession`→HUD，**不另開裝置 session**）。連續靜音達 ~2s（`MicSilenceTracker` 純狀態機，可測）→
+HUD 黃字「麥克風無訊號，檢查裝置」，有訊號即清；**只提醒不擋**。裝置切換維持在設定頁（nonactivating HUD
+內放下拉太脆，刻意不做）。
+
+**無聲格式提醒（Task B3）**：預覽視窗匯出 GIF/APNG/WebP 且母帶有音軌 → 存檔訊息附「此格式不含聲音，
+保留聲音請選 MP4」（`RecordOutputService.silentFormatWarning`，純函式可測），不擋匯出。
 
 ## 1. 使用者看到的行為
 
