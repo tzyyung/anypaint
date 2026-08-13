@@ -12,9 +12,8 @@ final class SelectionView: NSView {
     let handleSize: CGFloat = 8
     let minSize: CGFloat = 5
 
-    enum Handle: CaseIterable {
-        case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left
-    }
+    // 8 向控制點語意與 SelectionGeometry.ResizeEdge 相同（順序也一致）→ typealias,零轉換。
+    typealias Handle = SelectionGeometry.ResizeEdge
     enum DragKind {
         case creating(anchor: CGPoint)
         case moving(startMouse: CGPoint, startRect: CGRect)
@@ -227,32 +226,11 @@ final class SelectionView: NSView {
 
     // MARK: 調整框幾何
 
-    func clampPoint(_ p: CGPoint) -> CGPoint {
-        CGPoint(x: min(max(0, p.x), bounds.width), y: min(max(0, p.y), bounds.height))
-    }
-
-    func clampToBounds(_ r: CGRect) -> CGRect {
-        var r = r
-        r.origin.x = min(max(0, r.origin.x), bounds.width - r.width)
-        r.origin.y = min(max(0, r.origin.y), bounds.height - r.height)
-        return r
-    }
-
+    // 純幾何委派給 SelectionGeometry（可單元測試）；這裡只補上 view 的 bounds。
+    func clampPoint(_ p: CGPoint) -> CGPoint { SelectionGeometry.clampPoint(p, in: bounds.size) }
+    func clampToBounds(_ r: CGRect) -> CGRect { SelectionGeometry.clampRectOrigin(r, in: bounds.size) }
     func resize(_ start: CGRect, handle: Handle, to p: CGPoint) -> CGRect {
-        var minX = start.minX, maxX = start.maxX, minY = start.minY, maxY = start.maxY
-        switch handle {
-        case .topLeft:     minX = p.x; maxY = p.y
-        case .top:         maxY = p.y
-        case .topRight:    maxX = p.x; maxY = p.y
-        case .right:       maxX = p.x
-        case .bottomRight: maxX = p.x; minY = p.y
-        case .bottom:      minY = p.y
-        case .bottomLeft:  minX = p.x; minY = p.y
-        case .left:        minX = p.x
-        }
-        // 允許拖過頭翻轉，用 min/max 正規化
-        return CGRect(x: min(minX, maxX), y: min(minY, maxY),
-                      width: abs(maxX - minX), height: abs(maxY - minY))
+        SelectionGeometry.resized(start, edge: handle, to: p)
     }
 
     // MARK: 工具列定位
@@ -367,7 +345,6 @@ final class SelectionView: NSView {
 
     /// 有效框（controller 監聽器的 ⌘S／⌘O／⌘T 路由依賴）。
     var hasValidSelection: Bool {
-        guard let sel = selection else { return false }
-        return sel.width > minSize && sel.height > minSize
+        SelectionGeometry.isValidSelectionSize(selection, minSize: minSize)
     }
 }

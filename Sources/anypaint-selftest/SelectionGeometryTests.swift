@@ -74,4 +74,32 @@ nonisolated func selectionGeometryTests() {
               CGRect(x: 48, y: 0, width: 4, height: 300))
     T.checkEq("geo crosshairH", SelectionGeometry.crosshairBandHorizontal(atY: 50, width: 400),
               CGRect(x: 0, y: 48, width: 400, height: 4))
+
+    // resized（8 向）：r=(10,20,100,60)
+    T.checkEq("geo resized: 右邊只改寬",
+              SelectionGeometry.resized(r, edge: .right, to: CGPoint(x: 160, y: 999)),
+              CGRect(x: 10, y: 20, width: 150, height: 60))
+    T.checkEq("geo resized: 下邊移 minY→高度增",
+              SelectionGeometry.resized(r, edge: .bottom, to: CGPoint(x: 999, y: 0)),
+              CGRect(x: 10, y: 0, width: 100, height: 80))
+    T.checkEq("geo resized: 左上角移 minX+maxY",
+              SelectionGeometry.resized(r, edge: .topLeft, to: CGPoint(x: 0, y: 100)),
+              CGRect(x: 0, y: 20, width: 110, height: 80))
+    // ResizeEdge 順序須與 handlePoints 一致（typealias SelectionView.Handle 依賴此對齊）
+    T.checkEq("geo resized: ResizeEdge 8 向", SelectionGeometry.ResizeEdge.allCases.count, 8)
+
+    // clampPoint / clampRectOrigin
+    let sz = CGSize(width: 200, height: 100)
+    T.checkEq("geo clampPoint: 負→0", SelectionGeometry.clampPoint(CGPoint(x: -5, y: -9), in: sz), CGPoint.zero)
+    T.checkEq("geo clampPoint: 超界→邊", SelectionGeometry.clampPoint(CGPoint(x: 999, y: 999), in: sz), CGPoint(x: 200, y: 100))
+    T.checkEq("geo clampRect: 原點推回界內",
+              SelectionGeometry.clampRectOrigin(CGRect(x: 190, y: 95, width: 40, height: 30), in: sz),
+              CGRect(x: 160, y: 70, width: 40, height: 30))
+
+    // isValidSelectionSize
+    T.checkTrue("geo validSize: nil→false", !SelectionGeometry.isValidSelectionSize(nil, minSize: 5))
+    T.checkTrue("geo validSize: 剛好等於 minSize→false（需 >）",
+                !SelectionGeometry.isValidSelectionSize(CGRect(x: 0, y: 0, width: 5, height: 5), minSize: 5))
+    T.checkTrue("geo validSize: 大於→true",
+                SelectionGeometry.isValidSelectionSize(CGRect(x: 0, y: 0, width: 6, height: 6), minSize: 5))
 }

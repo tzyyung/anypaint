@@ -29,6 +29,47 @@ public enum SelectionGeometry {
         return nil
     }
 
+    /// 選取框 8 向控制點（順序須與 `handlePoints` 一致）。
+    public enum ResizeEdge: CaseIterable {
+        case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left
+    }
+
+    /// 由拖曳某控制點算新選取框；允許拖過頭翻轉,用 min/max 正規化。
+    public static func resized(_ start: CGRect, edge: ResizeEdge, to p: CGPoint) -> CGRect {
+        var minX = start.minX, maxX = start.maxX, minY = start.minY, maxY = start.maxY
+        switch edge {
+        case .topLeft:     minX = p.x; maxY = p.y
+        case .top:         maxY = p.y
+        case .topRight:    maxX = p.x; maxY = p.y
+        case .right:       maxX = p.x
+        case .bottomRight: maxX = p.x; minY = p.y
+        case .bottom:      minY = p.y
+        case .bottomLeft:  minX = p.x; minY = p.y
+        case .left:        minX = p.x
+        }
+        return CGRect(x: min(minX, maxX), y: min(minY, maxY),
+                      width: abs(maxX - minX), height: abs(maxY - minY))
+    }
+
+    /// 點 clamp 進 [0,size]。
+    public static func clampPoint(_ p: CGPoint, in size: CGSize) -> CGPoint {
+        CGPoint(x: min(max(0, p.x), size.width), y: min(max(0, p.y), size.height))
+    }
+
+    /// 矩形 clamp 進 [0,size]（只移原點、不改尺寸；rect 比 size 大時原點被夾成負值,行為與既有一致）。
+    public static func clampRectOrigin(_ r: CGRect, in size: CGSize) -> CGRect {
+        var out = r
+        out.origin.x = min(max(0, r.origin.x), size.width - r.width)
+        out.origin.y = min(max(0, r.origin.y), size.height - r.height)
+        return out
+    }
+
+    /// 選取框是否夠大（寬高都需 > minSize）；nil 選區＝無效。
+    public static func isValidSelectionSize(_ r: CGRect?, minSize: CGFloat) -> Bool {
+        guard let r else { return false }
+        return r.width > minSize && r.height > minSize
+    }
+
     /// 四角（標註物件縮放用）。
     public enum Corner: CaseIterable { case topLeft, topRight, bottomLeft, bottomRight }
 
