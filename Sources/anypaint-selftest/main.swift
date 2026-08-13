@@ -1334,5 +1334,6 @@ recordAudioTracksEndToEndTests()
 audioInputDeviceTests()
 levelMathTests()
 levelMeterViewTests()
+micHALRMSTests()
 
 T.finish()
