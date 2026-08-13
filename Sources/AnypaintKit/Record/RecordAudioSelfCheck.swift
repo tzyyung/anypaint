@@ -245,15 +245,17 @@ public final class RecordAudioSelfCheck {
                        let vidPTS = try firstSamplePTSSeconds(track: videoTrack, asset: asset) {
                         let offset = abs(micPTS - vidPTS)
                         emit("起始 PTS mic=\(micPTS) video=\(vidPTS) 偏移=\(offset)")
-                        // 容忍 0.5s：這條要抓的是**時鐘對錯 epoch**（HAL mHostTime 若沒對齊 SCK 影片時鐘，
-                        // 偏移會是「秒～小時」級的巨大值，例如 mach host time 誤當媒體時間）。實測正常偏移
-                        // 0.18～0.23s 是 mic IOProc 在 SCK startCapture 之後才啟動的開場抖動，不是時鐘 bug；
-                        // 門檻設 0.5s 留 2x 餘裕、不誤殺這個抖動，又遠低於任何 epoch 錯位（robustness 審查 #7）。
-                        if offset < 0.5 {
-                            emit("✅ 檢查E mic/影像起始 PTS 偏移 \(offset)s < 0.5s（時鐘同一 epoch）")
+                        // 容忍 1.0s：這條**只**抓「時鐘對錯 epoch」——HAL mHostTime 若沒對齊 SCK 影片時鐘，
+                        // 偏移會是「秒～小時」級的巨大值（例如 mach host time 誤當媒體時間＝系統開機至今）。
+                        // 實測正常偏移 0.12～0.42s，主要是 **SCK 影片首格延遲**（run-to-run 變動大），不是時鐘
+                        // bug；門檻放 1.0s 遠高於這個抖動上緣、又遠低於任何 epoch 錯位，才不會偶發誤殺
+                        //（robustness 審查第二輪：0.5s 門檻對首格延遲餘裕太薄會 flaky）。**這不是精細 A/V
+                        // 同步檢查**——真正「聲音跟畫面對不對得上」要靠人耳拍手測試（§8 手動清單）。
+                        if offset < 1.0 {
+                            emit("✅ 檢查E mic/影像起始 PTS 偏移 \(offset)s < 1.0s（時鐘同一 epoch）")
                         } else {
                             failures += 1
-                            emit("❌ 檢查E mic/影像起始 PTS 偏移 \(offset)s ≥ 0.5s（時鐘可能沒對齊）")
+                            emit("❌ 檢查E mic/影像起始 PTS 偏移 \(offset)s ≥ 1.0s（時鐘可能沒對齊）")
                         }
                     } else {
                         failures += 1

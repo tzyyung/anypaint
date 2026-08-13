@@ -54,16 +54,21 @@ final class AudioInputTap {
     }
 
     /// `AudioDeviceStop`／`AudioDeviceDestroyIOProcID` 是對 `coreaudiod` 的**同步**往返（可能數~數十 ms）。
-    /// 派到 `ioQueue.async` 上做，**不阻塞呼叫端（多半是 MainActor）**（robustness 審查 finding #4）：
-    /// teardown block 排在 IOProc block 後面（serial queue），自然等任何 in-flight block 收手才拆。
-    /// 只捕獲 dev/pid（不捕獲 self），`deinit` 呼叫也安全（不會在釋放中復活 self）。
+    /// 派到背景 global queue 上做，**不阻塞呼叫端（多半是 MainActor）**（robustness 審查 finding #4）。
+    ///
+    /// **絕不能派到 `ioQueue`**（＝傳給 `AudioDeviceCreateIOProcIDWithBlock` 的 IOProc 遞送佇列）：
+    /// HAL 若在 Stop/Destroy 內部對該佇列 `dispatch_sync` 排空 in-flight block，而我們正在那條佇列上，
+    /// 就會自我死鎖、teardown 永不完成 → 裝置/IOProcID 洩漏（robustness 審查第二輪 finding #1）。
+    /// Stop/Destroy 設計上本來就從控制執行緒呼叫、不是從 IOProc 佇列。之所以能安全離開 `ioQueue`：
+    /// callback 的釋放已改成由 block 直接捕獲（見 `start`），不再需要「排在 IOProc block 後」當同步柵欄。
+    /// 只捕獲 dev/pid（不捕獲 self），`deinit` 呼叫也安全（不會在釋放中復活 self）；pid 到 `Destroy`
+    /// 前都有效、GCD 保留 queue 到 block 跑完，即使 tap 先釋放也無 use-after-free。
     func stop() {
         guard running, let pid = procID else { return }
         running = false
         procID = nil
         let dev = deviceID
-        let q = ioQueue
-        q.async {
+        DispatchQueue.global(qos: .userInitiated).async {
             AudioDeviceStop(dev, pid)
             AudioDeviceDestroyIOProcID(dev, pid)
         }

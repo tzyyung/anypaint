@@ -25,10 +25,15 @@ public final class RecordMicSource {
     /// **同步**完成（buffer 只在 callback 內有效），只把成品（`SendableBox`）帶進 `sampleQueue`。
     public func start(deliveringTo box: WriterBox, on sampleQueue: DispatchQueue) -> Bool {
         guard let tap else { return false }
+        // 重用的降混暫存，避免每個 IOProc callback 在 realtime 執行緒配置 [Float]（robustness 審查第二輪
+        // finding #3）。只在 tap 的 serial ioQueue 上被觸碰（單一執行緒），不需額外同步。
+        var scratch: [Float] = []
         return tap.start { bufferList, hostTime, asbd in
-            guard let mono = Self.downmixToMonoFloat32(bufferList, asbd: asbd) else { return }
-            let sb: CMSampleBuffer? = mono.withUnsafeBytes { raw in
-                Self.makeSampleBuffer(fromInterleavedFloat32: raw, frames: mono.count,
+            let frames = Self.downmixToMono(bufferList, asbd: asbd, into: &scratch)
+            guard frames > 0 else { return }
+            // scratch 可能比 frames 長（重用留下的尾巴）；makeSampleBuffer 只讀前 frames*4 位元組，在界內。
+            let sb: CMSampleBuffer? = scratch.withUnsafeBytes { raw in
+                Self.makeSampleBuffer(fromInterleavedFloat32: raw, frames: frames,
                                       channels: 1, sampleRate: asbd.mSampleRate, hostTime: hostTime)
             }
             guard let sb else { return }
@@ -39,52 +44,69 @@ public final class RecordMicSource {
 
     public func stop() { tap?.stop() }
 
-    /// 把 HAL 輸入 buffer list 降混成單聲道 Float32。支援交錯（單 buffer、N 聲道）與非交錯（planar，
-    /// 每聲道一個 buffer）。只認 Float32（HAL 虛擬格式慣例）；非 Float32 或空回 nil。
-    public static func downmixToMonoFloat32(_ list: UnsafePointer<AudioBufferList>,
-                                            asbd: AudioStreamBasicDescription) -> [Float]? {
-        guard (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0, asbd.mBitsPerChannel == 32 else { return nil }
+    /// 把 HAL 輸入 buffer list 降混成單聲道 Float32，**寫進重用的 `out`**（不足才擴容——避免 realtime
+    /// 執行緒反覆配置）。回實際 frame 數；0＝非 Float32／空／失敗。支援交錯（單 buffer、N 聲道）與
+    /// 非交錯（planar，每聲道一個 buffer）。不用 `Array(abl)`／`filter`（那會在 realtime thread 配置）。
+    @discardableResult
+    static func downmixToMono(_ list: UnsafePointer<AudioBufferList>,
+                              asbd: AudioStreamBasicDescription, into out: inout [Float]) -> Int {
+        guard (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0, asbd.mBitsPerChannel == 32 else { return 0 }
         let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
         let nonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
         if nonInterleaved {
             // planar：每個 buffer 是一個聲道、同樣的 frame 數；逐 frame 跨 buffer 平均。
-            let buffers = Array(abl).filter { $0.mData != nil }
-            guard let first = buffers.first else { return nil }
+            guard let first = abl.first, first.mData != nil else { return 0 }
             let frames = Int(first.mDataByteSize) / MemoryLayout<Float>.size
-            guard frames > 0 else { return nil }
-            var mono = [Float](repeating: 0, count: frames)
+            guard frames > 0 else { return 0 }
+            ensureCapacity(&out, frames)
+            for f in 0..<frames { out[f] = 0 }
             var used = 0
-            for b in buffers {
+            for b in abl {
+                guard let d = b.mData else { continue }
                 let n = Int(b.mDataByteSize) / MemoryLayout<Float>.size
-                guard n >= frames, let d = b.mData else { continue }
+                guard n >= frames else { continue }
                 let p = d.bindMemory(to: Float.self, capacity: n)
-                for f in 0..<frames { mono[f] += p[f] }
+                for f in 0..<frames { out[f] += p[f] }
                 used += 1
             }
-            guard used > 0 else { return nil }
-            if used > 1 { let inv = 1 / Float(used); for f in 0..<frames { mono[f] *= inv } }
-            return mono
+            guard used > 0 else { return 0 }
+            if used > 1 { let inv = 1 / Float(used); for f in 0..<frames { out[f] *= inv } }
+            return frames
         } else {
             // 交錯：單 buffer、N 聲道（用 buffer 自報的 mNumberChannels，最準）；逐 frame 平均 N 聲道。
-            guard let buf = abl.first, let data = buf.mData else { return nil }
+            guard let buf = abl.first, let data = buf.mData else { return 0 }
             let ch = max(1, Int(buf.mNumberChannels))
             let total = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
             let frames = total / ch
-            guard frames > 0 else { return nil }
+            guard frames > 0 else { return 0 }
+            ensureCapacity(&out, frames)
             let p = data.bindMemory(to: Float.self, capacity: total)
-            var mono = [Float](repeating: 0, count: frames)
             if ch == 1 {
-                for f in 0..<frames { mono[f] = p[f] }
+                for f in 0..<frames { out[f] = p[f] }
             } else {
                 let inv = 1 / Float(ch)
                 for f in 0..<frames {
                     var s: Float = 0
                     for c in 0..<ch { s += p[f * ch + c] }
-                    mono[f] = s * inv
+                    out[f] = s * inv
                 }
             }
-            return mono
+            return frames
         }
+    }
+
+    /// `out` 至少要有 `n` 個元素才夠寫；不足才擴容（穩定後 frame 數固定，不再配置）。
+    private static func ensureCapacity(_ out: inout [Float], _ n: Int) {
+        if out.count < n { out.append(contentsOf: repeatElement(0, count: n - out.count)) }
+    }
+
+    /// 純函式版（給 selftest）：降混成新的 mono 陣列。內部走 `downmixToMono`，回 nil＝失敗。
+    public static func downmixToMonoFloat32(_ list: UnsafePointer<AudioBufferList>,
+                                            asbd: AudioStreamBasicDescription) -> [Float]? {
+        var out: [Float] = []
+        let n = downmixToMono(list, asbd: asbd, into: &out)
+        guard n > 0 else { return nil }
+        return out.count == n ? out : Array(out.prefix(n))
     }
 
     /// 把 `CMSampleBuffer`（非 Sendable）安全帶過佇列邊界：建立在 IOProc 執行緒、消費在 sampleQueue，
