@@ -162,6 +162,15 @@ public enum ScrollCoords {
         screenFrames.firstIndex { $0.contains(mouseGlobal) }
     }
 
+    /// 質數跳點抽樣算首通道（BGRA 的 B）平均值——自檢粗略判斷畫面明暗用。空 buffer 回 -1。
+    public static func sampledMeanFirstChannel(_ bytes: [UInt8], stridePixels: Int = 997) -> Int {
+        guard !bytes.isEmpty else { return -1 }
+        let stride = stridePixels * 4
+        var sum = 0, i = 0
+        while i < bytes.count - 4 { sum += Int(bytes[i]); i += stride }
+        return sum / max(1, bytes.count / stride)
+    }
+
     /// 選區高度是否達最小門檻。spec §3 的最小高是 **像素**（matcher 幾何全以像素計）；
     /// selection 是**點**座標,Retina 上 1pt=2px——直接拿點比會把門檻抬成兩倍（實測 600px 合格選區被誤擋）。
     /// 一律換算成像素再比。

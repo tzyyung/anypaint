@@ -33,18 +33,10 @@ public final class ScrollCaptureSelfCheck {
     /// 每步位移（點）。24pt＝Retina 48px，遠大於 minDelta，模擬正常速度捲動。
     /// 可用啟動參數覆寫，方便重現特定實機條件：
     /// `--selfcheck-height=186 --selfcheck-step=90 --selfcheck-sparse=1`
-    private let stepPoints: CGFloat = {
-        for a in CommandLine.arguments where a.hasPrefix("--selfcheck-step=") {
-            if let v = Double(a.dropFirst("--selfcheck-step=".count)) { return CGFloat(v) }
-        }
-        return 24
-    }()
-    private let windowHeightPoints: CGFloat = {
-        for a in CommandLine.arguments where a.hasPrefix("--selfcheck-height=") {
-            if let v = Double(a.dropFirst("--selfcheck-height=".count)) { return CGFloat(v) + 80 }
-        }
-        return 520
-    }()
+    private let stepPoints: CGFloat =
+        ScrollSelfCheckMath.parseDouble(CommandLine.arguments, prefix: "--selfcheck-step=").map { CGFloat($0) } ?? 24
+    private let windowHeightPoints: CGFloat =
+        ScrollSelfCheckMath.parseDouble(CommandLine.arguments, prefix: "--selfcheck-height=").map { CGFloat($0) + 80 } ?? 520
     /// 稀疏模式：加大文字行的間隔（每 9 行才 1 行有字），模擬「終端機大半空白」的實機條件。
     ///
     /// 注意這是**內容本身的屬性**，不是「視窗某區域不畫」——舊版寫成後者（上半永遠不畫字），
@@ -110,12 +102,7 @@ public final class ScrollCaptureSelfCheck {
 
     /// 平均亮度（0-255）：用來抓「SCStream 供出黑格／半渲染格」的情況。
     private static func meanLuma(_ p: PixelBuffer) -> Int {
-        guard !p.bytes.isEmpty else { return -1 }
-        var sum = 0
-        var i = 0
-        let stride = 997 * 4          // 質數跳點抽樣，夠代表整張
-        while i < p.bytes.count - 4 { sum += Int(p.bytes[i]); i += stride }
-        return sum / max(1, (p.bytes.count / stride))
+        ScrollCoords.sampledMeanFirstChannel(p.bytes)   // 純抽樣抽到 ScrollCoords（可測）
     }
 
     private func onFrame(_ pb: PixelBuffer) {
@@ -195,14 +182,13 @@ public final class ScrollCaptureSelfCheck {
             // 所以長圖高應該 ≈ 基準格高 + 總位移。只檢查「有增長」會漏掉「拼了但缺內容」
             // （實測有一版只拼到 45% 就 PASS，之後才發現救援層被過嚴的驗證擋掉）。
             let scale = NSScreen.main?.backingScaleFactor ?? 2
-            let baseH = Double(firstFrameHeight)
-            let expected = baseH + Double(totalSteps) * Double(stepPoints) * Double(scale)
-            let actual = Double(state.height + bottomBandCompensation)
-            let ratio = expected > 0 ? actual / expected : 0
-            emit("預期高≈\(Int(expected)) 實得=\(Int(actual)) 達成率=\(Int(ratio * 100))%")
-            // 上下都要卡：只設下限的話「拼太多」（重複內容）也會 PASS——實測曾出現 203% 卻報 PASS。
-            let ok = state.appendedFrameCount > 1 && ratio >= 0.9 && ratio <= 1.1
-            emit(ok ? "PASS 長圖拼接量正確" : "FAIL 拼接量不足（預期 \(Int(expected))、實得 \(Int(actual))）")
+            let actualH = state.height + bottomBandCompensation
+            // 判準（預期高/達成率/上下都卡）抽到 ScrollSelfCheckMath.verdict（可測）。
+            let v = ScrollSelfCheckMath.verdict(firstFrameHeight: firstFrameHeight, totalSteps: totalSteps,
+                                                stepPoints: stepPoints, scale: scale,
+                                                actualHeight: actualH, appendedFrameCount: state.appendedFrameCount)
+            emit("預期高≈\(v.expected) 實得=\(actualH) 達成率=\(Int(v.ratio * 100))%")
+            emit(v.pass ? "PASS 長圖拼接量正確" : "FAIL 拼接量不足（預期 \(v.expected)、實得 \(actualH)）")
             finishNow()
         }
     }

@@ -54,4 +54,35 @@ nonisolated func scrollGuidanceDisplayTests() {
     // 非 Retina scale 1：320pt=320px 過
     T.checkTrue("minHeight: scale1 320pt 過", ScrollCoords.meetsMinPixelHeight(heightPoints: 320, scale: 1))
     T.checkTrue("minHeight: scale1 319pt 不過", !ScrollCoords.meetsMinPixelHeight(heightPoints: 319, scale: 1))
+
+    // ScrollSelfCheckMath.parseDouble
+    T.checkEq("parseArg: 命中", ScrollSelfCheckMath.parseDouble(["x", "--step=24.5"], prefix: "--step="), 24.5)
+    T.checkTrue("parseArg: 找不到→nil", ScrollSelfCheckMath.parseDouble(["x"], prefix: "--step=") == nil)
+    T.checkTrue("parseArg: 非數字→nil", ScrollSelfCheckMath.parseDouble(["--step=abc"], prefix: "--step=") == nil)
+
+    // ScrollSelfCheckMath.verdict：達成率 0.9~1.1 且 appended>1 才 PASS
+    // base 100 + 40 步 ×24 ×2 = 2020;實得 2020 → ratio 1.0 → PASS
+    let vOK = ScrollSelfCheckMath.verdict(firstFrameHeight: 100, totalSteps: 40, stepPoints: 24, scale: 2,
+                                          actualHeight: 2020, appendedFrameCount: 40)
+    T.checkEq("verdict: 預期高", vOK.expected, 2020)
+    T.checkTrue("verdict: 達成率 100% → PASS", vOK.pass)
+    // 拼太多（203%）→ FAIL（上限也卡）
+    let vOver = ScrollSelfCheckMath.verdict(firstFrameHeight: 100, totalSteps: 40, stepPoints: 24, scale: 2,
+                                            actualHeight: 4100, appendedFrameCount: 40)
+    T.checkTrue("verdict: 拼太多→FAIL", !vOver.pass)
+    // 拼太少（45%）→ FAIL
+    let vUnder = ScrollSelfCheckMath.verdict(firstFrameHeight: 100, totalSteps: 40, stepPoints: 24, scale: 2,
+                                             actualHeight: 900, appendedFrameCount: 40)
+    T.checkTrue("verdict: 拼太少→FAIL", !vUnder.pass)
+    // appended≤1 → FAIL（就算高度剛好）
+    let vNoAppend = ScrollSelfCheckMath.verdict(firstFrameHeight: 100, totalSteps: 40, stepPoints: 24, scale: 2,
+                                                actualHeight: 2020, appendedFrameCount: 1)
+    T.checkTrue("verdict: 沒真的拼→FAIL", !vNoAppend.pass)
+
+    // ScrollCoords.sampledMeanFirstChannel
+    T.checkEq("meanLuma: 空 buffer→-1", ScrollCoords.sampledMeanFirstChannel([]), -1)
+    // 全 200 的 buffer → 抽樣平均 ≈200（分母 count/stride 與實際取樣數差 1,原演算法固有,±1 內）
+    T.checkTrue("meanLuma: 定值 ≈200",
+                abs(ScrollCoords.sampledMeanFirstChannel([UInt8](repeating: 200, count: 4000), stridePixels: 1) - 200) <= 1)
+    T.checkEq("meanLuma: 全 0 → 0", ScrollCoords.sampledMeanFirstChannel([UInt8](repeating: 0, count: 800), stridePixels: 1), 0)
 }
