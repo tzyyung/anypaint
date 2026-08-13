@@ -68,7 +68,7 @@ public final class PinboardService {
     public func copyLarge(cgImage: CGImage, scale: CGFloat) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        let pointSize = NSSize(width: CGFloat(cgImage.width) / scale, height: CGFloat(cgImage.height) / scale)
+        let pointSize = CoordinateUtils.pointSize(pixelWidth: cgImage.width, pixelHeight: cgImage.height, scale: scale)
         var items: [NSPasteboardWriting] = []
         if let item = Self.imageItem(for: cgImage, pointSize: pointSize) {
             items.append(item)

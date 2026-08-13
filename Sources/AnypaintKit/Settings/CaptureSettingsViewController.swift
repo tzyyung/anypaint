@@ -281,9 +281,7 @@ final class CaptureSettingsViewController: NSViewController {
         }
         // 舊值（含 stepper 時代的任意秒數）對應到最接近的選項
         let current = AppSettings.overlayWatchdogSeconds
-        let nearest = AppSettings.watchdogOptions.min {
-            abs($0 - current) < abs($1 - current)
-        } ?? 60
+        let nearest = AppSettings.nearestOption(AppSettings.watchdogOptions, to: current) ?? 60
         _ = watchdogPopup.selectItem(withTag: Int(nearest))
         watchdogPopup.target = self
         watchdogPopup.action = #selector(watchdogChanged)
@@ -311,9 +309,7 @@ final class CaptureSettingsViewController: NSViewController {
             scrollWatchdogPopup.lastItem?.tag = Int(seconds)
         }
         let current = AppSettings.scrollWatchdogSeconds
-        let nearest = AppSettings.scrollWatchdogOptions.min {
-            abs($0 - current) < abs($1 - current)
-        } ?? 300
+        let nearest = AppSettings.nearestOption(AppSettings.scrollWatchdogOptions, to: current) ?? 300
         _ = scrollWatchdogPopup.selectItem(withTag: Int(nearest))
         scrollWatchdogPopup.target = self
         scrollWatchdogPopup.action = #selector(scrollWatchdogChanged)
@@ -340,9 +336,7 @@ final class CaptureSettingsViewController: NSViewController {
             scrollMaxHeightPopup.lastItem?.tag = px
         }
         let current = AppSettings.scrollMaxHeightPx
-        let nearest = AppSettings.scrollMaxHeightOptions.min {
-            abs($0 - current) < abs($1 - current)
-        } ?? 30000
+        let nearest = AppSettings.nearestOption(AppSettings.scrollMaxHeightOptions, to: current) ?? 30000
         _ = scrollMaxHeightPopup.selectItem(withTag: nearest)
         scrollMaxHeightPopup.target = self
         scrollMaxHeightPopup.action = #selector(scrollMaxHeightChanged)

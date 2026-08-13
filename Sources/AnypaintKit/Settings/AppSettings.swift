@@ -199,6 +199,12 @@ public enum AppSettings {
     /// GIF 編碼幀率選項。
     public static let recordGifFpsOptions: [Int] = [8, 10, 12, 15, 20]
 
+    /// 找最接近 `value` 的選項（設定頁下拉把舊值/任意值對應到既有選項）；空清單回 nil。
+    /// 泛型吃 Double（看門狗秒數）與 Int（長圖高度上限）——原本在 CaptureSettings 內嵌重複 3 次。
+    public static func nearestOption<V: Comparable & SignedNumeric>(_ options: [V], to value: V) -> V? {
+        options.min { abs($0 - value) < abs($1 - value) }
+    }
+
     /// GIF 幀率正規化：找最接近的選項；平手時取較小值（determinism）。
     ///
     /// 純函式，供 selftest 直接測試。

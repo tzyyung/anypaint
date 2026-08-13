@@ -1349,5 +1349,6 @@ exportFormatTests()
 modelMappingTests()
 selectionGeometryTests()
 scrollGuidanceDisplayTests()
+pinSettingsGeomTests()
 
 T.finish()

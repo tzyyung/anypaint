@@ -8,6 +8,31 @@ import Foundation
 /// 且要乘上 Retina 的 pixel scale 才能對到影像的實際像素。這是最容易錯的地方。
 public enum CoordinateUtils {
 
+    /// 貼圖視窗滾輪縮放後的新尺寸：factor＝1+deltaY×0.005,寬有下限 minWidth,高依 aspect 維持比例。
+    public static func zoomedWindowSize(currentWidth: CGFloat, deltaY: CGFloat,
+                                        aspect: CGFloat, minWidth: CGFloat = 40) -> CGSize {
+        let w = max(minWidth, currentWidth * (1 + deltaY * 0.005))
+        return CGSize(width: w, height: w / aspect)
+    }
+
+    /// 貼圖透明度：current+delta clamp 進 [0.1, 1.0]。
+    public static func clampedAlpha(current: CGFloat, delta: CGFloat) -> CGFloat {
+        min(1.0, max(0.1, current + delta))
+    }
+
+    /// 貼圖上限尺寸：未超過 max 就原樣;超過則等比縮到 maxW/maxH 內（min 比例）。
+    public static func cappedSize(_ size: CGSize, maxWidth: CGFloat, maxHeight: CGFloat) -> CGSize {
+        guard size.width > 0, size.height > 0,
+              size.width > maxWidth || size.height > maxHeight else { return size }
+        let scale = min(maxWidth / size.width, maxHeight / size.height)
+        return CGSize(width: size.width * scale, height: size.height * scale)
+    }
+
+    /// 像素尺寸 → 點尺寸（除以 pixel scale）。剪貼簿寫入解析度要用點,寫錯 Retina 貼出會變兩倍大。
+    public static func pointSize(pixelWidth: Int, pixelHeight: Int, scale: CGFloat) -> CGSize {
+        CGSize(width: CGFloat(pixelWidth) / scale, height: CGFloat(pixelHeight) / scale)
+    }
+
     /// 解析 "x,y,w,h" 字串成 CGRect（RPC/自動化通道用）；欄位數不足、非數字都回 nil。
     /// 純字串→幾何解析,不屬於任何 UI 型別,住這裡讓 selftest 可直接驗證。
     public static func parseRect(_ s: String) -> CGRect? {

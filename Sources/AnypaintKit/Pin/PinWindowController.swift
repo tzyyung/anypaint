@@ -120,14 +120,12 @@ final class PinWindow: NSPanel {
 
     /// 捲動縮放（維持等比、以中心為錨點）。
     func zoom(by deltaY: CGFloat) {
-        let factor = 1 + (deltaY * 0.005)
-        let newWidth = max(40, frame.width * factor)
-        let newSize = CGSize(width: newWidth, height: newWidth / aspect)
+        let newSize = CoordinateUtils.zoomedWindowSize(currentWidth: frame.width, deltaY: deltaY, aspect: aspect)
         setFrame(CoordinateUtils.rectResized(frame, to: newSize), display: true, animate: false)
     }
 
     func adjustAlpha(_ delta: CGFloat) {
-        alphaValue = min(1.0, max(0.1, alphaValue + delta))
+        alphaValue = CoordinateUtils.clampedAlpha(current: alphaValue, delta: delta)
     }
 
     /// ⇧+雙按：縮圖 ⇄ 還原（各窗獨立狀態）。已 ≤ 上限且非縮圖態＝不動作、不記 restore。
@@ -271,10 +269,9 @@ final class PinWindowController {
         guard let screen = NSScreen.main else { return image }
         let maxW = screen.visibleFrame.width * 0.9
         let maxH = screen.visibleFrame.height * 0.9
-        let s = image.size
-        guard s.width > maxW || s.height > maxH, s.width > 0, s.height > 0 else { return image }
-        let scale = min(maxW / s.width, maxH / s.height)
-        let resized = NSImage(size: NSSize(width: s.width * scale, height: s.height * scale))
+        let capped = CoordinateUtils.cappedSize(image.size, maxWidth: maxW, maxHeight: maxH)
+        guard capped != image.size else { return image }
+        let resized = NSImage(size: capped)
         resized.lockFocus()
         image.draw(in: CGRect(origin: .zero, size: resized.size))
         resized.unlockFocus()
