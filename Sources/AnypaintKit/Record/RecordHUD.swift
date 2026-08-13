@@ -55,10 +55,8 @@ public final class RecordHUDController: NSObject {
         if panel == nil { buildPanel() }
         configure(mode: mode)
         let p = panel!
-        var origin = CGPoint(x: selection.midX - p.frame.width / 2, y: selection.minY - p.frame.height - 12)
-        if origin.y < screen.visibleFrame.minY { origin.y = selection.maxY + 12 }
-        origin.x = min(max(screen.visibleFrame.minX, origin.x), screen.visibleFrame.maxX - p.frame.width)
-        p.setFrameOrigin(origin)
+        p.setFrameOrigin(SelectionGeometry.hudOrigin(selection: selection, panelSize: p.frame.size,
+                                                     visibleFrame: screen.visibleFrame))
         p.orderFront(nil)
     }
 

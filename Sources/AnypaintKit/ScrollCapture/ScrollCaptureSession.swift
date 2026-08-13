@@ -68,11 +68,7 @@ public final class ScrollCaptureSession {
     private var bottomProbeCount = 0
     private var frameSeq = 0
 
-    private func isWaiting(_ o: ScrollStitchOutcome) -> Bool {
-        if case .waitingForMotion = o { return true }
-        if case .awaitingOverlap = o { return true }
-        return false
-    }
+    private func isWaiting(_ o: ScrollStitchOutcome) -> Bool { o.isWaiting }
     /// 最近一次「有進展」（拼接／裁尾／鎖帶）的時刻。用於停滯收工判定——不可用「連續失敗次數」：
     /// 30fps 下連續 10 次失敗只有 1/3 秒，使用者手一甩超出可匹配範圍就被強制收工（實機症狀：
     /// 預覽只有單張影格）。改成時間門檻後，使用者有時間依 HUD 提示回捲救回。
@@ -145,8 +141,7 @@ public final class ScrollCaptureSession {
         // selection 是點座標，Retina 上 1pt=2px，直接拿點比 320 會把門檻抬成 640px、
         // 比設計嚴格一倍（實測：600px 的合格選區被誤擋）。一律換算成像素再比。
         let scale = scr.backingScaleFactor      // 同一顆螢幕上等同擷取端的 pointPixelScale
-        let pixelHeight = Int((selection.height * scale).rounded())
-        guard pixelHeight >= 320 else {
+        guard ScrollCoords.meetsMinPixelHeight(heightPoints: selection.height, scale: scale) else {
             hud.show(near: selection, on: scr, mode: .armed)
             hud.update(message: .selectionTooSmall)   // 明確告知原因（原本誤用 .hardToMatch 語意不符）
             return

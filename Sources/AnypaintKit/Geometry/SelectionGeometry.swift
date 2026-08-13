@@ -91,4 +91,14 @@ public enum SelectionGeometry {
     public static func crosshairBandHorizontal(atY y: CGFloat, width: CGFloat) -> CGRect {
         CGRect(x: 0, y: y - 2, width: width, height: 4)
     }
+
+    /// HUD 浮層位置：預設在選區下緣外 12pt、水平置中；下方超出可視區 → 翻到上緣外；
+    /// 最後水平 clamp 進可視區（避免貼邊選區把 HUD 推出畫面）。ScrollHUD 與 RecordHUD 共用。
+    public static func hudOrigin(selection: CGRect, panelSize: CGSize, visibleFrame: CGRect) -> CGPoint {
+        var origin = CGPoint(x: selection.midX - panelSize.width / 2,
+                             y: selection.minY - panelSize.height - 12)
+        if origin.y < visibleFrame.minY { origin.y = selection.maxY + 12 }
+        origin.x = min(max(visibleFrame.minX, origin.x), visibleFrame.maxX - panelSize.width)
+        return origin
+    }
 }

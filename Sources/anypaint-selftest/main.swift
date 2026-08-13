@@ -1348,5 +1348,6 @@ appSettingsTests()
 exportFormatTests()
 modelMappingTests()
 selectionGeometryTests()
+scrollGuidanceDisplayTests()
 
 T.finish()

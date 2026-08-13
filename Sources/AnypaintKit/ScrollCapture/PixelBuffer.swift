@@ -161,4 +161,11 @@ public enum ScrollCoords {
                                    screenFrames: [CGRect]) -> Int? {
         screenFrames.firstIndex { $0.contains(mouseGlobal) }
     }
+
+    /// 選區高度是否達最小門檻。spec §3 的最小高是 **像素**（matcher 幾何全以像素計）；
+    /// selection 是**點**座標,Retina 上 1pt=2px——直接拿點比會把門檻抬成兩倍（實測 600px 合格選區被誤擋）。
+    /// 一律換算成像素再比。
+    public static func meetsMinPixelHeight(heightPoints: CGFloat, scale: CGFloat, minPx: Int = 320) -> Bool {
+        Int((heightPoints * scale).rounded()) >= minPx
+    }
 }

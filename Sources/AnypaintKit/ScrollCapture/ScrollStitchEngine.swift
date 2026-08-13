@@ -33,6 +33,15 @@ public enum ScrollStitchOutcome: Equatable, Sendable {
     case rejected(consecutiveFailures: Int)
     /// 已達長度上限，該收工。
     case limitReached
+
+    /// 「等待中」＝畫面沒變或重疊尚不足,跳過本格但不計失敗（waitingForMotion／awaitingOverlap）。
+    /// Session 用它決定 log 節流；抽成純屬性可測。
+    public var isWaiting: Bool {
+        switch self {
+        case .waitingForMotion, .awaitingOverlap: return true
+        default: return false
+        }
+    }
 }
 
 /// 滾動截圖的影格消化引擎：擁有 stitcher／靜態帶鎖定／軌跡追蹤與匹配鏈。

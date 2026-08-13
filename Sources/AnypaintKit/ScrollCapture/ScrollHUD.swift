@@ -26,17 +26,20 @@ public final class ScrollHUDController: NSObject {
         if panel == nil { buildPanel() }
         configure(mode: mode)
         let p = panel!
-        var origin = CGPoint(x: selection.midX - p.frame.width / 2, y: selection.minY - p.frame.height - 12)
-        if origin.y < screen.visibleFrame.minY { origin.y = selection.maxY + 12 }
-        origin.x = min(max(screen.visibleFrame.minX, origin.x), screen.visibleFrame.maxX - p.frame.width)
-        p.setFrameOrigin(origin)
+        p.setFrameOrigin(SelectionGeometry.hudOrigin(selection: selection, panelSize: p.frame.size,
+                                                     visibleFrame: screen.visibleFrame))
         p.orderFront(nil)
     }
 
     /// GuidanceMessage → 繁中文案（spec §10 逐字）＋語氣色（警告黃／錯誤紅／中性白）。
+    /// 文案與語氣的純對應已移到 GuidanceMessage.displayText/tone（可測）；這裡只做 tone→NSColor。
     public func update(message: GuidanceMessage) {
-        label.stringValue = text(for: message)
-        label.textColor = tone(for: message)
+        label.stringValue = message.displayText
+        switch message.tone {
+        case .neutral: label.textColor = .white
+        case .warning: label.textColor = .systemYellow
+        case .error: label.textColor = .systemRed
+        }
     }
 
     public func dismiss() {
@@ -110,31 +113,4 @@ public final class ScrollHUDController: NSObject {
         }
     }
     @objc private func cancelTapped() { onCancel?() }
-
-    private func tone(for m: GuidanceMessage) -> NSColor {
-        switch m {
-        case .slowDown, .hardToMatch, .selectionTooSmall, .confirmBottomByBackscroll: return .systemYellow
-        case .gapNotStitched: return .systemRed
-        // mouseOutside 是「提醒」級（spec §10），與 backscroll/deadReckoning 同級＝中性白，非警告黃
-        case .progress, .mouseOutside, .backscrollTrimming, .backscrollAtOrigin, .bottomProbing, .deadReckoning:
-            return .white
-        }
-    }
-}
-
-/// GuidanceMessage → 文案對照（spec §10 逐字）。
-private func text(for m: GuidanceMessage) -> String {
-    switch m {
-    case .progress(let px): return "已拼接 \(px) px"
-    case .slowDown: return "捲慢一點，重疊區太少"
-    case .gapNotStitched: return "捲太快，這段沒接上——回捲到斷點附近再往下慢慢捲"
-    case .mouseOutside: return "滑鼠留在框內才收得到滾輪"
-    case .backscrollTrimming: return "回捲中——長圖尾端同步撤回"
-    case .backscrollAtOrigin: return "已回到起點，再往上不會拼入"
-    case .hardToMatch: return "這段內容不好辨識，慢慢捲"
-    case .selectionTooSmall: return "選區高度不足，拉高一點才能開始"
-    case .bottomProbing: return "已到底部，收尾中…"
-    case .deadReckoning: return "空白區段以軌跡推算，接縫可能略有誤差"
-    case .confirmBottomByBackscroll: return "有幾段不易辨識——往回捲一點再往下捲，確認沒有漏"
-    }
 }
