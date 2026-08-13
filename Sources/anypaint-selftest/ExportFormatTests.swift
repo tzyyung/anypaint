@@ -86,4 +86,17 @@ nonisolated func exportFormatTests() {
     T.checkEq("outLen: 2880px@2x→1440", RecordMath.outputPointLength(pixels: 2880, pointScale: 2), 1440)
     T.checkEq("outLen: 四捨五入", RecordMath.outputPointLength(pixels: 5, pointScale: 2), 3)   // 2.5→3
     T.checkEq("outLen: 下限 1", RecordMath.outputPointLength(pixels: 1, pointScale: 10), 1)
+
+    // MicSilenceTracker：連續靜音達 threshold 秒才警告,一有訊號立即清除
+    var tracker = MicSilenceTracker()
+    T.checkTrue("silence: t=0 靜音開始→尚未警告", !tracker.update(rms: 0.0001, now: 0, threshold: 2))
+    T.checkTrue("silence: t=1 仍靜音<2s→不警告", !tracker.update(rms: 0.0001, now: 1, threshold: 2))
+    T.checkTrue("silence: t=2 連續靜音達 2s→警告", tracker.update(rms: 0.0001, now: 2, threshold: 2))
+    // 有訊號立即清除,silentSince 歸 nil
+    T.checkTrue("silence: 有訊號→不警告", !tracker.update(rms: 0.05, now: 3, threshold: 2))
+    T.checkTrue("silence: 有訊號後 silentSince 清除", tracker.silentSince == nil)
+    // 重新靜音要重新累計 2s
+    T.checkTrue("silence: 重新靜音 t=3→重新計時,不警告", !tracker.update(rms: 0.0001, now: 3, threshold: 2))
+    T.checkTrue("silence: t=4 才 1s<2s→不警告", !tracker.update(rms: 0.0001, now: 4, threshold: 2))
+    T.checkTrue("silence: t=5 達 2s→警告", tracker.update(rms: 0.0001, now: 5, threshold: 2))
 }

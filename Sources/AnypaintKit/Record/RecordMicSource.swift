@@ -23,14 +23,27 @@ public final class RecordMicSource {
     /// `box.appendAudio`。回 false＝沒有可用裝置或啟動失敗（錄影仍可繼續、只是 mic 軌為空）。
     /// `box` 是 `@unchecked Sendable`，可安全跨佇列傳遞；降混與 CMSampleBuffer 建立在 IOProc 執行緒上
     /// **同步**完成（buffer 只在 callback 內有效），只把成品（`SendableBox`）帶進 `sampleQueue`。
-    public func start(deliveringTo box: WriterBox, on sampleQueue: DispatchQueue) -> Bool {
+    /// - Parameter onLevel: 錄製中電平回呼（線性 RMS 0..1,~20Hz,已跳回 MainActor）。供錄影 HUD 電平表。
+    ///   從**同一份**降混後的 mono 樣本算 RMS(重用 `RecordMath.rms`),不另開裝置 session。
+    public func start(deliveringTo box: WriterBox, on sampleQueue: DispatchQueue,
+                      onLevel: (@MainActor (Float) -> Void)? = nil) -> Bool {
         guard let tap else { return false }
         // 重用的降混暫存，避免每個 IOProc callback 在 realtime 執行緒配置 [Float]（robustness 審查第二輪
         // finding #3）。只在 tap 的 serial ioQueue 上被觸碰（單一執行緒），不需額外同步。
         var scratch: [Float] = []
+        var lastLevelHop = 0.0                      // 電平回呼節流(ioQueue 端,同 MicLevelMonitor)
         return tap.start { bufferList, hostTime, asbd in
             let frames = Self.downmixToMono(bufferList, asbd: asbd, into: &scratch)
             guard frames > 0 else { return }
+            // 電平表：從降混後的前 frames 個樣本算 RMS,節流 20Hz 跳回 main。
+            if let onLevel {
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - lastLevelHop >= 0.05 {
+                    lastLevelHop = now
+                    let rms = scratch.withUnsafeBufferPointer { RecordMath.rms(UnsafeBufferPointer(start: $0.baseAddress, count: frames)) }
+                    Task { @MainActor in onLevel(rms) }
+                }
+            }
             // scratch 可能比 frames 長（重用留下的尾巴）；makeSampleBuffer 只讀前 frames*4 位元組，在界內。
             let sb: CMSampleBuffer? = scratch.withUnsafeBytes { raw in
                 Self.makeSampleBuffer(fromInterleavedFloat32: raw, frames: frames,

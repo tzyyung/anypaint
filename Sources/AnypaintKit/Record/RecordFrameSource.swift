@@ -236,6 +236,9 @@ public final class RecordFrameSource: NSObject {
     /// 契約：`start()` 拋錯（TCC 拒絕、`CaptureError.noDisplays` 都是實機常見狀況）之後，
     /// 物件已經自己清乾淨（`self.box`／`self.stream`／`self.outputURL` 全部回到 nil）——
     /// 呼叫端可以直接重試，不需要先呼叫 `abort()` 才能再 `start()`。
+    /// 錄製中麥克風電平回呼（線性 RMS 0..1,已在 MainActor）。start() 前由 RecordSession 設定,供錄影 HUD 電平表。
+    public var onMicLevel: (@MainActor (Float) -> Void)?
+
     public func start(selectionGlobal: CGRect, screen: NSScreen,
                       ringWindowNumber: Int?, outputURL: URL,
                       excludeSelf: Bool = true, options: RecordOptions) async throws {
@@ -308,7 +311,7 @@ public final class RecordFrameSource: NSObject {
         // 時麥克風已在供料，開場 A/V 偏移縮到一個 buffer 週期。session 未啟動前到達的 mic 封包由
         // `RecordAudioTracks.append` 的 `sessionStarted` gate 丟棄，安全。啟動失敗／被 pendingStop 取消
         // 的所有路徑都會把 self.box 設回 nil，觸發上面 defer 的 `micSource.stop()`，不會空轉。
-        _ = self.micSource?.start(deliveringTo: boxLocal, on: sampleQueue)
+        _ = self.micSource?.start(deliveringTo: boxLocal, on: sampleQueue, onLevel: self.onMicLevel)
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         do {
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)

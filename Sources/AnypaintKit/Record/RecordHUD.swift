@@ -29,6 +29,10 @@ public final class RecordHUDController: NSObject {
     private let durationSuffix = NSTextField(labelWithString: "秒（空白＝不限）")
     private let primaryButton = NSButton(title: "開始", target: nil, action: nil)
     private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
+    /// 麥克風即時電平表＋裝置名（僅在錄影含麥克風時顯示；待命由 MicLevelMonitor、錄製由 RecordMicSource 餵）。
+    private let micDeviceLabel = NSTextField(labelWithString: "")
+    private let levelMeter = LevelMeterView(frame: NSRect(x: 0, y: 0, width: 60, height: 12))
+    private var micUIVisible = false
     /// 短暫提示行（例如麥克風權限降級），預設隱藏；樣式照 durationSuffix。
     private let noticeLabel = NSTextField(labelWithString: "")
     private var mode: Mode = .armed
@@ -76,6 +80,28 @@ public final class RecordHUDController: NSObject {
         onStart = nil
         onStop = nil
         onCancel = nil
+    }
+
+    // MARK: 麥克風電平（Task B2）
+
+    /// 顯示/隱藏麥克風電平表＋裝置名（錄影含麥克風才顯示）。
+    public func setMicEnabled(_ enabled: Bool, deviceName: String? = nil) {
+        micUIVisible = enabled
+        micDeviceLabel.isHidden = !enabled
+        levelMeter.isHidden = !enabled
+        if enabled { micDeviceLabel.stringValue = "🎙 " + (deviceName ?? "系統預設") }
+        if !enabled { setNoSignal(false) }
+    }
+
+    /// 即時電平（線性 RMS 0..1）。
+    public func setMicLevel(_ level: Float) { levelMeter.level = level }
+
+    /// 無訊號警告（常駐,非 3 秒瞬時）：待命/錄製連續靜音達門檻時亮黃字,有訊號即清。
+    public func setNoSignal(_ show: Bool) {
+        guard micUIVisible else { noticeLabel.isHidden = true; return }
+        noticeHideWork?.cancel()   // 蓋掉任何 transient 隱藏排程
+        noticeLabel.stringValue = show ? "麥克風無訊號，檢查裝置" : ""
+        noticeLabel.isHidden = !show
     }
 
     /// 短暫提示（3 秒自動清除）：借用既有 clockLabel 樣式下方另一行黃字。
@@ -143,10 +169,19 @@ public final class RecordHUDController: NSObject {
         noticeLabel.setContentCompressionResistancePriority(
             NSLayoutConstraint.Priority(rawValue: 200), for: .horizontal)
 
+        micDeviceLabel.textColor = .white
+        micDeviceLabel.font = .systemFont(ofSize: 12, weight: .regular)
+        micDeviceLabel.lineBreakMode = .byTruncatingTail
+        micDeviceLabel.isHidden = true
+        levelMeter.translatesAutoresizingMaskIntoConstraints = false
+        levelMeter.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        levelMeter.heightAnchor.constraint(equalToConstant: 12).isActive = true
+        levelMeter.isHidden = true
+
         // 佈局：clockLabel 左（🎙 徽章前綴內建於其文字，不佔獨立位置）、
         // （durationField／durationSuffix，僅 armed）、primaryButton／cancelButton 右、
         // noticeLabel（隱藏時不佔位）。
-        let stack = NSStackView(views: [clockLabel, durationField, durationSuffix, primaryButton, cancelButton, noticeLabel])
+        let stack = NSStackView(views: [clockLabel, micDeviceLabel, levelMeter, durationField, durationSuffix, primaryButton, cancelButton, noticeLabel])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 10

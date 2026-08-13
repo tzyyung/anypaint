@@ -36,6 +36,10 @@ public final class RecordSession {
     private var recordingStartedAt: TimeInterval = 0   // wall-clock（systemUptime）；時鐘不可用影格 PTS
     private var durationLimit: Double?
     private var watchdog: DispatchWorkItem?
+    /// 待命階段的麥克風試音錶（Task B2）：armed 時掛在錄影裝置上,錄製開始時 stop 讓位給 RecordMicSource。
+    private let micProbe = MicLevelMonitor()
+    /// 無訊號防呆的純狀態機（連續靜音達門檻才警告）。待命/錄製各重置一次。
+    private var silenceTracker = MicSilenceTracker()
 
     public init(output: RecordOutputService) { self.output = output }
 
@@ -149,8 +153,34 @@ public final class RecordSession {
         if state != .armed {
             state = .armed
             hud.onStart = { [weak self] in self?.startRecording() }
+            startStandbyMic()   // 待命試音錶：先讓使用者看到麥克風有沒有聲音再決定開始
         }
         hud.show(near: selection, on: scr, mode: .armed)   // 冪等：調框只更新位置（也順便清掉太小訊息）
+    }
+
+    /// 待命麥克風試音錶（Task B2）：依設定的錄影麥克風裝置掛 MicLevelMonitor,餵 HUD 電平表＋無訊號警告。
+    /// 未開麥克風＝隱藏電平表。
+    private func startStandbyMic() {
+        let opts = RecordOptions.fromSettings()
+        guard opts.captureMicrophone else { hud.setMicEnabled(false); return }
+        silenceTracker = MicSilenceTracker()
+        let deviceName = opts.microphoneDeviceID.flatMap { id in
+            AudioInputDeviceList.all().first { $0.uniqueID == id }?.name
+        }
+        hud.setMicEnabled(true, deviceName: deviceName)
+        micProbe.onLevel = { [weak self] level in
+            guard let self else { return }
+            self.hud.setMicLevel(level)
+            self.hud.setNoSignal(self.silenceTracker.update(rms: level, now: ProcessInfo.processInfo.systemUptime))
+        }
+        micProbe.start(deviceID: opts.microphoneDeviceID)
+    }
+    private func stopStandbyMic() { micProbe.stop(); micProbe.onLevel = nil }
+
+    /// 錄製中電平回呼（RecordMicSource → 這裡 → HUD）：更新電平表＋無訊號警告。
+    private func feedRecordingMicLevel(_ level: Float) {
+        hud.setMicLevel(level)
+        hud.setNoSignal(silenceTracker.update(rms: level, now: ProcessInfo.processInfo.systemUptime))
     }
 
     // MARK: 錄製
@@ -158,7 +188,12 @@ public final class RecordSession {
     private func startRecording() {
         guard state == .armed, let screen else { return }
         state = .recording
+        stopStandbyMic()                       // 待命試音錶讓位給 RecordMicSource（同一顆裝置不重複開）
+        silenceTracker = MicSilenceTracker()   // 錄製階段重新計無訊號
         durationLimit = hud.durationSeconds
+        // 錄製中電平回呼（RecordMicSource→這裡→HUD）。無條件設定：mic 關閉時 micSource 為 nil,回呼自然不觸發。
+        // 在 Task 外、MainActor 上設屬性,避開把 @MainActor 閉包穿過 async 的型別推斷歧義。
+        frameSource.onMicLevel = { [weak self] level in self?.feedRecordingMicLevel(level) }
         overlay.enterCapturing()          // 框線保留、事件穿透（app 已整體排除，不會被拍入）
         NSCursor.arrow.set()
         hud.show(near: overlay.selectionGlobal, on: screen, mode: .recording)
@@ -190,6 +225,7 @@ public final class RecordSession {
                 }
                 // 錄製真正開始處：用降級後的 options 設定 HUD 徽章，與實際錄到的音軌一致。
                 self.hud.micActive = options.captureMicrophone
+                self.hud.setMicEnabled(options.captureMicrophone)   // 錄製中維持電平表可見（若有麥克風）
                 try await self.frameSource.start(selectionGlobal: selectionGlobal, screen: screen,
                                                  ringWindowNumber: ringNumber, outputURL: url,
                                                  options: options)
@@ -331,6 +367,7 @@ public final class RecordSession {
     }
 
     private func teardown() {
+        stopStandbyMic()               // 待命試音錶（Task B2）；錄製中已在 startRecording stop 過,重複無害
         clock?.invalidate(); clock = nil
         watchdog?.cancel(); watchdog = nil
         for m in eventMonitors { NSEvent.removeMonitor(m) }

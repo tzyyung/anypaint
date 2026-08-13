@@ -162,3 +162,20 @@ public enum RecordMath {
         max(1, Int((CGFloat(pixels) / pointScale).rounded()))
     }
 }
+
+/// 麥克風「無訊號」防呆的純狀態機：連續靜音**達 threshold 秒**才回報應顯示警告
+/// （常駐狀態,非瞬時——避免噪底抖動一格就閃警告）。一有訊號立即清除。
+public struct MicSilenceTracker: Equatable {
+    /// 開始持續靜音的時間戳（nil＝目前有訊號或尚未進入靜音）。
+    public private(set) var silentSince: Double?
+    public init() {}
+
+    /// 餵一次電平＋當下時間,回傳「是否應顯示無訊號警告」。
+    @discardableResult
+    public mutating func update(rms: Float, now: Double, threshold: Double = 2.0) -> Bool {
+        guard RecordMath.isSilent(rms: rms) else { silentSince = nil; return false }
+        let since = silentSince ?? now
+        silentSince = since
+        return now - since >= threshold
+    }
+}
