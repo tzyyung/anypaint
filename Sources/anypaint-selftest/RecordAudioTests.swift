@@ -89,8 +89,10 @@ func recordAudioTracksEndToEndTests() {
     defer { try? FileManager.default.removeItem(at: url) }
     let options = RecordOptions(showsCursor: false, useHEVC: false,
                                 captureSystemAudio: true, captureMicrophone: true)
+    // micChannels: 2——本測試的合成 mic buffer 是立體聲（makeAudioSampleBuffer），mic AAC 軌
+    // 聲道數要對上。真實錄影由 RecordFrameSource 傳入裝置實際聲道數。
     guard let box = try? WriterBox(outputURL: url, pixelWidth: 64, pixelHeight: 64,
-                                   options: options) else {
+                                   options: options, micChannels: 2) else {
         T.checkTrue("audio e2e: WriterBox 建立", false); return
     }
     // 音訊早於首格影像 → 應被丟（session 未啟動）

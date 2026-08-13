@@ -45,7 +45,8 @@ public final class WriterBox: @unchecked Sendable {
     /// - Parameter options: `useHEVC` 決定 codec——false＝H.264（預設）、true＝HEVC。檔案仍是
     ///   .mp4（hevc-in-mp4 合法）。位元率因子隨 codec 切換：H.264 沿用 Azayaka 原公式 0.9；
     ///   HEVC 用 0.9×0.5＝0.45（同款 Azayaka 公式的 hevc 因子，設計文件 §1.8）。
-    public init(outputURL: URL, pixelWidth: Int, pixelHeight: Int, options: RecordOptions) throws {
+    public init(outputURL: URL, pixelWidth: Int, pixelHeight: Int, options: RecordOptions,
+                micChannels: Int = 1) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
         // Azayaka 位元率公式 + QuickRecorder 20 萬下限；30fps、Rec.709
         let bitrateFactor = options.useHEVC ? 0.45 : 0.9
@@ -67,7 +68,7 @@ public final class WriterBox: @unchecked Sendable {
         input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         input.expectsMediaDataInRealTime = true   // 全部實戰專案一致；ready=false 時丟格不排隊
         writer.add(input)
-        audio = RecordAudioTracks(options: options)
+        audio = RecordAudioTracks(options: options, micChannels: micChannels)
         audio.attach(to: writer)
         writer.startWriting()                     // 立刻 startWriting；session 懶啟動（防黑首格）
     }
@@ -212,6 +213,13 @@ public final class RecordFrameSource: NSObject {
     /// 跟 sampleQueue 上的讀是真的資料競爭。
     private nonisolated(unsafe) var box: WriterBox?
 
+    /// 錄影期間的 HAL 麥克風來源（取代 SCK `.microphone`，見 `RecordMicSource`／設計文件 §0）。
+    /// 只在 MainActor 上建立與啟停（`start`/`stopAndFinish`/`abort` 及 `start` 的清理分支）；
+    /// 它的 IOProc callback 把 CMSampleBuffer 派進 `sampleQueue` → 讀 `self.box`（同 SCK handler
+    /// 的既有讀法）→ `appendAudio(_:type:.microphone)`。停 stream 後、finalize 前先 `stop()` 它，
+    /// 確保不再有麥克風封包灌進正在收尾的 writer。
+    private var micSource: RecordMicSource?
+
     /// - Parameters:
     ///   - selectionGlobal: 選區（AppKit 全域座標、點、左下原點）。
     ///   - ringWindowNumber: 點擊圈視窗的 windowNumber；非 nil 時把它放進 exceptingWindows
@@ -248,7 +256,14 @@ public final class RecordFrameSource: NSObject {
             // 內層 do/catch、pendingStop 分支、或成功完成）都已經各自處理過 outputURL 的去留，
             // 這裡就不重複插手（用 box 而非額外的旗標，因為它已經是「有沒有建出東西」的
             // 事實依據，不需要平行維護第二個布林值）。
-            if box == nil { self.outputURL = nil }
+            if box == nil {
+                self.outputURL = nil
+                // 任何在 box 建成前就退出的路徑（早 throw、WriterBox.init 失敗、pendingStop 分支、
+                // startCapture 錯誤分支都會把 self.box 設回 nil）一併收掉已開好的 HAL 麥克風 tap，
+                // 不讓它孤兒佔著裝置。成功路徑 box 非 nil，這裡不碰 micSource。
+                self.micSource?.stop()
+                self.micSource = nil
+            }
         }
         // onScreenWindowsOnly: false——點擊圈視窗是 alpha 0（純粹借位給 exceptingWindows 白名單用，
         // 不需要真的被使用者看見），`true` 只列「畫面上看得見」的視窗，alpha 0 的視窗很可能被排除在
@@ -281,18 +296,25 @@ public final class RecordFrameSource: NSObject {
                                                    pixelHeight: geo.pixelHeight,
                                                    options: options)
 
+        // 麥克風走 HAL：先開 tap 拿到裝置實際聲道數（決定 mic AAC 軌聲道數），tap 的 IOProc
+        // 在 startCapture 成功、且沒被 pendingStop 打斷後才啟動（見下）。sink 讀 self.box（同 SCK
+        // handler 的既有讀法）派進 sampleQueue。裝置不存在／忙 → src.channels==0、start() 回 false，
+        // mic 軌會是空軌、錄影照常（設計文件 §6）。
+        var micChannels = 1
+        if options.captureMicrophone {
+            let src = RecordMicSource(deviceID: options.microphoneDeviceID)
+            micChannels = max(1, src.channels)
+            self.micSource = src
+        }
         let boxLocal = try WriterBox(outputURL: outputURL,
                                      pixelWidth: geo.pixelWidth, pixelHeight: geo.pixelHeight,
-                                     options: options)
+                                     options: options, micChannels: micChannels)
         self.box = boxLocal
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         do {
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
             if options.captureSystemAudio {
                 try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
-            }
-            if options.captureMicrophone {
-                try stream.addStreamOutput(self, type: .microphone, sampleHandlerQueue: sampleQueue)
             }
             try await stream.startCapture()
         } catch {
@@ -329,6 +351,10 @@ public final class RecordFrameSource: NSObject {
             }
             return
         }
+        // 錄影確實開跑、且沒被 pendingStop 打斷 → 啟動麥克風 IOProc，把 CMSampleBuffer 直接派進
+        // sampleQueue 交給這個 box。放在這裡（而非 startCapture 之前）確保：startCapture 失敗或
+        // 啟動期間被取消時，mic tap 由上面的 defer 收掉、不會空轉。
+        _ = self.micSource?.start(deliveringTo: boxLocal, on: sampleQueue)
         self.stream = stream
     }
 
@@ -350,6 +376,9 @@ public final class RecordFrameSource: NSObject {
         }
         self.stream = nil
         try? await stream.stopCapture()
+        // 先停 HAL 麥克風（AudioDeviceStop 會等 IOProc 收手），確保 finalize 期間不再有 mic 封包
+        // 灌進正在收尾的 writer。已排進 sampleQueue 的遲到封包由 WriterBox 的 isTerminal/status 擋。
+        micSource?.stop(); micSource = nil
         guard let box, let url = outputURL else { throw RecordError.noFrames }
         // 母帶的所有權在這裡整個轉交出去（box 與 outputURL 都清成 nil）：
         // 之後不管是 abort() 被誤呼叫、還是呼叫端等 continuation 期間又呼叫別的方法，
@@ -396,6 +425,7 @@ public final class RecordFrameSource: NSObject {
         }
         self.stream = nil
         try? await stream.stopCapture()
+        micSource?.stop(); micSource = nil   // 同 stopAndFinish：先停麥克風 IOProc 再丟母帶
         let box = self.box
         self.box = nil
         let url = outputURL

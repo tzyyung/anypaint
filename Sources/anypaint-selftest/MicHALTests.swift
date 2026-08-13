@@ -22,6 +22,13 @@ nonisolated func micHALSampleBufferTests() {
     T.checkTrue("micbuf: PTS 有效", CMTIME_IS_VALID(pts) && pts.seconds > 0)
     if let bb = CMSampleBufferGetDataBuffer(sb) {
         T.checkEq("micbuf: 資料長度", CMBlockBufferGetDataLength(bb), frames * channels * 4)
+        // 樣本值必須原樣保留（不是被歸零／截斷）——把資料讀回來比對第一與最後一個 sample。
+        var out = [Float](repeating: -1, count: frames * channels)
+        let st = out.withUnsafeMutableBytes {
+            CMBlockBufferCopyDataBytes(bb, atOffset: 0, dataLength: frames * channels * 4, destination: $0.baseAddress!)
+        }
+        T.checkTrue("micbuf: 資料可讀回", st == noErr)
+        T.checkTrue("micbuf: 樣本值原樣保留（非歸零）", abs(out.first! - 0.25) < 1e-6 && abs(out.last! - 0.25) < 1e-6)
     } else { T.checkTrue("micbuf: 可讀 data buffer", false) }
 }
 

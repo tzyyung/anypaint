@@ -63,17 +63,16 @@ nonisolated func makeStreamConfigurationTests() {
                                captureSystemAudio: true, captureMicrophone: true))
     T.checkTrue("config: 系統聲開", a.capturesAudio)
     T.checkTrue("config: 排除自家音效", a.excludesCurrentProcessAudio)
-    T.checkTrue("config: 麥克風開", a.captureMicrophone)
+    // 麥克風改走 CoreAudio HAL（RecordMicSource），**不**掛在 SCK config 上（那條在本 app 收不到
+    // 封包，見設計文件 §0）——即使 options.captureMicrophone=true，SCK config 也不設麥克風。
+    T.checkTrue("config: 麥克風不掛 SCK config（走 HAL）", !a.captureMicrophone)
+    T.checkTrue("config: 麥克風 deviceID 不掛 SCK config", a.microphoneCaptureDeviceID == nil)
     T.checkTrue("config: 預設仍全關", !c.capturesAudio && !c.captureMicrophone)
 
+    // 帶 deviceID 也一樣：SCK config 不承載麥克風裝置，交給 HAL 那條處理。
     let withDeviceID = RecordFrameSource.makeStreamConfiguration(
         sourceRect: .zero, pixelWidth: 8, pixelHeight: 8,
         options: RecordOptions(showsCursor: false, useHEVC: false,
                                captureMicrophone: true, microphoneDeviceID: "test-device-id"))
-    T.checkEq("config: 麥克風 deviceID 設定", withDeviceID.microphoneCaptureDeviceID, "test-device-id")
-
-    let noDeviceID = RecordFrameSource.makeStreamConfiguration(
-        sourceRect: .zero, pixelWidth: 8, pixelHeight: 8,
-        options: RecordOptions(showsCursor: false, useHEVC: false, captureMicrophone: true))
-    T.checkEq("config: 麥克風 deviceID 未設定為 nil", noDeviceID.microphoneCaptureDeviceID, nil)
+    T.checkEq("config: 麥克風 deviceID 不進 SCK config", withDeviceID.microphoneCaptureDeviceID, nil)
 }
