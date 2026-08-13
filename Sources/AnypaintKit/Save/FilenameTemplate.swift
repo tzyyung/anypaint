@@ -74,6 +74,17 @@ public enum FilenameTemplate {
         return "~/" + trimmed
     }
 
+    /// 已做過 tilde 展開的路徑：絕對路徑原樣;相對路徑補上 `home/`（launchd 啟動時 cwd=`/` 不可靠）。
+    /// 純函式（home 顯式傳入）——tilde 展開本身留在呼叫端（讀真實家目錄）。
+    public static func ensureAbsolute(_ path: String, home: String) -> String {
+        path.hasPrefix("/") ? path : home + "/" + path
+    }
+
+    /// 預覽字串：樣板若沒有 .png 副檔名,補上「（將自動補 .png）」提示。純字串邏輯。
+    public static func previewWithPNGHint(expandedText: String, template: String) -> String {
+        hasPNGExtension(template) ? expandedText : expandedText + "（將自動補 .png）"
+    }
+
     public static func ensuringPNGExtension(_ s: String) -> String {
         ensuringExtension(s, ext: "png")
     }

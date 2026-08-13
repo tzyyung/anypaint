@@ -15,8 +15,8 @@ public final class CaptureOutputService {
             FilenameTemplate.expand(template, date: now, vars: vars))
         let fallback = FilenameTemplate.expand(FilenameTemplate.defaultName, date: now, vars: vars)
         expanded = FilenameTemplate.ensuringMeaningfulFilename(expanded, fallbackName: fallback)
-        var path = (expanded as NSString).expandingTildeInPath
-        if !path.hasPrefix("/") { path = NSHomeDirectory() + "/" + path }   // cwd 不可靠（launchd 啟動＝/）
+        // cwd 不可靠（launchd 啟動＝/）→ 相對路徑補家目錄（純邏輯抽到 FilenameTemplate.ensureAbsolute）
+        let path = FilenameTemplate.ensureAbsolute((expanded as NSString).expandingTildeInPath, home: NSHomeDirectory())
         let target = URL(fileURLWithPath: path)
         return CaptureSaver.uniquedURL(
             directory: target.deletingLastPathComponent(),

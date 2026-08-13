@@ -24,4 +24,14 @@ nonisolated func miscPureTests() {
     let unnamed = String(UnicodeScalar(0xF8FF)!)   // Apple logo PUA,無特殊鍵名
     T.checkTrue("PUA: 未命名 PUA→true", OverlayKeyRecorderField.isUnrepresentablePrivateUse(unnamed))
     T.checkTrue("PUA: 多字元→false", !OverlayKeyRecorderField.isUnrepresentablePrivateUse("ab"))
+
+    // FilenameTemplate.ensureAbsolute（原 CaptureOutputService/OutputSettings 內嵌）
+    T.checkEq("ensureAbs: 絕對路徑原樣", FilenameTemplate.ensureAbsolute("/a/b", home: "/Users/x"), "/a/b")
+    T.checkEq("ensureAbs: 相對補家目錄", FilenameTemplate.ensureAbsolute("a/b", home: "/Users/x"), "/Users/x/a/b")
+
+    // FilenameTemplate.previewWithPNGHint（原 OutputSettings.previewText 後綴）
+    T.checkEq("pngHint: 無 .png 補提示",
+              FilenameTemplate.previewWithPNGHint(expandedText: "~/a", template: "$title$"), "~/a（將自動補 .png）")
+    T.checkEq("pngHint: 有 .png 不補",
+              FilenameTemplate.previewWithPNGHint(expandedText: "~/a.png", template: "x.png"), "~/a.png")
 }

@@ -279,10 +279,8 @@ final class OutputSettingsViewController: NSViewController {
     /// 樣板 → 預覽值（即時展開；結尾非 .png 加補正提示）。「預覽：」由 label 顯示，不再前綴。
     /// ~ 展開成絕對路徑——預覽顯示實際會存到哪（非 ~ 開頭原樣回傳，檔名樣板不受影響）。
     private func previewText(for template: String) -> String {
-        var text = FilenameTemplate.expand(template, date: Date(), vars: previewVars)
-        text = (text as NSString).expandingTildeInPath
-        if !FilenameTemplate.hasPNGExtension(template) { text += "（將自動補 .png）" }
-        return text
+        let text = (FilenameTemplate.expand(template, date: Date(), vars: previewVars) as NSString).expandingTildeInPath
+        return FilenameTemplate.previewWithPNGHint(expandedText: text, template: template)
     }
 
     /// 欄位現值優先（打字中即時）；欄空＝顯示生效預設（getter 空回預設）。
@@ -317,8 +315,7 @@ final class OutputSettingsViewController: NSViewController {
     /// 樣板展開後的目錄段（絕對路徑；日期 token 用當下時間）。
     private func expandedDirectory(of template: String) -> String {
         let expanded = FilenameTemplate.expand(template, date: Date(), vars: previewVars)
-        var path = (expanded as NSString).expandingTildeInPath
-        if !path.hasPrefix("/") { path = NSHomeDirectory() + "/" + path }
+        let path = FilenameTemplate.ensureAbsolute((expanded as NSString).expandingTildeInPath, home: NSHomeDirectory())
         return (path as NSString).deletingLastPathComponent
     }
 
