@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// 座標轉換工具（純函式、可單元測試）。
 ///
@@ -6,6 +7,16 @@ import CoreGraphics
 /// 而 CGImage 的像素座標原點在**左上**、Y 向下。截圖裁切時必須翻轉 Y，
 /// 且要乘上 Retina 的 pixel scale 才能對到影像的實際像素。這是最容易錯的地方。
 public enum CoordinateUtils {
+
+    /// 解析 "x,y,w,h" 字串成 CGRect（RPC/自動化通道用）；欄位數不足、非數字都回 nil。
+    /// 純字串→幾何解析,不屬於任何 UI 型別,住這裡讓 selftest 可直接驗證。
+    public static func parseRect(_ s: String) -> CGRect? {
+        let parts = s.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 4 else { return nil }
+        let nums = parts.compactMap { Double($0) }
+        guard nums.count == 4 else { return nil }
+        return CGRect(x: nums[0], y: nums[1], width: nums[2], height: nums[3])
+    }
 
     /// 把「overlay 視圖內的選取矩形（點、左下原點）」轉成
     /// 「凍結影像的裁切矩形（像素、左上原點）」。

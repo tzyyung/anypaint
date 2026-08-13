@@ -72,16 +72,21 @@ public final class MicLevelMonitor: NSObject {
     /// 更新 `latestLevel`＋呼叫 `onLevel`（節流已在 ioQueue 端做，這裡不再重複）。
     /// 世代不符＝舊 session 的遲到結果，整個丟棄（`stop()`／換裝置後仍在飛的 Task 不會蓋回舊值）。
     private func handleLevel(_ rms: Float, generation: Int) {
-        guard generation == self.generation else { return }
+        guard Self.accepts(incoming: generation, current: self.generation) else { return }
         latestLevel = rms
         onLevel?(rms)
     }
 
+    /// 世代守衛的**純判定**（`handleLevel` 只是加上副作用的殼）：遲到回呼帶的世代號 `incoming`
+    /// 是否仍等於當下世代 `current`。不符＝`stop()`／換裝置後仍在飛的過期結果,整個丟棄。
+    /// 抽成無狀態函式讓「遲到結果不蓋新值」這條不變式可單元測試。
+    public nonisolated static func accepts(incoming: Int, current: Int) -> Bool { incoming == current }
+
     /// 從 HAL 輸入 buffer list 算線性 RMS。只認 Float32（HAL 虛擬格式慣例）；非 Float32 回 0。
     /// 走遍所有 buffer（非交錯多聲道會是多個 buffer），全部樣本當一串算整體 RMS（同 `RecordMath.rms`
     /// 的精神，這裡直接吃 buffer list 免去複製）。
-    nonisolated static func rms(fromInputBufferList list: UnsafePointer<AudioBufferList>,
-                                asbd: AudioStreamBasicDescription) -> Float {
+    public nonisolated static func rms(fromInputBufferList list: UnsafePointer<AudioBufferList>,
+                                       asbd: AudioStreamBasicDescription) -> Float {
         guard (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0, asbd.mBitsPerChannel == 32 else { return 0 }
         let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
         var sum = 0.0

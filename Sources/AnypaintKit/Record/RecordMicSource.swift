@@ -48,8 +48,8 @@ public final class RecordMicSource {
     /// 執行緒反覆配置）。回實際 frame 數；0＝非 Float32／空／失敗。支援交錯（單 buffer、N 聲道）與
     /// 非交錯（planar，每聲道一個 buffer）。不用 `Array(abl)`／`filter`（那會在 realtime thread 配置）。
     @discardableResult
-    static func downmixToMono(_ list: UnsafePointer<AudioBufferList>,
-                              asbd: AudioStreamBasicDescription, into out: inout [Float]) -> Int {
+    public static func downmixToMono(_ list: UnsafePointer<AudioBufferList>,
+                                     asbd: AudioStreamBasicDescription, into out: inout [Float]) -> Int {
         guard (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0, asbd.mBitsPerChannel == 32 else { return 0 }
         let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
         let nonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0

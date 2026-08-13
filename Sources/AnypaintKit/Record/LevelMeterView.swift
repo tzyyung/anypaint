@@ -70,7 +70,7 @@ public final class LevelMeterView: NSView {
                 // 都用亮白標出剛剛到過的最高點，與下面的 dB 分區色明顯區隔。
                 color = NSColor.white
             } else if i < litBars {
-                color = zoneColor(for: i)
+                color = Self.zoneColor(for: i, totalBars: totalBars)
             } else {
                 // 未亮格：比背景略深的黑，形成可見的格框，同樣不含白色分量。
                 color = NSColor.black.withAlphaComponent(0.35)
@@ -81,7 +81,8 @@ public final class LevelMeterView: NSView {
     }
 
     /// dB 分區配色：最後 1 格紅（滿刻度／接近爆音）、倒數第 2 格黃（警戒），其餘綠。
-    private func zoneColor(for index: Int) -> NSColor {
+    /// static + 顯式 totalBars：純函式,不依賴 view 實例狀態,selftest 可直接驗證分區邊界。
+    public nonisolated static func zoneColor(for index: Int, totalBars: Int) -> NSColor {
         if index == totalBars - 1 { return .systemRed }
         if index == totalBars - 2 { return .systemYellow }
         return .systemGreen

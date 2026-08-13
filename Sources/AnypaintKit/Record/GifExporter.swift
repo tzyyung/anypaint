@@ -389,7 +389,9 @@ public enum GifExporter {
 
 /// 格式相依的 UTType／properties 組裝，跟解碼／縮圖／sample-and-hold 等共用邏輯分開放，
 /// 讓 `exportAsync` 本體不必為兩種格式各寫一份迴圈。
-private extension AnimationFormat {
+// public：utType/containerProperties/perFrameProperties 是純格式對應（GIF/APNG 的
+// loop-count／delay dictionary），開放給 selftest 直接驗證「格式→正確 ImageIO 屬性」。
+public extension AnimationFormat {
     var utType: UTType {
         switch self {
         case .gif: return .gif

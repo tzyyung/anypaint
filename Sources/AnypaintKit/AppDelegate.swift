@@ -339,7 +339,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             // 以為自己開了一個新錄製卻其實把舊的停掉了（review fix round 1 Important 3）。
             guard !recordSession.isActive else { return ["ok": false, "error": "busy"] }
             guard let rectStr = command.json["rect"] as? String,
-                  let rect = Self.parseRect(rectStr) else {
+                  let rect = CoordinateUtils.parseRect(rectStr) else {
                 return ["ok": false, "error": "badRect"]
             }
             // RPC 路徑絕不能落進互動式權限流程：`beginAnimatedCapture` 首次無權限時會呼叫
@@ -415,14 +415,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// 解析 `"x,y,w,h"`（AppKit 全域座標，點）。四段都要是合法數字，否則回 nil。
-    private static func parseRect(_ s: String) -> CGRect? {
-        let parts = s.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        guard parts.count == 4 else { return nil }
-        let nums = parts.compactMap { Double($0) }
-        guard nums.count == 4 else { return nil }
-        return CGRect(x: nums[0], y: nums[1], width: nums[2], height: nums[3])
-    }
-
     // MARK: - 權限
 
     private func showPermissionAlert() {
