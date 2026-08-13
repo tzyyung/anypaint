@@ -4,16 +4,19 @@ import CoreAudio
 /// （不硬寫 UID，沿用 BetterCapture 不硬編碼教訓）。自檢時把預設切到內建喇叭↔內建麥克風做
 /// 聲學耦合，跑完還原（正式路徑不碰這個型別）。
 enum AudioHardwareControl {
-    private static func systemDevice(_ selector: AudioObjectPropertySelector) -> AudioObjectID {
+    /// 查詢失敗或回 `kAudioObjectUnknown` → 回 nil（呼叫端據此判斷「本來沒有有效預設」，還原時就跳過，
+    /// 不會誤把預設設成裝置 0＝no-op、把使用者留在被切走的內建裝置上，robustness 審查第三輪 finding #5）。
+    private static func systemDevice(_ selector: AudioObjectPropertySelector) -> AudioObjectID? {
         var dev = AudioObjectID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         var addr = AudioObjectPropertyAddress(mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        _ = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &dev)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &dev) == noErr,
+              dev != kAudioObjectUnknown else { return nil }
         return dev
     }
-    static func defaultInputDevice() -> AudioObjectID { systemDevice(kAudioHardwarePropertyDefaultInputDevice) }
-    static func defaultOutputDevice() -> AudioObjectID { systemDevice(kAudioHardwarePropertyDefaultOutputDevice) }
+    static func defaultInputDevice() -> AudioObjectID? { systemDevice(kAudioHardwarePropertyDefaultInputDevice) }
+    static func defaultOutputDevice() -> AudioObjectID? { systemDevice(kAudioHardwarePropertyDefaultOutputDevice) }
 
     private static func setDefault(_ selector: AudioObjectPropertySelector, _ dev: AudioObjectID) {
         var d = dev
@@ -55,10 +58,14 @@ enum AudioHardwareControl {
             mScope: scope, mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(dev, &addr, 0, nil, &size) == noErr, size > 0 else { return 0 }
-        let abl = UnsafeMutableAudioBufferListPointer(
-            UnsafeMutablePointer<AudioBufferList>.allocate(capacity: Int(size)))
-        defer { free(abl.unsafeMutablePointer) }
-        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, abl.unsafeMutablePointer) == noErr else { return 0 }
-        return abl.reduce(0) { $0 + Int($1.mNumberChannels) }
+        // `size` 是**位元組數**（可變長度 AudioBufferList）：配剛好 `size` 個 raw byte，用相符的
+        // `.deallocate()` 釋放（**不可**用 C `free()`——Swift `allocate` 與 `free` 是不同配置器，混用 UB；
+        // 也不可 `allocate(capacity: size)` 把位元組數當成 AudioBufferList 元素數而巨量超配）。
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size),
+                                                   alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        let ablPtr = raw.bindMemory(to: AudioBufferList.self, capacity: 1)
+        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, ablPtr) == noErr else { return 0 }
+        return UnsafeMutableAudioBufferListPointer(ablPtr).reduce(0) { $0 + Int($1.mNumberChannels) }
     }
 }
