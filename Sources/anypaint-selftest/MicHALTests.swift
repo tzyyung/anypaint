@@ -1,4 +1,29 @@
 import AnypaintKit
+import CoreMedia
+
+nonisolated func micHALSampleBufferTests() {
+    let frames = 480, channels = 1, sr = 48000.0
+    let samples = [Float](repeating: 0.25, count: frames * channels)
+    let host = mach_absolute_time()
+    let sb: CMSampleBuffer? = samples.withUnsafeBytes { raw in
+        RecordMicSource.makeSampleBuffer(fromInterleavedFloat32: raw, frames: frames,
+                                         channels: channels, sampleRate: sr, hostTime: host)
+    }
+    guard let sb else { T.checkTrue("micbuf: 建立成功", false); return }
+    T.checkTrue("micbuf: 建立成功", true)
+    T.checkEq("micbuf: frame 數正確", CMSampleBufferGetNumSamples(sb), frames)
+    if let fd = CMSampleBufferGetFormatDescription(sb),
+       let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fd)?.pointee {
+        T.checkEq("micbuf: 取樣率 48k", asbd.mSampleRate, 48000)
+        T.checkEq("micbuf: 1 聲道", Int(asbd.mChannelsPerFrame), 1)
+        T.checkTrue("micbuf: Float32", (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0)
+    } else { T.checkTrue("micbuf: 可讀格式描述", false) }
+    let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+    T.checkTrue("micbuf: PTS 有效", CMTIME_IS_VALID(pts) && pts.seconds > 0)
+    if let bb = CMSampleBufferGetDataBuffer(sb) {
+        T.checkEq("micbuf: 資料長度", CMBlockBufferGetDataLength(bb), frames * channels * 4)
+    } else { T.checkTrue("micbuf: 可讀 data buffer", false) }
+}
 
 nonisolated func micHALRMSTests() {
     // 全 0.5 的訊號：RMS = 0.5
