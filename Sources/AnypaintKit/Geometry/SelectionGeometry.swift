@@ -83,6 +83,11 @@ public enum SelectionGeometry {
         return r.width > minSize && r.height > minSize
     }
 
+    /// 選取框兩邊是否都達最小邊長（≥,含相等）——錄影最小選區門檻用（點座標）。
+    public static func meetsMinEdge(_ size: CGSize, min: CGFloat) -> Bool {
+        size.width >= min && size.height >= min
+    }
+
     /// 四角（標註物件縮放用）。
     public enum Corner: CaseIterable { case topLeft, topRight, bottomLeft, bottomRight }
 

@@ -34,4 +34,21 @@ nonisolated func miscPureTests() {
               FilenameTemplate.previewWithPNGHint(expandedText: "~/a", template: "$title$"), "~/a（將自動補 .png）")
     T.checkEq("pngHint: 有 .png 不補",
               FilenameTemplate.previewWithPNGHint(expandedText: "~/a.png", template: "x.png"), "~/a.png")
+
+    // UITestServer.shouldStart
+    T.checkTrue("shouldStart: --uitest→true", UITestServer.shouldStart(args: ["x", "--uitest"], allowSetting: false))
+    T.checkTrue("shouldStart: 設定允許→true", UITestServer.shouldStart(args: ["x"], allowSetting: true))
+    T.checkTrue("shouldStart: 皆無→false", !UITestServer.shouldStart(args: ["x"], allowSetting: false))
+
+    // AudioInputDeviceList.popupSelection
+    let ids = ["mic-a", "mic-b", "mic-c"]
+    let p1 = AudioInputDeviceList.popupSelection(saved: "mic-b", deviceIDs: ids)
+    T.checkTrue("micPopup: 存在裝置→非幽靈", !p1.isGhost)
+    T.checkEq("micPopup: 選到 index+1", p1.index, 2)   // mic-b 是 index1 → popup index2
+    let p2 = AudioInputDeviceList.popupSelection(saved: "ghost-x", deviceIDs: ids)
+    T.checkTrue("micPopup: 不存在→幽靈", p2.isGhost)
+    T.checkEq("micPopup: 幽靈→回系統預設(0)", p2.index, 0)
+    let p3 = AudioInputDeviceList.popupSelection(saved: nil, deviceIDs: ids)
+    T.checkTrue("micPopup: nil→非幽靈", !p3.isGhost)
+    T.checkEq("micPopup: nil→系統預設(0)", p3.index, 0)
 }

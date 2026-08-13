@@ -130,8 +130,7 @@ public final class RecordSession {
     private func enterArmed(_ selection: CGRect, _ scr: NSScreen) {
         // 兩個分支都要先掛好取消：太小選區的死路訊息也要有一顆按得下去的「取消」按鈕。
         hud.onCancel = { [weak self] in self?.cancel() }
-        guard selection.width >= Self.minSelectionEdgePt,
-              selection.height >= Self.minSelectionEdgePt else {
+        guard SelectionGeometry.meetsMinEdge(selection.size, min: Self.minSelectionEdgePt) else {
             hud.show(near: selection, on: scr, mode: .armed)
             hud.showMessage("選區太小，拉大一點才能開始")
             return

@@ -112,4 +112,9 @@ nonisolated func selectionGeometryTests() {
                 !SelectionGeometry.isValidSelectionSize(CGRect(x: 0, y: 0, width: 5, height: 5), minSize: 5))
     T.checkTrue("geo validSize: 大於→true",
                 SelectionGeometry.isValidSelectionSize(CGRect(x: 0, y: 0, width: 6, height: 6), minSize: 5))
+
+    // meetsMinEdge（錄影最小選區,≥ 含相等）
+    T.checkTrue("meetsMinEdge: 剛好等於→true", SelectionGeometry.meetsMinEdge(CGSize(width: 64, height: 64), min: 64))
+    T.checkTrue("meetsMinEdge: 一邊不足→false", !SelectionGeometry.meetsMinEdge(CGSize(width: 64, height: 63), min: 64))
+    T.checkTrue("meetsMinEdge: 都夠→true", SelectionGeometry.meetsMinEdge(CGSize(width: 100, height: 80), min: 64))
 }

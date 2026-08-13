@@ -116,8 +116,10 @@ final class CaptureSettingsViewController: NSViewController {
     /// `menuWillOpen`（每次展開，涵蓋熱插拔）。
     private func populateMicDevicePopup() {
         let devices = AudioInputDeviceList.all()
-        if let saved = AppSettings.recordMicrophoneDeviceID,
-           !devices.contains(where: { $0.uniqueID == saved }) {
+        // 幽靈裝置偵測＋該選第幾項的純決策抽到 AudioInputDeviceList.popupSelection（可測）。
+        let sel = AudioInputDeviceList.popupSelection(saved: AppSettings.recordMicrophoneDeviceID,
+                                                      deviceIDs: devices.map(\.uniqueID))
+        if sel.isGhost {
             AppSettings.recordMicrophoneDeviceID = nil
             // 幽靈裝置清鍵後，底層監看可能還釘著那顆已消失的裝置（fix round 1，team-lead 審查
             // 抓到：清鍵沒有連動重掛，電平表會凍結在最後一格）。走唯一出口，讓它以新的
@@ -131,13 +133,7 @@ final class CaptureSettingsViewController: NSViewController {
             micDevicePopup.addItem(withTitle: device.name)
             micDevicePopup.lastItem?.representedObject = device.uniqueID
         }
-
-        let currentID = AppSettings.recordMicrophoneDeviceID
-        if let currentID, let idx = devices.firstIndex(where: { $0.uniqueID == currentID }) {
-            micDevicePopup.selectItem(at: idx + 1)   // +1：index 0 是固定的「系統預設」
-        } else {
-            micDevicePopup.selectItem(at: 0)
-        }
+        micDevicePopup.selectItem(at: sel.index)
     }
 
     @objc private func micDeviceChanged() {

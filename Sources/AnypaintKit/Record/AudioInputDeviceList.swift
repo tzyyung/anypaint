@@ -37,4 +37,13 @@ public enum AudioInputDeviceList {
             .map { AudioInputDevice(uniqueID: $0.uniqueID, name: $0.localizedName,
                                     isDefault: $0.uniqueID == defID) }
     }
+
+    /// 麥克風下拉的選取決策（純）：`saved` 不在現有裝置清單＝幽靈裝置（需清鍵重掛）；
+    /// 回傳「是否幽靈」與「該選第幾項」（popup index 0 是固定的『系統預設』,裝置從 1 起）。
+    public static func popupSelection(saved: String?, deviceIDs: [String]) -> (isGhost: Bool, index: Int) {
+        let isGhost = saved.map { !deviceIDs.contains($0) } ?? false
+        let effective = isGhost ? nil : saved
+        if let effective, let idx = deviceIDs.firstIndex(of: effective) { return (isGhost, idx + 1) }
+        return (isGhost, 0)
+    }
 }

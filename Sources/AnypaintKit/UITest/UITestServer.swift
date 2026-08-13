@@ -36,9 +36,13 @@ public final class UITestServer {
     /// 「不是我認的命令」）都照走原本的 `unknownCommand`——不是「有 handler 就必定認得」。
     public var commandHandler: ((UITestChannel.Command) -> [String: Any]?)?
 
+    /// 是否啟動自動化通道：命令列有 --uitest,或設定頁允許本機自動化。純判定,可測。
+    public nonisolated static func shouldStart(args: [String], allowSetting: Bool) -> Bool {
+        args.contains("--uitest") || allowSetting
+    }
+
     public static func startIfRequested() {
-        guard CommandLine.arguments.contains("--uitest")
-                || AppSettings.allowLocalAutomation else { return }
+        guard shouldStart(args: CommandLine.arguments, allowSetting: AppSettings.allowLocalAutomation) else { return }
         shared = UITestServer()
         shared?.register()
     }
