@@ -7,27 +7,29 @@ final class RecordAudioTracks {
     private var systemInput: AVAssetWriterInput?
     private var micInput: AVAssetWriterInput?
 
-    init(options: RecordOptions) {
-        func makeInput() -> AVAssetWriterInput {
+    /// - Parameter micChannels: 麥克風軌 AAC 聲道數＝實際裝置聲道數（`RecordMicSource` 開 HAL tap
+    ///   後查到，內建麥克風＝1）。不再硬寫 2——mic 走 HAL、聲道數由裝置決定。
+    init(options: RecordOptions, micChannels: Int) {
+        func makeInput(channels: Int) -> AVAssetWriterInput {
             let input = AVAssetWriterInput(mediaType: .audio, outputSettings: [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
                 AVSampleRateKey: 48_000,
-                AVNumberOfChannelsKey: 2,
+                AVNumberOfChannelsKey: channels,
                 AVEncoderBitRateKey: 128_000,
             ])
             input.expectsMediaDataInRealTime = true
             return input
         }
-        if options.captureSystemAudio { systemInput = makeInput() }
-        if options.captureMicrophone { micInput = makeInput() }
+        if options.captureSystemAudio { systemInput = makeInput(channels: 2) }
+        if options.captureMicrophone { micInput = makeInput(channels: max(1, micChannels)) }
     }
 
-    /// SCK 音訊相關 config 全在這裡設（掛載進 makeStreamConfiguration）。
+    /// SCK 音訊相關 config：**只設系統聲**。麥克風不再走 SCK `.microphone`（那條在本 app 收不到
+    /// 封包，見 `AudioInputTap`／設計文件 §0）——改由 `RecordMicSource` 走 CoreAudio HAL，
+    /// 所以這裡刻意不設 `config.captureMicrophone`／`config.microphoneCaptureDeviceID`。
     static func configure(_ config: SCStreamConfiguration, options: RecordOptions) {
         config.capturesAudio = options.captureSystemAudio
         config.excludesCurrentProcessAudio = options.excludesOwnAudio
-        config.captureMicrophone = options.captureMicrophone
-        config.microphoneCaptureDeviceID = options.microphoneDeviceID
     }
 
     func attach(to writer: AVAssetWriter) {

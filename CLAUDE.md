@@ -219,6 +219,17 @@ spec 寫「最小選區 320px」，程式若拿 `selection.height`（**點**）�
   自檢模式不進正常啟動流程（跑完自己 exit），不會與常駐實例搶選單列。
 - `SCShareableContent` 偶發回 **`noDisplays`** 導致 stream 啟動失敗（短時間內反覆開多個實例時
   較容易遇到）。這是暫時性的：清掉殘留實例後重試即可，不要當成程式缺陷去追。
+- **麥克風不要走 SCK `.microphone`（也不要走 AVCaptureSession）——走 CoreAudio HAL**（2026-08-13 實測）。
+  macOS 26 本機：AVFoundation capture 家族（`AVCaptureAudioDataOutput` 與 SCK `config.captureMicrophone`/
+  `.microphone` output）對麥克風**完全收不到封包**——session 正常啟動、connection active/enabled、
+  `authorizationStatus=.authorized`、無 runtimeError，`captureOutput` 卻零呼叫；同機 QuickTime（同一套
+  AVFoundation capture API）電平會跳、SCK **視訊**與**系統聲**都正常，只有麥克風 capture 這條死。
+  用 `AudioDeviceCreateIOProcIDWithBlock`（HAL，`AudioInputTap`）在同一 app／簽章／啟動方式下穩定拿得到。
+  現行麥克風路：`AudioInputTap`→`MicLevelMonitor`（電平表）／`RecordMicSource`（錄影軌）。之後若有人想
+  「改回 SCK 麥克風比較簡潔」——先重讀 `docs/superpowers/specs/2026-08-13-mic-hal-capture-design.md` §0，
+  這是實測付出代價換來的結論，不是沒試過。
+- **clamshell（筆電螢幕蓋著）會停用內建麥克風**——內建麥克風會送純數位靜音（HAL tap 收到全 0），不是
+  程式 bug。測內建麥克風務必開蓋（2026-08-13 實測，曾一度誤判內建麥克風壞掉）。
 
 ## 診斷原則
 

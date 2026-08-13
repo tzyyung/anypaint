@@ -106,6 +106,15 @@ public enum RecordMath {
         return power / Double(samples.count * samples.count)
     }
 
+    /// 線性 RMS（0..1）。把整段樣本當一串算整體均方根——待命試音錶的粗略確認足夠，
+    /// 不分聲道。空輸入回 0。純函式：不 import 任何框架（同本檔其餘方法）。
+    public static func rms(_ samples: UnsafeBufferPointer<Float>) -> Float {
+        guard samples.count > 0 else { return 0 }
+        var sum = 0.0
+        for v in samples { sum += Double(v) * Double(v) }
+        return Float((sum / Double(samples.count)).squareRoot())
+    }
+
     /// 線性 RMS（0..1）→ dBFS，clamp 到 [-60, 0]（電平表下限 -60 dB）。
     public static func dbFromRMS(_ rms: Float) -> Float {
         guard rms > 0 else { return -60 }
