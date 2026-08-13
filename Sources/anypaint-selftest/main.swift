@@ -1350,5 +1350,6 @@ modelMappingTests()
 selectionGeometryTests()
 scrollGuidanceDisplayTests()
 pinSettingsGeomTests()
+annotationInputTests()
 
 T.finish()

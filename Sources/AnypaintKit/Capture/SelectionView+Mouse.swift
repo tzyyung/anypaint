@@ -323,15 +323,12 @@ extension SelectionView {
             super.scrollWheel(with: event)
             return
         }
-        lineWidthScrollAccum += event.scrollingDeltaY
-        let step: CGFloat = 5
-        while lineWidthScrollAccum >= step {
-            lineWidthScrollAccum -= step
-            adjustLineWidth(by: 1)
-        }
-        while lineWidthScrollAccum <= -step {
-            lineWidthScrollAccum += step
-            adjustLineWidth(by: -1)
+        let r = AnnotationInput.stepsFromScroll(accum: lineWidthScrollAccum,
+                                                delta: event.scrollingDeltaY, step: 5)
+        lineWidthScrollAccum = r.newAccum
+        if r.steps != 0 {
+            let unit = r.steps > 0 ? 1 : -1
+            for _ in 0..<abs(r.steps) { adjustLineWidth(by: unit) }
         }
     }
 

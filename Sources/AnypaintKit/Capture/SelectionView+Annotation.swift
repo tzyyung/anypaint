@@ -6,22 +6,12 @@ extension SelectionView {
     // MARK: 標註操作
 
     func makeShape(tool: AnnotationTool, from a: CGPoint, to b: CGPoint) -> Annotation.Shape {
-        switch tool {
-        case .rect:    return .rect(CoordinateUtils.rect(from: a, to: b))
-        case .ellipse: return .ellipse(CoordinateUtils.rect(from: a, to: b))
-        case .line:    return .line(from: a, to: b)
-        case .arrow:   return .arrow(from: a, to: b)
-        case .pixelate: return .pixelate(rect: CoordinateUtils.rect(from: a, to: b))
-        // 讀數要的是**像素**（使用者量的是 px，不是點）。scale 在建立當下就綁進 shape：
-        // 用 snapshot.scale＝擷取端的 `SCContentFilter.pointPixelScale`（不是 NSScreen 的
-        // backingScaleFactor）——擷取影像的像素尺寸就是用它算出來的，拿它換算才與影像一致。
-        // 混合 DPI 多螢幕下各自正確。
-        // 不正規化成 rect：起點→終點就是使用者要量的那條線，對角線要靠它決定方向。
-        case .measure:
-            return .measure(from: a, to: b, pixelScale: snapshot.scale)
-        case .text, .counter, .freehand, .highlighter, .select:
+        // 純邏輯抽到 AnnotationInput.twoPointShape（可測）；snapshot.scale 是唯一的 view 相依。
+        guard let shape = AnnotationInput.twoPointShape(tool: tool, from: a, to: b,
+                                                        pixelScale: snapshot.scale) else {
             preconditionFailure("此工具不走兩點成形")
         }
+        return shape
     }
 
     /// 序號：點擊即生成下一號（編號渲染時算）；框外不入庫；進熱狀態（滾輪調大小）。
