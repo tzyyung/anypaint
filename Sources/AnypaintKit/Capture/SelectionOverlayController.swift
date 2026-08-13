@@ -239,12 +239,11 @@ final class SelectionOverlayController {
     /// 不能重畫），不讓已完成的標註被跨螢幕的一次點擊無聲丟掉。要換螢幕就按 Esc 重來。
     private func grantExclusiveSelection(to active: SelectionOverlayWindow?) -> Bool {
         let others = windows.filter { $0 !== active }.compactMap { $0.selectionView }
-        guard !others.isEmpty else { return true }   // 單螢幕：no-op
-        if others.contains(where: { $0.frameLocked }) {
+        guard SelectionOverlayLogic.shouldGrant(otherFrameLockedFlags: others.map(\.frameLocked)) else {
             NSSound.beep()
             return false
         }
-        others.forEach { $0.relinquishSelection() }
+        others.forEach { $0.relinquishSelection() }   // 空陣列＝no-op（單螢幕）
         return true
     }
 
@@ -265,7 +264,8 @@ final class SelectionOverlayController {
         let shiftDown = event.modifierFlags.contains(.shift)
         let othersDown = !event.modifierFlags.intersection([.command, .control, .option]).isEmpty
         defer { shiftWasDown = shiftDown }
-        guard shiftDown, !shiftWasDown, !othersDown else { return }
+        guard SelectionOverlayLogic.shouldToggleColorFormat(shiftDown: shiftDown,
+                                                            shiftWasDown: shiftWasDown, othersDown: othersDown) else { return }
         let views = windows.compactMap { $0.selectionView }
         guard !views.contains(where: { $0.isEditingText }),
               let hovered = views.first(where: { $0.activeLoupePoint() != nil }) else { return }
@@ -336,11 +336,9 @@ final class SelectionOverlayController {
         windows.compactMap { $0.selectionView }.forEach { $0.commitTextEditing() }
         // 取像順序：使用者最後互動的視窗優先（Task 4 搶救歸屬），nil 或已不在 windows 裡
         // 才 fallback 回原本的快照順序第一個。
-        var candidates = windows.compactMap { $0.selectionView }
-        if let lastView = lastInteractedWindow?.selectionView,
-           let idx = candidates.firstIndex(where: { $0 === lastView }) {
-            candidates.remove(at: idx)
-            candidates.insert(lastView, at: 0)
+        let lastView = lastInteractedWindow?.selectionView
+        let candidates = SelectionOverlayLogic.movedToFront(windows.compactMap { $0.selectionView }) { v in
+            lastView.map { v === $0 } ?? false
         }
         if let image = candidates.compactMap({ $0.currentCroppedImage() }).first {
             NSLog("anypaint: 框選看門狗逾時，已把目前框選內容存入剪貼簿（搶救）")

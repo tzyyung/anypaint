@@ -44,4 +44,24 @@ nonisolated func captureRoutingTests() {
     T.checkEq("counterMap: c1=1", map[c1.id], 1)
     T.checkEq("counterMap: c2=2（跳過中間非 counter）", map[c2.id], 2)
     T.checkTrue("counterMap: 非 counter 不列", map[rr.id] == nil)
+
+    // SelectionOverlayLogic.shouldToggleColorFormat：Shift 上升緣、無其他修飾鍵
+    T.checkTrue("toggleFmt: Shift 剛按下→true",
+                SelectionOverlayLogic.shouldToggleColorFormat(shiftDown: true, shiftWasDown: false, othersDown: false))
+    T.checkTrue("toggleFmt: Shift 持續按住→false（非上升緣）",
+                !SelectionOverlayLogic.shouldToggleColorFormat(shiftDown: true, shiftWasDown: true, othersDown: false))
+    T.checkTrue("toggleFmt: 同時按其他鍵→false",
+                !SelectionOverlayLogic.shouldToggleColorFormat(shiftDown: true, shiftWasDown: false, othersDown: true))
+    T.checkTrue("toggleFmt: Shift 放開→false",
+                !SelectionOverlayLogic.shouldToggleColorFormat(shiftDown: false, shiftWasDown: true, othersDown: false))
+
+    // SelectionOverlayLogic.shouldGrant：其他視窗有鎖框→不准
+    T.checkTrue("grant: 沒有其他視窗→准", SelectionOverlayLogic.shouldGrant(otherFrameLockedFlags: []))
+    T.checkTrue("grant: 其他都沒鎖→准", SelectionOverlayLogic.shouldGrant(otherFrameLockedFlags: [false, false]))
+    T.checkTrue("grant: 有一個鎖了→不准", !SelectionOverlayLogic.shouldGrant(otherFrameLockedFlags: [false, true]))
+
+    // SelectionOverlayLogic.movedToFront：把符合者移到最前;找不到→原序
+    T.checkEq("movedFront: 移到最前", SelectionOverlayLogic.movedToFront([1, 2, 3, 4]) { $0 == 3 }, [3, 1, 2, 4])
+    T.checkEq("movedFront: 找不到→原序", SelectionOverlayLogic.movedToFront([1, 2, 3]) { $0 == 9 }, [1, 2, 3])
+    T.checkEq("movedFront: 已在最前→不變", SelectionOverlayLogic.movedToFront([1, 2, 3]) { $0 == 1 }, [1, 2, 3])
 }
