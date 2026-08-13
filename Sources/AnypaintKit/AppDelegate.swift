@@ -3,6 +3,18 @@ import AVFoundation
 import KeyboardShortcuts
 import UniformTypeIdentifiers
 
+/// 目前作用中的模式（互斥,優先序：freeze > scroll > record）。純值＋純解析,供 selftest 測。
+public enum AppActiveMode: Equatable {
+    case none, freeze, scroll, record
+    /// 優先序解析：框選/擷取進行中＝freeze 最優先,其次滾動、錄影,皆無＝none。
+    public static func resolve(freeze: Bool, scroll: Bool, record: Bool) -> AppActiveMode {
+        if freeze { return .freeze }
+        if scroll { return .scroll }
+        if record { return .record }
+        return .none
+    }
+}
+
 /// 應用協調者：組裝各模組、註冊快鍵、串起截圖與貼圖流程。
 /// 自己不做底層細節，只負責「誰在什麼時候呼叫誰」。
 /// @MainActor：ScrollCaptureSession（Task 12）與 ScrollPreviewWindowController（Task 13）都是
@@ -44,12 +56,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 四入口互斥（spec §9.1）：任一 capture mode active 時其他入口 guard-return。
     /// preview 不佔 mode（session 已結束，開著可以再截）。
-    private enum ActiveMode { case none, freeze, scroll, record }
+    typealias ActiveMode = AppActiveMode
     private var activeMode: ActiveMode {
-        if overlayController.isActive || captureInFlight { return .freeze }
-        if scrollSession.isActive { return .scroll }
-        if recordSession.isActive { return .record }
-        return .none
+        AppActiveMode.resolve(freeze: overlayController.isActive || captureInFlight,
+                              scroll: scrollSession.isActive, record: recordSession.isActive)
     }
 
     public override init() { super.init() }

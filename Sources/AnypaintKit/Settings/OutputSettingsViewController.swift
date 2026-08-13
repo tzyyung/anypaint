@@ -415,9 +415,6 @@ extension OutputSettingsViewController: NSTextFieldDelegate {
     /// 樣板保持可攜）；相對路徑補 ~/ 前綴（cwd 不可靠，launchd 啟動＝/，且不寫死家目錄）。
     /// 空字串原樣回傳（setter 存空＝getter 回預設）。
     private func normalizedPathTemplate(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return "" }
-        if trimmed.hasPrefix("/") || trimmed.hasPrefix("~") { return trimmed }
-        return "~/" + trimmed
+        FilenameTemplate.normalizedPathTemplate(raw)
     }
 }

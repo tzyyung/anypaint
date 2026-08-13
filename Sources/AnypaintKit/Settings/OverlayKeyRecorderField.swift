@@ -17,7 +17,7 @@ public final class OverlayKeyRecorderField: NSView {
     /// `charactersIgnoringModifiers` 對方向鍵／功能鍵／刪除鍵等回傳私用區（Private Use Area，
     /// 0xF700 起）標量，對 Tab／Return／空白鍵回傳控制字元或空白——這些原樣 `uppercased()`
     /// 會印出無意義符號。這裡把常見鍵換成看得懂的名字；F-key 用算式而非 24 個字面量。
-    private static func specialKeyName(for character: String) -> String? {
+    private nonisolated static func specialKeyName(for character: String) -> String? {
         guard character.unicodeScalars.count == 1, let scalar = character.unicodeScalars.first else {
             return nil
         }
@@ -37,7 +37,9 @@ public final class OverlayKeyRecorderField: NSView {
 
     /// 私用區裡叫不出名字的字元（如小鍵盤上少見的功能鍵）一律視為不可錄製——
     /// 顯示不出來的綁定比沒有綁定更糟，寧可讓使用者的按鍵被忽略、需要再按一次。
-    private static func isUnrepresentablePrivateUse(_ character: String) -> Bool {
+    /// PUA（私有使用區）字元且無對應特殊鍵名＝無法顯示的鍵（如某些功能鍵）→ 錄製時拒收。
+    /// public 供 selftest 驗證邊界（0xF700 有名→false、未命名 PUA→true、一般字元→false）。
+    public nonisolated static func isUnrepresentablePrivateUse(_ character: String) -> Bool {
         guard character.unicodeScalars.count == 1, let scalar = character.unicodeScalars.first,
               (0xF700...0xF8FF).contains(scalar.value) else { return false }
         return specialKeyName(for: character) == nil

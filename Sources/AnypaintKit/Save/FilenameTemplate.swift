@@ -65,6 +65,15 @@ public enum FilenameTemplate {
     }
 
     /// 展開結果補正：結尾非 .png 時補上。
+    /// 正規化使用者輸入的路徑樣板：去頭尾空白;空→空;絕對(/)或家目錄(~)開頭原樣;
+    /// 其餘相對路徑補上 `~/`（存進設定的路徑樣板一律可攜、不寫死家目錄）。
+    public static func normalizedPathTemplate(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return "" }
+        if trimmed.hasPrefix("/") || trimmed.hasPrefix("~") { return trimmed }
+        return "~/" + trimmed
+    }
+
     public static func ensuringPNGExtension(_ s: String) -> String {
         ensuringExtension(s, ext: "png")
     }
