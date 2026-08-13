@@ -1355,5 +1355,6 @@ miscPureTests()
 captureRoutingTests()
 scrollBottomLogicTests()
 automationCaptureTests()
+recordOutputTests()
 
 T.finish()

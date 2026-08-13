@@ -273,6 +273,20 @@ public enum AppSettings {
         }
     }
 
+    private static let recordSaveDirKey = "recordSaveDirectory"
+    /// 「錄影」直接落地的存檔資料夾（未設＝`~/Movies/anypaint/`）。與動畫截圖預覽匯出無關——
+    /// 錄影是按停止就直接存 MP4,不開預覽。
+    public static var recordSaveDirectory: String? {
+        get {
+            let v = UserDefaults.standard.string(forKey: recordSaveDirKey)
+            return (v?.isEmpty == false) ? v : nil
+        }
+        set {
+            if let v = newValue, !v.isEmpty { UserDefaults.standard.set(v, forKey: recordSaveDirKey) }
+            else { UserDefaults.standard.removeObject(forKey: recordSaveDirKey) }
+        }
+    }
+
     // MARK: - UI 自動化
 
     private static let allowLocalAutomationKey = "allowLocalAutomation"

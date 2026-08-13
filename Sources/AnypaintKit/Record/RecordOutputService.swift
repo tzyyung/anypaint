@@ -12,6 +12,46 @@ public final class RecordOutputService {
             .appendingPathComponent("anypaint-record-\(UUID().uuidString).mp4")
     }
 
+    /// 「錄影」直接落地的預設檔名樣板（無副檔名,由 finalMovieURL 補 .mp4）。
+    public static let recordDefaultName = "anypaint $yyyy-MM-dd HH.mm.ss$"
+
+    /// 「錄影」的最終存檔路徑（純函式,可測）：目錄用 `saveDirectory`（nil/空→`~/Movies/anypaint`）,
+    /// 展開 `~`／相對路徑補 `home`;檔名用時間戳樣板＋`.mp4`;同名碰撞遞增（`exists` 注入）。
+    public static func finalMovieURL(saveDirectory: String?, vars: [String: String], date: Date,
+                                     home: String, timeZone: TimeZone = .current,
+                                     exists: (URL) -> Bool) -> URL {
+        let dirRaw = (saveDirectory?.isEmpty == false) ? saveDirectory! : "~/Movies/anypaint"
+        let dirPath: String
+        if dirRaw == "~" { dirPath = home }
+        else if dirRaw.hasPrefix("~/") { dirPath = home + String(dirRaw.dropFirst(1)) }
+        else { dirPath = FilenameTemplate.ensureAbsolute(dirRaw, home: home) }
+        let name = FilenameTemplate.ensuringExtension(
+            FilenameTemplate.expand(recordDefaultName, date: date, vars: vars, timeZone: timeZone), ext: "mp4")
+        return CaptureSaver.uniquedURL(directory: URL(fileURLWithPath: dirPath), filename: name, exists: exists)
+    }
+
+    /// 「錄影」直接落地：把暫存母帶複製到 `finalMovieURL`（`recordSaveDirectory`）＋發存檔通知。
+    /// 不開預覽（與 `saveCopy`＝預覽匯出那條分開）。失敗回 nil。
+    @discardableResult
+    public func saveMovie(from tempURL: URL, vars: [String: String]) -> URL? {
+        let url = Self.finalMovieURL(saveDirectory: AppSettings.recordSaveDirectory, vars: vars, date: Date(),
+                                     home: NSHomeDirectory(),
+                                     exists: { FileManager.default.fileExists(atPath: $0.path) })
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: tempURL, to: url)
+            if AppSettings.saveNotificationEnabled {
+                SaveNotifier.shared.notifySaved(filename: url.lastPathComponent, fileURL: url)
+            }
+            return url
+        } catch {
+            NSLog("anypaint: 錄影存檔失敗 \(error)")
+            NSSound.beep()
+            return nil
+        }
+    }
+
     /// app 啟動時清掃殘留暫存（上次 crash/強退遺留）。
     public func cleanupStaleTempFiles() {
         let dir = FileManager.default.temporaryDirectory

@@ -106,6 +106,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.onPin = { [weak self] in self?.pinFromClipboard() }
         menuBar.onScrollCapture = { [weak self] in self?.beginScrollCapture() }
         menuBar.onAnimatedCapture = { [weak self] in self?.beginAnimatedCapture() }
+        menuBar.onRecord = { [weak self] in self?.beginRecordDirect() }
         menuBar.onCloseAllPins = { [weak self] in self?.pinController.closeAll() }
         menuBar.onOpenSettings = { [weak self] in self?.openSettings() }
 
@@ -118,6 +119,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         KeyboardShortcuts.onKeyDown(for: .pin) { [weak self] in self?.pinFromClipboard() }
         KeyboardShortcuts.onKeyDown(for: .scrollCapture) { [weak self] in self?.beginScrollCapture() }
         KeyboardShortcuts.onKeyDown(for: .animatedCapture) { [weak self] in self?.beginAnimatedCapture() }
+        KeyboardShortcuts.onKeyDown(for: .record) { [weak self] in self?.beginRecordDirect() }
     }
 
     // MARK: - 截圖：凍結 → 框選 → 複製到剪貼簿
@@ -284,45 +286,69 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     ///   直接以此全域矩形進入 armed 並開始錄製（`RecordSession.startProgrammatically`）；
     ///   nil＝熱鍵／選單路徑，走既有拉框流程（`RecordSession.begin`）。除了選區來源，
     ///   權限預檢、快鍵互斥、`onFinished` 收尾全部共用同一段，不重複兩份。
-    private func beginAnimatedCapture(rect: CGRect? = nil) {
+    /// 動畫截圖（截圖式,停止後開預覽匯出）＝`beginRecord(direct: false)`。
+    private func beginAnimatedCapture(rect: CGRect? = nil) { beginRecord(direct: false, rect: rect) }
+    /// 錄影（直接落地存 MP4,停止後不開預覽）＝`beginRecord(direct: true)`。
+    private func beginRecordDirect(rect: CGRect? = nil) { beginRecord(direct: true, rect: rect) }
+
+    /// 錄影統一入口。`direct=false`＝動畫截圖(收尾開預覽)；`direct=true`＝錄影(收尾直接存 MP4)。
+    /// 兩者共用 SCStream→WriterBox 底層,只在**收尾**分叉（spec §6：共用底層、收尾分叉）。
+    private func beginRecord(direct: Bool, rect: CGRect? = nil) {
         switch activeMode {
         case .record: recordSession.cancelIfActive(); return   // 再按＝armed 取消／recording 停止收檔
         case .freeze, .scroll: return                            // 凍結／滾動中 → 不疊加
         case .none: break
         }
         // 螢幕錄製權限預檢（已查 header：preflight 不彈框；request 首次會彈系統框）。
-        // request 成功＝使用者剛允許——macOS 授權後常需重啟 app 才生效，因此一律 return 讓使用者重按，
-        // 不直接續跑（續跑會拿到黑畫面 stream）。alert 文案沿用既有 showPermissionAlert。
         guard CGPreflightScreenCaptureAccess() else {
             if !CGRequestScreenCaptureAccess() { showPermissionAlert() }
             return
         }
-        KeyboardShortcuts.disable(.capture, .pin, .scrollCapture)   // 錄製中擋其他三入口（spec §9.1）
-        menuBar.setRecording(true)
+        // 錄製中擋其他入口（spec §9.1）：連另一種錄影模式的快鍵也一起 disable,避免兩模式互撞。
+        let others: [KeyboardShortcuts.Name] = direct
+            ? [.capture, .pin, .scrollCapture, .animatedCapture]
+            : [.capture, .pin, .scrollCapture, .record]
+        KeyboardShortcuts.disable(others)
+        setRecordingMenu(direct: direct, on: true)
         // %title% 於按下快鍵當下凍結（spec，同 beginScrollCapture 理由）。
         let vars = CaptureVars.makeVars(title: CaptureVars.currentFrontTitle())
         recordSession.onFinished = { [weak self] url, captureScale in
             guard let self else { return }
-            KeyboardShortcuts.enable(.capture, .pin, .scrollCapture)   // 恢復點集中在單一出口
-            self.menuBar.setRecording(false)
-            guard let url else { return }                              // 取消或失敗 → 靜默（同 scroll 慣例）
-            if self.recordPreviewController == nil {
-                self.recordPreviewController = RecordPreviewWindowController(output: self.recordOutput,
-                                                                              pinboard: self.pinboard)
-            }
-            Task { @MainActor in
-                // present(movieURL:vars:captureScale:) 是 async（需先讀母帶 naturalSize）。
-                await self.recordPreviewController?.present(movieURL: url, vars: vars, captureScale: captureScale)
+            KeyboardShortcuts.enable(others)                     // 恢復點集中在單一出口
+            self.setRecordingMenu(direct: direct, on: false)
+            guard let url else { return }                        // 取消或失敗 → 靜默（同 scroll 慣例）
+            if direct {
+                // 錄影：直接落地存 MP4＋發存檔通知,不開預覽。
+                if let saved = self.recordOutput.saveMovie(from: url, vars: vars) {
+                    UITestServer.shared?.emit("recordSaved", ["path": saved.path])   // 自動化可 wait-event
+                } else {
+                    UITestServer.shared?.emit("captureFailed", ["reason": "recordSave"])
+                }
+                try? FileManager.default.removeItem(at: url)     // 已複製到最終位置,清暫存
+            } else {
+                if self.recordPreviewController == nil {
+                    self.recordPreviewController = RecordPreviewWindowController(output: self.recordOutput,
+                                                                                  pinboard: self.pinboard)
+                }
+                Task { @MainActor in
+                    // present(movieURL:vars:captureScale:) 是 async（需先讀母帶 naturalSize）。
+                    await self.recordPreviewController?.present(movieURL: url, vars: vars, captureScale: captureScale)
+                }
             }
         }
         if let rect { recordSession.startProgrammatically(rect: rect) } else { recordSession.begin() }
         // begin()／startProgrammatically() 在無主螢幕時會靜默 no-op（onFinished 永不 fire）——
-        // 若沒真的進場就立刻把剛 disable 的快鍵/選單恢復，否則其餘三入口永久失效需重啟。
+        // 若沒真的進場就立刻把剛 disable 的快鍵/選單恢復，否則其餘入口永久失效需重啟。
         guard recordSession.isActive else {
-            KeyboardShortcuts.enable(.capture, .pin, .scrollCapture)
-            menuBar.setRecording(false)
+            KeyboardShortcuts.enable(others)
+            setRecordingMenu(direct: direct, on: false)
             return
         }
+    }
+
+    /// 依模式切正確的選單項標題（動畫截圖／錄影 各自的「停止…」）。
+    private func setRecordingMenu(direct: Bool, on: Bool) {
+        if direct { menuBar.setRecordingDirect(on) } else { menuBar.setRecording(on) }
     }
 
     // MARK: - 設定
@@ -360,8 +386,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             guard CGPreflightScreenCaptureAccess() else {
                 return ["ok": false, "error": "noScreenRecordingPermission"]
             }
-            beginAnimatedCapture(rect: rect)
-            // beginAnimatedCapture 全程同步：呼叫回來後 state 已經是最終結果，不必等回呼。
+            // direct:true＝錄影（直接落地存 MP4，完成發 recordSaved 事件）；否則動畫截圖（開預覽）。
+            beginRecord(direct: command.json["direct"] as? Bool ?? false, rect: rect)
+            // beginRecord 全程同步：呼叫回來後 state 已經是最終結果，不必等回呼。
             switch recordSession.state {
             case .recording:
                 return ["ok": true]
