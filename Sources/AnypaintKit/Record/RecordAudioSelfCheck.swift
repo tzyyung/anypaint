@@ -39,6 +39,16 @@ public final class RecordAudioSelfCheck {
     /// （0.17381496309072295）的 1/10，寫死。
     private let absolutePowerThreshold = 0.017_381_496_309_072_295
 
+    /// 麥克風軌判準：mic 走「內建喇叭→內建麥克風」聲學耦合，能量遠低於系統聲 loopback，門檻另定。
+    /// 比值門檻放寬到 10x（聲學路徑諧波/雜訊較多）；絕對門檻＝首次實跑（2026-08-13，lid 打開、
+    /// 內建喇叭↔內建麥克風）量到的 mic power440＝0.000_372_56 的 1/10，寫死（同檢查B 的定法）。
+    private let micRatioThreshold = 10.0
+    private let micAbsolutePowerThreshold = 0.000_037_256
+
+    /// 自檢期間暫時切到內建裝置做聲學耦合，跑完還原（`finishNow`）。
+    private var savedInputDevice: AudioObjectID?
+    private var savedOutputDevice: AudioObjectID?
+
     public init() {}
 
     public func run() {
@@ -59,6 +69,15 @@ public final class RecordAudioSelfCheck {
 
         let selection = winRect.insetBy(dx: 20, dy: 20)
         emit("自檢開始 screen=\(screen.frame) window=\(winRect) selection=\(selection) scale=\(screen.backingScaleFactor)")
+
+        // 麥克風軌驗證要「內建喇叭播 440Hz → 內建麥克風收」的聲學耦合（外接/藍牙裝置位置不定、
+        // 不穩）。存下原預設輸入輸出、切到內建，跑完在 finishNow 還原。找不到內建就維持現狀
+        // （mic 檢查大概率失敗，log 會顯示）。注意：clamshell（螢幕蓋著）會停用內建麥克風。
+        savedInputDevice = AudioHardwareControl.defaultInputDevice()
+        savedOutputDevice = AudioHardwareControl.defaultOutputDevice()
+        if let bin = AudioHardwareControl.builtInInputDevice() { AudioHardwareControl.setDefaultInput(bin) }
+        if let bout = AudioHardwareControl.builtInOutputDevice() { AudioHardwareControl.setDefaultOutput(bout) }
+        emit("切預設到內建（原 in=\(savedInputDevice ?? 0) out=\(savedOutputDevice ?? 0)）")
 
         source.onStreamError = { [weak self] e in
             self?.emit("FAIL stream 錯誤 \(e)")
@@ -81,11 +100,13 @@ public final class RecordAudioSelfCheck {
             return
         }
 
-        // 判準確定性：captureSystemAudio true（要收系統聲）、excludesOwnAudio false（自檢要
+        // 判準確定性：captureSystemAudio true（要收系統聲）、captureMicrophone true（要驗麥克風軌，
+        // microphoneDeviceID nil＝跟系統預設＝剛切到的內建麥克風）、excludesOwnAudio false（自檢要
         // 聽到自己播的檢測音，正式流程一律 true 不錄自家音效）——與 RecordOptions.selfCheck
         // 不同的固定配方，不吃 AppSettings（見 RecordOptions 頭部註解）。
         let options = RecordOptions(showsCursor: false, useHEVC: false,
-                                    captureSystemAudio: true, excludesOwnAudio: false)
+                                    captureSystemAudio: true, captureMicrophone: true,
+                                    excludesOwnAudio: false, microphoneDeviceID: nil)
 
         Task { @MainActor in
             do {
@@ -149,12 +170,12 @@ public final class RecordAudioSelfCheck {
                 let asset = AVURLAsset(url: url)
                 let audioTracks = try await asset.loadTracks(withMediaType: .audio)
 
-                // 檢查A：正好 1 條音軌（只開了系統聲，沒開麥克風）
-                if audioTracks.count == 1 {
-                    emit("✅ 檢查A 音軌數 實得=\(audioTracks.count) 預期=1")
+                // 檢查A：正好 2 條音軌（系統聲＋麥克風）
+                if audioTracks.count == 2 {
+                    emit("✅ 檢查A 音軌數 實得=\(audioTracks.count) 預期=2")
                 } else {
                     failures += 1
-                    emit("❌ 檢查A 音軌數 實得=\(audioTracks.count) 預期=1")
+                    emit("❌ 檢查A 音軌數 實得=\(audioTracks.count) 預期=2")
                 }
 
                 if let track = audioTracks.first {
@@ -180,6 +201,35 @@ public final class RecordAudioSelfCheck {
                 } else {
                     failures += 1
                     emit("❌ 檢查B 無音軌可解碼")
+                }
+
+                // 檢查C+D：麥克風軌（第 2 條）——內建喇叭播的 440Hz 經聲學耦合被內建麥克風收到，
+                // 走的是全新 HAL 路（RecordMicSource），這是它的端到端實機驗證。
+                if audioTracks.count >= 2 {
+                    let micTrack = audioTracks[1]
+                    let (micSamples, micSR) = try decodeMonoSamples(track: micTrack, asset: asset)
+                    let micP440 = RecordMath.goertzelPower(samples: micSamples, sampleRate: micSR, targetHz: targetHz)
+                    let micPOff = RecordMath.goertzelPower(samples: micSamples, sampleRate: micSR, targetHz: offTargetHz)
+                    emit("mic goertzel power440=\(micP440) power987=\(micPOff) 比值=\(micPOff > 0 ? micP440 / micPOff : -1)")
+                    let micRatioOK = micP440 > micPOff * micRatioThreshold
+                    let micAbsOK = micP440 > micAbsolutePowerThreshold
+                    if micRatioOK && micAbsOK {
+                        emit("✅ 檢查C 麥克風軌 Goertzel power440=\(micP440) (>\(micAbsolutePowerThreshold)) power987=\(micPOff) 比值門檻=\(micRatioThreshold)x")
+                    } else {
+                        failures += 1
+                        emit("❌ 檢查C 麥克風軌 Goertzel power440=\(micP440) power987=\(micPOff) ratioOK=\(micRatioOK) absOK=\(micAbsOK)")
+                    }
+                    // 檢查D：mic 軌時長 ≈ 錄製時長（HAL 時間軸對齊 SCK、無斷格）。
+                    let micDur = try await micTrack.load(.timeRange).duration.seconds
+                    if abs(micDur - totalSeconds) < 1.0 {
+                        emit("✅ 檢查D 麥克風軌時長 \(micDur) ≈ 錄製 \(totalSeconds)")
+                    } else {
+                        failures += 1
+                        emit("❌ 檢查D 麥克風軌時長 \(micDur) 偏離 錄製 \(totalSeconds)")
+                    }
+                } else {
+                    failures += 1
+                    emit("❌ 檢查C/D 無麥克風軌可驗")
                 }
             } catch {
                 failures += 1
@@ -254,6 +304,9 @@ public final class RecordAudioSelfCheck {
     }
 
     private func finishNow(exitCode: Int32 = 1) {
+        // 還原被自檢切走的系統預設輸入輸出（冪等；所有結束路徑都經這裡）。
+        if let i = savedInputDevice { AudioHardwareControl.setDefaultInput(i); savedInputDevice = nil }
+        if let o = savedOutputDevice { AudioHardwareControl.setDefaultOutput(o); savedOutputDevice = nil }
         window?.orderOut(nil)
         toneEngine?.stop()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(exitCode) }
