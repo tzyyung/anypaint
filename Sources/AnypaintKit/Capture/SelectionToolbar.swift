@@ -150,7 +150,7 @@ final class SelectionToolbar: NSView {
             b.identifier = NSUserInterfaceItemIdentifier(color.rawValue)
             b.widthAnchor.constraint(equalToConstant: 18).isActive = true
             b.heightAnchor.constraint(equalToConstant: 18).isActive = true
-            setHelp(Self.colorName(color), for: b)
+            setHelp(color.displayName, for: b)
             colorButtons[color] = b
             styleRow.addArrangedSubview(b)
         }
@@ -180,18 +180,6 @@ final class SelectionToolbar: NSView {
     private func setHelp(_ text: String, for view: NSView) {
         view.toolTip = text
         hints[view] = text
-    }
-
-    private static func colorName(_ c: AnnotationColor) -> String {
-        switch c {
-        case .red: return "紅色"
-        case .orange: return "橘色"
-        case .yellow: return "黃色"
-        case .green: return "綠色"
-        case .blue: return "藍色"
-        case .black: return "黑色"
-        case .white: return "白色"
-        }
     }
 
     private func configureSymbolButton(_ b: NSButton, _ name: String, _ action: Selector) {

@@ -165,14 +165,7 @@ extension SelectionView {
     }
 
     private func loupeRect(at p: CGPoint) -> CGRect {
-        let side = loupeSide
-        var lx = p.x + 16
-        var ly = p.y - 16 - side
-        if lx + side > bounds.width { lx = p.x - 16 - side }
-        if ly < 0 { ly = p.y + 16 }
-        lx = min(max(0, lx), bounds.width - side)
-        ly = min(max(0, ly), bounds.height - side)
-        return CGRect(x: lx, y: ly, width: side, height: side)
+        SelectionGeometry.loupeRect(at: p, in: bounds.size, side: loupeSide)
     }
 
     /// 放大鏡顯示點：任何拖曳中（調框或畫標註）→拖曳點；尚未框選→hover 點；其餘不顯示。
@@ -185,10 +178,10 @@ extension SelectionView {
     /// 游標點 → 快照像素座標（左上原點，clamp 進影像範圍）；drawLoupe 與取色共用，
     /// 保證「準星指哪就取哪」。
     func samplePixelCoord(at p: CGPoint) -> (x: Int, y: Int) {
-        let scale = snapshot.scale
-        let x = min(max(0, Int(p.x * scale)), snapshot.cgImage.width - 1)
-        let y = min(max(0, Int((bounds.height - p.y) * scale)), snapshot.cgImage.height - 1)
-        return (x, y)
+        SelectionGeometry.samplePixelCoord(at: p, scale: snapshot.scale,
+                                           imageWidth: snapshot.cgImage.width,
+                                           imageHeight: snapshot.cgImage.height,
+                                           viewHeight: bounds.height)
     }
 
     func invalidateLoupe(around a: CGPoint?, and b: CGPoint?) {
@@ -216,11 +209,11 @@ extension SelectionView {
     /// 十字線的重繪帶：兩層都是 1 點寬，±2 點涵蓋反鋸齒與像素格對齊的位移。
     /// 這個數字必須跟 drawCrosshairGuides 的最大 lineWidth 連動——標得不夠寬就會留殘影。
     private func crosshairBandVertical(atX x: CGFloat) -> CGRect {
-        CGRect(x: x - 2, y: 0, width: 4, height: bounds.height)
+        SelectionGeometry.crosshairBandVertical(atX: x, height: bounds.height)
     }
 
     private func crosshairBandHorizontal(atY y: CGFloat) -> CGRect {
-        CGRect(x: 0, y: y - 2, width: bounds.width, height: 4)
+        SelectionGeometry.crosshairBandHorizontal(atY: y, width: bounds.width)
     }
 
     /// 放大鏡：裁游標周圍一小塊原始像素、最近鄰放大畫在游標旁，中央十字準星 + 座標。
@@ -384,53 +377,30 @@ extension SelectionView {
 
     // MARK: 控制點幾何
 
-    private func handlePoints(_ r: CGRect) -> [CGPoint] {
-        [CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.midX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY),
-         CGPoint(x: r.maxX, y: r.midY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.midX, y: r.minY),
-         CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.minX, y: r.midY)]
-    }
+    // 幾何純函式已抽到 SelectionGeometry（可單元測試）；這裡只補上 view 狀態（handleSize）委派。
+    private func handlePoints(_ r: CGRect) -> [CGPoint] { SelectionGeometry.handlePoints(r) }
     private func handleRect(at p: CGPoint) -> CGRect {
-        CGRect(x: p.x - handleSize / 2, y: p.y - handleSize / 2, width: handleSize, height: handleSize)
+        SelectionGeometry.handleRect(at: p, size: handleSize)
     }
     func hitHandle(_ point: CGPoint, in r: CGRect) -> Handle? {
-        let pts = handlePoints(r)
-        for (i, p) in pts.enumerated() {
-            if handleRect(at: p).insetBy(dx: -4, dy: -4).contains(point) {
-                return Handle.allCases[i]
-            }
-        }
-        return nil
+        SelectionGeometry.hitHandleIndex(point, in: r, size: handleSize).map { Handle.allCases[$0] }
     }
 
     // MARK: select 工具：選取物件的四角 handle（僅 isCornerResizable 物件；比照框選 handle 樣式）
-
-    enum AnnotationHandle: CaseIterable {
-        case topLeft, topRight, bottomLeft, bottomRight
-    }
+    // AnnotationHandle 直接用 SelectionGeometry.Corner（四角語意相同,零轉換）。
+    typealias AnnotationHandle = SelectionGeometry.Corner
     private func annotationHandlePoints(_ r: CGRect) -> [(AnnotationHandle, CGPoint)] {
-        [(.topLeft, CGPoint(x: r.minX, y: r.maxY)), (.topRight, CGPoint(x: r.maxX, y: r.maxY)),
-         (.bottomLeft, CGPoint(x: r.minX, y: r.minY)), (.bottomRight, CGPoint(x: r.maxX, y: r.minY))]
+        SelectionGeometry.cornerPoints(r)
     }
     /// 命中選取物件的縮放 handle（chrome＝bounds 外擴 4pt，與 draw() 畫的虛線框同一矩形）。
     func hitAnnotationHandle(_ point: CGPoint, for annotation: Annotation) -> AnnotationHandle? {
         guard annotation.isCornerResizable else { return nil }
-        let chrome = annotation.bounds.insetBy(dx: -4, dy: -4)
-        for (handle, p) in annotationHandlePoints(chrome) {
-            if handleRect(at: p).insetBy(dx: -4, dy: -4).contains(point) { return handle }
-        }
-        return nil
+        return SelectionGeometry.hitCorner(point, in: annotation.bounds.insetBy(dx: -4, dy: -4),
+                                           size: handleSize)
     }
     /// 由拖出的四角 handle 算新 bounds；允許拖過頭翻轉，用 min/max 正規化（比照既有 resize 慣例）。
     func resizeAnnotationBounds(_ start: CGRect, handle: AnnotationHandle, to p: CGPoint) -> CGRect {
-        var minX = start.minX, maxX = start.maxX, minY = start.minY, maxY = start.maxY
-        switch handle {
-        case .topLeft:     minX = p.x; maxY = p.y
-        case .topRight:    maxX = p.x; maxY = p.y
-        case .bottomLeft:  minX = p.x; minY = p.y
-        case .bottomRight: maxX = p.x; minY = p.y
-        }
-        return CGRect(x: min(minX, maxX), y: min(minY, maxY),
-                      width: abs(maxX - minX), height: abs(maxY - minY))
+        SelectionGeometry.resizedBounds(start, corner: handle, to: p)
     }
 
 }

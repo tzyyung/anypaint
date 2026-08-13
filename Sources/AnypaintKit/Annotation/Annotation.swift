@@ -34,6 +34,19 @@ public enum AnnotationColor: String, CaseIterable {
         return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.7
     }
 
+    /// 中文顯示名（工具列色鈕 accessibility/tooltip 用）。純對應,selftest 可測。
+    public var displayName: String {
+        switch self {
+        case .red: return "紅色"
+        case .orange: return "橘色"
+        case .yellow: return "黃色"
+        case .green: return "綠色"
+        case .blue: return "藍色"
+        case .black: return "黑色"
+        case .white: return "白色"
+        }
+    }
+
     /// 與此色對比的文字色：淺色（白/黃）配黑字、其餘配白字。
     public var contrastingTextCGColor: CGColor {
         isLight ? CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)

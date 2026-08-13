@@ -1346,5 +1346,7 @@ scrollTrajectoryTests()
 annotationGapTests()
 appSettingsTests()
 exportFormatTests()
+modelMappingTests()
+selectionGeometryTests()
 
 T.finish()

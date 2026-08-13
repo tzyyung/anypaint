@@ -155,23 +155,12 @@ final class ControlSettingsViewController: NSViewController {
         for (action, warningLabel) in overlayWarnings {
             if let winner = shadowed[action] {
                 // 欄位本身已經顯示組合，這裡不必再重複一次按鍵——只講使用者現在該做的事。
-                warningLabel.stringValue = "這個組合已經被「\(Self.actionName(winner))」用掉，請換一個。"
+                warningLabel.stringValue = "這個組合已經被「\(winner.displayName)」用掉，請換一個。"
                 warningLabel.isHidden = false
             } else {
                 warningLabel.stringValue = ""
                 warningLabel.isHidden = true
             }
-        }
-    }
-
-    private static func actionName(_ action: OverlayAction) -> String {
-        switch action {
-        case .reshoot: return "重拍"
-        case .pickColor: return "取色"
-        case .save: return "存檔"
-        case .saveAs: return "另存為"
-        case .saveAndOpen: return "存檔並開啟"
-        case .recognizeText: return "辨識文字"
         }
     }
 

@@ -8,6 +8,18 @@ public enum OverlayAction: String, CaseIterable, Sendable {
     case saveAs = "saveAs"
     case saveAndOpen = "saveAndOpen"
     case recognizeText = "recognizeText"
+
+    /// 動作的中文顯示名（設定頁衝突提示、選單共用）。純對應,selftest 可測。
+    public var displayName: String {
+        switch self {
+        case .reshoot: return "重拍"
+        case .pickColor: return "取色"
+        case .save: return "存檔"
+        case .saveAs: return "另存為"
+        case .saveAndOpen: return "存檔並開啟"
+        case .recognizeText: return "辨識文字"
+        }
+    }
 }
 
 /// 修飾鍵集合。刻意不用 `NSEvent.ModifierFlags`——解析要能在無 AppKit 的純邏輯測試裡跑，
