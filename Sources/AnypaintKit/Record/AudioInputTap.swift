@@ -15,6 +15,11 @@ final class AudioInputTap {
     private var running = false
     /// IOProc 派工佇列（HAL 要求一個 serial queue；realtime callback 在此跑）。
     private let ioQueue = DispatchQueue(label: "anypaint.audioinputtap.io")
+    /// HAL 拆卸專用**單一 serial** 佇列（所有 tap 共用）：`AudioDeviceStop`/`Destroy` 是會卡在 HAL
+    /// 行程級鎖上的同步 IPC，用 `.global()` 併發派工在 start/stop 風暴下會每個 block 各佔一條 worker
+    /// thread、短暫爆執行緒（robustness 審查第三輪 finding #3）。serial 佇列與 HAL 自身序列化相符、
+    /// 封頂一條執行緒，又仍然不阻塞呼叫端。
+    private static let teardownQueue = DispatchQueue(label: "anypaint.audioinputtap.teardown")
 
     /// `deviceUID` nil ＝ 系統預設輸入。裝置不存在／查不到格式 → 回 nil（呼叫端靜默降級）。
     init?(deviceUID: String?) {
@@ -54,11 +59,12 @@ final class AudioInputTap {
     }
 
     /// `AudioDeviceStop`／`AudioDeviceDestroyIOProcID` 是對 `coreaudiod` 的**同步**往返（可能數~數十 ms）。
-    /// 派到背景 global queue 上做，**不阻塞呼叫端（多半是 MainActor）**（robustness 審查 finding #4）。
+    /// 派到 `teardownQueue`（單一 serial 背景佇列）上做，**不阻塞呼叫端（多半是 MainActor）**。
     ///
     /// **絕不能派到 `ioQueue`**（＝傳給 `AudioDeviceCreateIOProcIDWithBlock` 的 IOProc 遞送佇列）：
     /// HAL 若在 Stop/Destroy 內部對該佇列 `dispatch_sync` 排空 in-flight block，而我們正在那條佇列上，
     /// 就會自我死鎖、teardown 永不完成 → 裝置/IOProcID 洩漏（robustness 審查第二輪 finding #1）。
+    /// 也不用 `.global()` 併發佇列——start/stop 風暴下會爆 worker thread（第三輪 finding #3）。
     /// Stop/Destroy 設計上本來就從控制執行緒呼叫、不是從 IOProc 佇列。之所以能安全離開 `ioQueue`：
     /// callback 的釋放已改成由 block 直接捕獲（見 `start`），不再需要「排在 IOProc block 後」當同步柵欄。
     /// 只捕獲 dev/pid（不捕獲 self），`deinit` 呼叫也安全（不會在釋放中復活 self）；pid 到 `Destroy`
@@ -68,7 +74,7 @@ final class AudioInputTap {
         running = false
         procID = nil
         let dev = deviceID
-        DispatchQueue.global(qos: .userInitiated).async {
+        Self.teardownQueue.async {
             AudioDeviceStop(dev, pid)
             AudioDeviceDestroyIOProcID(dev, pid)
         }

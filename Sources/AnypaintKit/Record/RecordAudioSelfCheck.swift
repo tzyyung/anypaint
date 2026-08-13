@@ -74,12 +74,17 @@ public final class RecordAudioSelfCheck {
         emit("自檢開始 screen=\(screen.frame) window=\(winRect) selection=\(selection) scale=\(screen.backingScaleFactor)")
 
         // 麥克風軌驗證要「內建喇叭播 440Hz → 內建麥克風收」的聲學耦合（外接/藍牙裝置位置不定、
-        // 不穩）。存下原預設輸入輸出、切到內建，跑完在 finishNow 還原。找不到內建就維持現狀
-        // （mic 檢查大概率失敗，log 會顯示）。注意：clamshell（螢幕蓋著）會停用內建麥克風。
+        // 不穩）。**只有成功存下原預設才切**——存不到就沒得還原，寧可不切（mic 檢查大概率失敗，log 會
+        // 顯示），也不要把使用者永久留在被切走的內建裝置上（robustness 審查第三輪 finding #5）。
+        // 跑完在 finishNow 還原。注意：clamshell（螢幕蓋著）會停用內建麥克風。
         savedInputDevice = AudioHardwareControl.defaultInputDevice()
         savedOutputDevice = AudioHardwareControl.defaultOutputDevice()
-        if let bin = AudioHardwareControl.builtInInputDevice() { AudioHardwareControl.setDefaultInput(bin) }
-        if let bout = AudioHardwareControl.builtInOutputDevice() { AudioHardwareControl.setDefaultOutput(bout) }
+        if savedInputDevice != nil, let bin = AudioHardwareControl.builtInInputDevice() {
+            AudioHardwareControl.setDefaultInput(bin)
+        }
+        if savedOutputDevice != nil, let bout = AudioHardwareControl.builtInOutputDevice() {
+            AudioHardwareControl.setDefaultOutput(bout)
+        }
         emit("切預設到內建（原 in=\(savedInputDevice ?? 0) out=\(savedOutputDevice ?? 0)）")
 
         source.onStreamError = { [weak self] e in

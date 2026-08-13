@@ -32,25 +32,34 @@ public final class MicLevelMonitor: NSObject {
     public func start(deviceID: String?) {
         stop()
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
-        guard let newTap = AudioInputTap(deviceUID: (deviceID?.isEmpty == true) ? nil : deviceID) else { return }
         generation += 1
         let gen = generation
         latestLevel = 0
-        // 節流搬到 realtime/ioQueue 端：IOProc callback ~90–190/s，若每次都 spawn 一個 MainActor Task
-        // 是 realtime 執行緒上的持續堆積配置（違反「callback 內只做最小事」，robustness 審查 finding #5）。
-        // `lastHop` 只在 tap 的 serial ioQueue 上讀寫（callback 天然序列化），無需額外同步。只有超過
-        // 節流間隔才算 RMS、才跳 MainActor。RPC 輪詢頻率遠低於 20Hz，`latestLevel` 這樣更新已足夠即時。
-        var lastHop = 0.0
+        let uid = (deviceID?.isEmpty == true) ? nil : deviceID
         let interval = throttleInterval
-        let ok = newTap.start { [weak self] bufferList, _, asbd in
-            let now = ProcessInfo.processInfo.systemUptime
-            guard now - lastHop >= interval else { return }
-            lastHop = now
-            let rms = Self.rms(fromInputBufferList: bufferList, asbd: asbd)
-            Task { @MainActor [weak self] in self?.handleLevel(rms, generation: gen) }
+        // 裝置查詢 + IOProc 建立/啟動都是對 coreaudiod 的**同步 IPC**（數~數十 ms）。不能在 MainActor 上做
+        // ——settings 分頁切換/換裝置會卡 UI（違反 CLAUDE.md「不要塞爆主執行緒」；stop() 已經搬離主緒，
+        // start() 才是較重的一邊，robustness 審查第三輪 finding #2）。搬到背景，完成後跳回 MainActor 指派
+        // tap，用 generation 擋掉「指派前又 stop()／換裝置」的過期結果。
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let newTap = AudioInputTap(deviceUID: uid) else { return }
+            // 節流在 realtime/ioQueue 端：IOProc callback ~90–190/s，每次都 spawn MainActor Task 是
+            // realtime 執行緒上的持續堆積配置（finding #5）。`lastHop` 只在 tap 的 serial ioQueue 上被
+            // 觸碰（天然序列化），無需額外同步。RPC 輪詢遠低於 20Hz，`latestLevel` 這樣更新已足夠即時。
+            var lastHop = 0.0
+            let ok = newTap.start { bufferList, _, asbd in
+                let now = ProcessInfo.processInfo.systemUptime
+                guard now - lastHop >= interval else { return }
+                lastHop = now
+                let rms = Self.rms(fromInputBufferList: bufferList, asbd: asbd)
+                Task { @MainActor [weak self] in self?.handleLevel(rms, generation: gen) }
+            }
+            guard ok else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == gen else { newTap.stop(); return }   // 已被較新的 start/stop 取代 → 丟棄
+                self.tap = newTap
+            }
         }
-        guard ok else { return }
-        tap = newTap
     }
 
     public func stop() {
