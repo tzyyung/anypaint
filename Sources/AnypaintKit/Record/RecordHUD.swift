@@ -33,17 +33,22 @@ private final class IconToggle: NSButton {
         contentTintColor = .white
         render()
     }
+    /// 寬度固定成開/關兩種標題的**較寬者**——否則 🎙 與 🔇 emoji 寬度不同，每次切換按鈕就縮/脹、
+    /// 整條 tier1 跟著抖（實機回報 2026-08-14）。高度固定 26。
     override var intrinsicContentSize: NSSize {
-        var s = super.intrinsicContentSize; s.width += 18; s.height = 26; return s
+        let f = font ?? .systemFont(ofSize: 12)
+        func w(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: [.font: f]).width }
+        let widest = max(w(onTitle), w(offTitle))
+        return NSSize(width: ceil(widest) + 26, height: 26)   // +26＝左右內距
     }
     /// 設開/關並立即重繪（控制器在 action 與 sync 時呼叫）。
     func setOn(_ on: Bool) { isOn = on; render() }
     /// 開＝亮圖示＋不透明＋極淡底；關＝🔇 圖示＋半透明＋更淡底（雙重訊號，不用藍色）。
+    /// 只換圖示/透明度/底色，**不動寬度**（intrinsic 取兩態較寬者，固定）。
     private func render() {
         title = isOn ? onTitle : offTitle
         alphaValue = isOn ? 1.0 : 0.5
         layer?.backgroundColor = NSColor(white: 1, alpha: isOn ? 0.14 : 0.05).cgColor
-        invalidateIntrinsicContentSize()
     }
 }
 
