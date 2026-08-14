@@ -161,6 +161,52 @@ public enum RecordMath {
     public static func outputPointLength(pixels: Int, pointScale: CGFloat) -> Int {
         max(1, Int((CGFloat(pixels) / pointScale).rounded()))
     }
+
+    /// 從候選 scale 依序挑第一個 **>0** 者;全都無效（nil 或 ≤0）回 `fallback`。
+    /// 多螢幕審查 #1/#5：擷取縮放優先用實際 `pointPixelScale`（擷取處決定像素的那個值）,退回螢幕
+    /// `backingScaleFactor`;而 stale/斷線的 `NSScreen` 可能回 0 → 直接拿去除會 `Int(inf)` crash,
+    /// 所以一律要求 >0 才採用（舊 `?? 2` 只擋 nil、不擋 0）。純函式,可測。
+    public static func firstPositiveScale(_ candidates: [CGFloat?], fallback: CGFloat = 2) -> CGFloat {
+        for c in candidates { if let c, c > 0 { return c } }
+        return fallback
+    }
+
+    /// done 卡定位的螢幕存活判定（純）：目標螢幕號 `target` 仍在 live 清單內才沿用,否則呼叫端改用
+    /// 選區中心重新解析。多螢幕審查 #2：`self.screen` 是 arm 當下抓的 `NSScreen`,從不失效重抓——
+    /// 拔掉錄影螢幕後它變 stale,`visibleFrame` 指向已不存在的座標,done 卡會落到畫面外。
+    public static func screenStillLive(target: Int?, live: [Int]) -> Bool {
+        guard let target else { return false }
+        return live.contains(target)
+    }
+}
+
+/// 錄製健康監看的純狀態機（`RecordSession.clockTick` 每 0.5s 餵一次觀測）：
+/// - `writerFailed`（`AVAssetWriter` 已 `.failed`——磁碟滿/外接碟斷線；SCStream 不會因此停,
+///   `onStreamError` 收不到）→ 立即回 `.writerFailed`,呼叫端在**錄製中**就停止收檔並告知,
+///   而不是等到 stop 才發現整檔已毀、只 beep+刪檔（長錄審查 #1 CONFIRMED）。
+/// - `behind`（`isReadyForMoreMediaData` 長時間 false——外接碟寫入跟不上）持續達 `sustainedSeconds`
+///   → 一次性回 `.backpressure` 警告（不停錄,只提示;`warned` 確保整段錄製只提醒一次,不洗版）。
+///
+/// 時間判定用注入的 `now`（`systemUptime`）,不碰時鐘;無副作用,可單元測試（比照 `MicSilenceTracker`）。
+public struct RecordHealthMonitor: Equatable {
+    public enum Action: Equatable { case ok, writerFailed, backpressure }
+    private var behindSince: Double?
+    private var warned = false
+    public init() {}
+
+    @discardableResult
+    public mutating func evaluate(writerFailed: Bool, behind: Bool, now: Double,
+                                  sustainedSeconds: Double = 3.0) -> Action {
+        if writerFailed { return .writerFailed }
+        guard behind else { behindSince = nil; return .ok }   // 一旦跟上就清計時,下次落後重新累計
+        let since = behindSince ?? now
+        behindSince = since
+        if now - since >= sustainedSeconds && !warned {
+            warned = true
+            return .backpressure
+        }
+        return .ok
+    }
 }
 
 /// 麥克風「無訊號」防呆的純狀態機：連續靜音**達 threshold 秒**才回報應顯示警告

@@ -366,9 +366,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             // 這條同步 router 只處理 .cancelled／.failed／.saved+動畫截圖（都不需搬檔，saveSucceeded 恆 false）。
             let category: RecordFinishRouter.Category
             var previewURL: URL?         // 動畫截圖用的暫存母帶
+            var failedDetail = "錄製失敗，未產生檔案"
             switch outcome {
             case .cancelled: category = .cancelled
-            case .failed:    category = .failed
+            case .failed(let reason):
+                category = .failed
+                // 磁碟中途失敗（clockTick 健康輪詢在錄製中就抓到,長錄審查 #1）給具體原因,
+                // 別讓使用者只看到泛用「未產生檔案」而不知道是磁碟滿/斷線。
+                if reason.hasPrefix("disk") { failedDetail = "磁碟寫入失敗（可能已滿或斷線），錄影已停止" }
             case .saved(let tempURL):
                 category = .saved
                 if direct {
@@ -386,7 +391,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             case .dismissOnly:
                 self.recordSession.presentTransientFailure("動畫截圖失敗，未產生檔案")   // 審查 #6：補視覺提示（beep 照舊）
             case .presentDoneFailed:
-                self.recordSession.presentDoneFailed(detail: "錄製失敗，未產生檔案",
+                self.recordSession.presentDoneFailed(detail: failedDetail,
                                                      saveDirectory: self.recordSaveDirectoryURL())
                 UITestServer.shared?.emit("captureFailed", ["reason": "recordFinish"])
             case .presentDone:

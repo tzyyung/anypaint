@@ -99,4 +99,38 @@ nonisolated func exportFormatTests() {
     T.checkTrue("silence: 重新靜音 t=3→重新計時,不警告", !tracker.update(rms: 0.0001, now: 3, threshold: 2))
     T.checkTrue("silence: t=4 才 1s<2s→不警告", !tracker.update(rms: 0.0001, now: 4, threshold: 2))
     T.checkTrue("silence: t=5 達 2s→警告", tracker.update(rms: 0.0001, now: 5, threshold: 2))
+
+    // RecordMath.firstPositiveScale（多螢幕審查 #1/#5：擷取縮放優先 pointPixelScale,退回 backingScale,
+    // 全無效回 fallback;stale/斷線螢幕回 0 必須被擋掉,否則除法 Int(inf) crash）
+    T.checkEq("scale: 首個 >0 者", RecordMath.firstPositiveScale([nil, 3, 2]), 3)
+    T.checkEq("scale: 跳過 0（stale 螢幕）", RecordMath.firstPositiveScale([0, 2.5]), 2.5)
+    T.checkEq("scale: 跳過負值", RecordMath.firstPositiveScale([-1, 1.5]), 1.5)
+    T.checkEq("scale: 全 nil/0 → fallback", RecordMath.firstPositiveScale([nil, 0]), 2)
+    T.checkEq("scale: 自訂 fallback", RecordMath.firstPositiveScale([nil], fallback: 1), 1)
+    T.checkEq("scale: pointPixelScale 優先於 backingScale", RecordMath.firstPositiveScale([2, 3]), 2)
+
+    // RecordMath.screenStillLive（多螢幕審查 #2：done 卡定位螢幕存活判定,拔掉錄影螢幕後退回選區中心）
+    T.checkTrue("screenLive: 仍在清單→沿用", RecordMath.screenStillLive(target: 7, live: [1, 7, 3]))
+    T.checkTrue("screenLive: 已拔除→退回", !RecordMath.screenStillLive(target: 7, live: [1, 3]))
+    T.checkTrue("screenLive: target nil→退回", !RecordMath.screenStillLive(target: nil, live: [7]))
+    T.checkTrue("screenLive: 空清單→退回", !RecordMath.screenStillLive(target: 7, live: []))
+
+    // RecordHealthMonitor（長錄審查 #1/#2）：writer 失敗立即停;背壓持續達門檻才一次性警告
+    var health = RecordHealthMonitor()
+    T.checkEq("health: 正常→ok", health.evaluate(writerFailed: false, behind: false, now: 0), .ok)
+    // writer 失敗（磁碟滿/斷線）不看背壓、不看時間,立即回 writerFailed
+    T.checkEq("health: writer 失敗→立即停", health.evaluate(writerFailed: true, behind: false, now: 1), .writerFailed)
+    // 背壓要「持續」達門檻才警告：t=0 開始落後,t<3 不警告
+    var h2 = RecordHealthMonitor()
+    T.checkEq("health: 背壓 t=0 開始→尚未警告", h2.evaluate(writerFailed: false, behind: true, now: 0, sustainedSeconds: 3), .ok)
+    T.checkEq("health: 背壓 t=2 <3s→不警告", h2.evaluate(writerFailed: false, behind: true, now: 2, sustainedSeconds: 3), .ok)
+    T.checkEq("health: 背壓 t=3 達門檻→警告", h2.evaluate(writerFailed: false, behind: true, now: 3, sustainedSeconds: 3), .backpressure)
+    // 警告只發一次（不洗版）：持續落後也不再重複警告
+    T.checkEq("health: 已警告→不重複", h2.evaluate(writerFailed: false, behind: true, now: 5, sustainedSeconds: 3), .ok)
+    // 一旦跟上就清計時,下次落後重新累計
+    var h3 = RecordHealthMonitor()
+    T.checkEq("health: 落後 t=0", h3.evaluate(writerFailed: false, behind: true, now: 0, sustainedSeconds: 3), .ok)
+    T.checkEq("health: t=1 跟上→清計時", h3.evaluate(writerFailed: false, behind: false, now: 1, sustainedSeconds: 3), .ok)
+    T.checkEq("health: t=2 再落後→重新計,不因舊計時誤警告", h3.evaluate(writerFailed: false, behind: true, now: 2, sustainedSeconds: 3), .ok)
+    T.checkEq("health: t=5 才達 3s→警告", h3.evaluate(writerFailed: false, behind: true, now: 5, sustainedSeconds: 3), .backpressure)
 }

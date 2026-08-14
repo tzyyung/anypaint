@@ -57,6 +57,11 @@ public final class RecordSession {
     private let micProbe = MicLevelMonitor()
     /// 無訊號防呆的純狀態機（連續靜音達門檻才警告）。待命/錄製各重置一次。
     private var silenceTracker = MicSilenceTracker()
+    /// 錄製健康監看的純狀態機（磁碟滿/斷線→立即停、外接碟慢→一次性警告）。每次錄製重置。
+    private var health = RecordHealthMonitor()
+    /// 本次錄製是否因 writer 中途失敗（磁碟滿/斷線）而停——決定收檔失敗給使用者的專屬文案 reason。
+    /// 每次 `startRecording` 重置;僅 `stopRecording` 的失敗分支讀。
+    private var writerFailedMidRecording = false
 
     public init(output: RecordOutputService) { self.output = output }
 
@@ -234,6 +239,8 @@ public final class RecordSession {
         state = .recording
         stopStandbyMic()                       // 待命試音錶讓位給 RecordMicSource（同一顆裝置不重複開）
         silenceTracker = MicSilenceTracker()   // 錄製階段重新計無訊號
+        health = RecordHealthMonitor()         // 錄製健康監看重置（磁碟/背壓）
+        writerFailedMidRecording = false
         durationLimit = hud.durationSeconds
         // 錄製中電平回呼（RecordMicSource→這裡→HUD）。無條件設定：mic 關閉時 micSource 為 nil,回呼自然不觸發。
         // 在 Task 外、MainActor 上設屬性,避開把 @MainActor 閉包穿過 async 的型別推斷歧義。
@@ -321,7 +328,22 @@ public final class RecordSession {
         guard state == .recording else { return }
         let elapsed = ProcessInfo.processInfo.systemUptime - recordingStartedAt
         hud.updateClock(elapsed: elapsed, limit: durationLimit)
-        if let limit = durationLimit, elapsed >= limit { stopRecording() }  // 倒數到＝正常停止
+        if let limit = durationLimit, elapsed >= limit { stopRecording(); return }  // 倒數到＝正常停止
+        // 錄製健康輪詢（長錄審查 #1/#2）：writer 中途失敗（磁碟滿/斷線,SCStream 不會停→onStreamError
+        // 收不到）在錄製中就發現並停止,不必等 stop 才 beep+刪整檔;外接碟持續跟不上→一次性提示。
+        frameSource.pollHealth { [weak self] failed, behind in
+            guard let self, self.state == .recording else { return }
+            switch self.health.evaluate(writerFailed: failed, behind: behind,
+                                        now: ProcessInfo.processInfo.systemUptime) {
+            case .ok:
+                break
+            case .writerFailed:
+                self.writerFailedMidRecording = true   // 收檔失敗分支據此給磁碟專屬文案
+                self.stopRecording()                   // 走既有收尾（失敗態卡片會顯示磁碟訊息）
+            case .backpressure:
+                self.hud.showTransientNotice("⚠️ 磁碟寫入跟不上，畫面可能卡頓")
+            }
+        }
     }
 
     /// 停止（手動鈕／倒數到／看門狗／stream error 共用同一條，設計文件 §2）。
@@ -333,7 +355,7 @@ public final class RecordSession {
         // 不是單純取消看門狗——重新 arm 一顆 finishing 專用的（見 armWatchdog 的 .finishing
         // 分支與 Self.finishingWatchdogSeconds 的註解）。
         armWatchdog(seconds: Self.finishingWatchdogSeconds)
-        let scale = screen?.backingScaleFactor ?? 2
+        let scale = captureScaleForDone()
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -346,8 +368,10 @@ public final class RecordSession {
             } catch {
                 guard self.state == .finishing else { return }
                 self.teardownKeepingHUD()
-                self.onFinished?(.failed(reason: "finishFailed"), scale)
-                UITestServer.shared?.emit("recordingFailed", ["reason": "finishFailed: \(error)"])
+                // 磁碟中途失敗（clockTick 健康輪詢抓到）給專屬 reason,讓失敗卡片顯示磁碟訊息而非泛用文案。
+                let reason = self.writerFailedMidRecording ? "diskFailed" : "finishFailed"
+                self.onFinished?(.failed(reason: reason), scale)
+                UITestServer.shared?.emit("recordingFailed", ["reason": "\(reason): \(error)"])
                 // NSLog 在未公證自簽 app 撈不到（CLAUDE.md 診斷原則）——不論哪種失敗都要有
                 // 使用者感知得到的回饋，否則整段錄製「憑空消失」使用者卻毫無所覺。
                 if case RecordError.noFrames = error { NSSound.beep() }   // 一格都沒錄到
@@ -459,7 +483,29 @@ public final class RecordSession {
     /// 動畫截圖失敗：HUD 短暫顯示提示後自動收（審查 #6，取代只有 beep）。
     public func presentTransientFailure(_ reason: String) { hud.showTransientFailure(reason) }
 
+    /// done 卡定位螢幕：`self.screen` 仍在線上才用它,否則以選區中心重新解析（多螢幕審查 #2：
+    /// arm 當下抓的 `NSScreen` 從不重抓,拔掉錄影螢幕後會 stale,`visibleFrame` 指向已不存在的座標
+    /// → done 卡落到畫面外;`screen ?? …` 舊寫法永遠拿到非 nil 的 stale 值,fallback 從不觸發）。
     private func lastScreenForDone() -> NSScreen? {
-        screen ?? Self.screen(containing: lastRecordRegion)
+        if let s = screen, Self.isLive(s) { return s }
+        return Self.screen(containing: lastRecordRegion)
+    }
+
+    /// `NSScreen` 是否仍是目前連著的螢幕之一（用 `NSScreenNumber` 比對,不用物件識別——重接的
+    /// 螢幕可能是新物件）。查不到號碼時退回物件包含判定。
+    private static func isLive(_ s: NSScreen) -> Bool {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        guard let n = (s.deviceDescription[key] as? NSNumber)?.intValue else {
+            return NSScreen.screens.contains(s)
+        }
+        let live = NSScreen.screens.compactMap { ($0.deviceDescription[key] as? NSNumber)?.intValue }
+        return RecordMath.screenStillLive(target: n, live: live)
+    }
+
+    /// done/preview 用的擷取縮放：優先用實際擷取的 `pointPixelScale`（決定像素的那個值,擷取處存下）,
+    /// 退回螢幕 `backingScaleFactor`;兩者都要求 >0 才採用（多螢幕審查 #1/#5：不同框架的量混合 DPI
+    /// 可能不等;stale/斷線螢幕可能回 0 → 防 `Int(inf)`）。
+    private func captureScaleForDone() -> CGFloat {
+        RecordMath.firstPositiveScale([frameSource.lastCaptureScale, screen?.backingScaleFactor])
     }
 }

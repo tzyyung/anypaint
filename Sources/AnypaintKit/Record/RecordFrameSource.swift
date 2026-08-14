@@ -18,11 +18,18 @@ public enum RecordError: Error {
 /// 賦值給 `RecordFrameSource.box` 之後，這個類別的**所有**成員只能在呼叫端的單一序列佇列
 /// （`RecordFrameSource.sampleQueue`）上被觸碰：`append` 在 stream handler 裡（已派進該佇列）
 /// 呼叫；`finish`／`cancel` 由 `stopAndFinish`／`abort` 用 `sampleQueue.async` 派工呼叫，不直接
-/// 在 MainActor 上碰內部狀態。MainActor 建構、交棒給 sampleQueue 之間的 happens-before 靠
-/// `self.box = boxLocal` 這次賦值本身（Swift 的 memory model 保證單一變數賦值與之後任何讀取
-/// 之間有序，不需要額外的鎖或 barrier）。內部沒有任何跨佇列直接讀寫的路徑，因此把整個型別
-/// 標成 Sendable 是安全的——真正的隔離邊界在呼叫端（誰負責派工進 sampleQueue），不是靠編譯器
-/// 逐一檢查每個 stored property。
+/// 在 MainActor 上碰內部狀態。
+///
+/// **MainActor 建構、交棒給 sampleQueue 之間的 happens-before 靠 GCD 的 memory barrier，不是靠
+/// 「單一變數賦值本身有序」**（長錄審查 #4 訂正——後者是錯的推理：一個 `var` 在 A 執行緒寫、
+/// B 執行緒無同步讀，就算只有一個字組寬也是 data race，跟是不是單一變數無關）。真正成立的理由是：
+/// 寫 `self.box = boxLocal`（MainActor）happens-before stream handler 的讀，因為兩者之間隔著
+/// `await stream.startCapture()` 與「SCK 把 handler 派進 sampleQueue」這兩道 barrier；nil 寫入則
+/// 一律在 `await stream.stopCapture()`（保證不再有 handler）之後才做。內部沒有任何**繞過這些
+/// barrier**的跨佇列直接讀寫，因此把整個型別標成 Sendable 是安全的——真正的隔離邊界在呼叫端
+/// （誰負責派工進 sampleQueue、誰保證 stopCapture 已收手），不是靠編譯器逐一檢查每個 stored
+/// property。之後若有人新增一條「不經佇列跳轉就讀 box」的路徑（例如圖方便直接在 MainActor 讀），
+/// 這個 Sendable 豁免就不再成立——不要那樣做。
 ///
 /// 公開（`public`）僅為了讓 selftest（獨立 target，只能走 `AnypaintKit` 的公開介面）做端到端
 /// 驗證；**唯一合法呼叫者是 `RecordFrameSource`**，其餘呼叫端若要用這個類別，必須自備跟
@@ -35,6 +42,9 @@ public final class WriterBox: @unchecked Sendable {
     /// 保留最後一格供停止時補尾。**永久佔掉 SCK IOSurface 池一張**——queueDepth 必須 ≥ 5
     /// （nonstrict 原註解；本 stream 設 6）。
     private var lastSampleBuffer: CMSampleBuffer?
+    /// 最近一次**影像**格 append 是否因 `isReadyForMoreMediaData=false` 被丟（sampleQueue 上讀寫）。
+    /// 供 `healthSnapshot` 當「寫入跟不上」的即時提示——外接碟慢時會持續為 true（長錄審查 #2）。
+    private var lastScreenAppendDropped = false
     /// `finish`／`cancel` 第一次被呼叫就鎖住，之後兩者皆變 no-op；`append` 也一併擋掉。
     /// 補的是一個實機會撞到的競態：`RecordFrameSource.start()` 的 await 期間被 `abort()`
     /// 打斷時，`abort()` 與 `start()` 自己的收尾分支可能對同一個 box 各呼叫一次 cancel()——
@@ -82,9 +92,18 @@ public final class WriterBox: @unchecked Sendable {
             sessionStarted = true
             writer.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(sb))
         }
-        guard input.isReadyForMoreMediaData else { return }  // 契約：丟格，不阻塞
+        guard input.isReadyForMoreMediaData else { lastScreenAppendDropped = true; return }  // 契約：丟格，不阻塞
+        lastScreenAppendDropped = false
         input.append(sb)
         lastSampleBuffer = sb
+    }
+
+    /// sampleQueue 上讀：`failed`＝writer 已 `.failed`（磁碟滿/斷線——SCStream 不會因此停）;
+    /// `behind`＝最近一格因來不及被丟（外接碟寫入跟不上）。供 `RecordFrameSource.pollHealth`
+    /// 在錄製中週期輪詢——failed 讓 session 在錄製中就停止收檔,不必等到 stop 才發現整檔已毀
+    /// （長錄審查 #1）。`AVAssetWriter.status` 可安全查詢,此處只在 sampleQueue 上讀。
+    var healthSnapshot: (failed: Bool, behind: Bool) {
+        (writer.status == .failed, lastScreenAppendDropped)
     }
 
     /// sampleQueue 上呼叫；gate 同 append（isTerminal／status），session gate 交給 audio.append。
@@ -193,6 +212,11 @@ public final class RecordFrameSource: NSObject {
     private var stream: SCStream?
     private var pendingStop = false
     private var outputURL: URL?
+    /// 本次擷取的實際 `SCContentFilter.pointPixelScale`（**決定母帶像素的那個值**）,於 `start()` 建好
+    /// filter 後存下。呼叫端（`RecordSession`）收尾時用它換算預覽/GIF/剪貼簿尺寸,**不要**改用
+    /// `NSScreen.backingScaleFactor`——多螢幕審查 #1：兩者是不同框架的不同量,混合 DPI/鏡像下可能不等,
+    /// 用錯會讓輸出尺寸整個縮放跑掉。nil＝這次還沒真的建到 filter（早退失敗路徑）。
+    public private(set) var lastCaptureScale: CGFloat?
     private let sampleQueue = DispatchQueue(label: "anypaint.record.frames")
     /// 只在 sampleQueue 上讀寫（同 `box` 的豁免理由：這個 handler 只在單一序列佇列上跑，
     /// 天然無競爭）。只記錄「第一個音訊格」，之後恆為 true，避免每格都重算 ASBD。
@@ -291,6 +315,7 @@ public final class RecordFrameSource: NSObject {
         let filter = SCContentFilter(display: display, excludingApplications: selfApps,
                                      exceptingWindows: excepting)
         let scale = CGFloat(filter.pointPixelScale)
+        self.lastCaptureScale = scale   // 多螢幕審查 #1：把真正的擷取縮放留給收尾換算,取代 backingScaleFactor
         let geo = ScrollCoords.streamGeometry(selectionGlobal: selectionGlobal,
                                               screenFrameGlobal: screen.frame, scale: scale)
         let config = Self.makeStreamConfiguration(sourceRect: geo.sourceRect,
@@ -442,6 +467,18 @@ public final class RecordFrameSource: NSObject {
                 if let url { try? FileManager.default.removeItem(at: url) }
                 cont.resume()
             }
+        }
+    }
+
+    /// 錄製中健康輪詢（`RecordSession.clockTick` 每 tick 呼叫一次）：在 `sampleQueue`（唯一合法觸碰
+    /// writer 的佇列）上讀 `WriterBox.healthSnapshot`,再跳回 MainActor 回傳 `failed`／`behind`。
+    /// `box` 為 nil（尚未 start／已收尾）→ 不回呼。**唯讀**,不改任何狀態,對錄製零干擾。
+    /// 讓磁碟滿/斷線（writer `.failed`,SCStream 不會停）在錄製中就被發現（長錄審查 #1）。
+    public func pollHealth(_ cb: @escaping @MainActor (_ failed: Bool, _ behind: Bool) -> Void) {
+        sampleQueue.async { [box] in
+            guard let box else { return }
+            let snap = box.healthSnapshot
+            Task { @MainActor in cb(snap.failed, snap.behind) }
         }
     }
 }
