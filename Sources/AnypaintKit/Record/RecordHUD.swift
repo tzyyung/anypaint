@@ -75,7 +75,7 @@ public final class RecordHUDController: NSObject {
     private let clockLabel = NSTextField(labelWithString: "")
     private let micChip = IconToggle()
     private let systemAudioChip = IconToggle()
-    private let levelMeter = LevelMeterView(frame: NSRect(x: 0, y: 0, width: 46, height: 8))
+    private let levelMeter = LevelMeterView(frame: NSRect(x: 0, y: 0, width: 62, height: 14))
     private let gearButton = NSButton(title: "⚙", target: nil, action: nil)
     private let primaryButton = NSButton(title: "開始", target: nil, action: nil)
     private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
@@ -342,8 +342,8 @@ public final class RecordHUDController: NSObject {
         configureChip(cursorChip, onTitle: "👆 游標", offTitle: "👆 游標", action: #selector(cursorToggled))
 
         levelMeter.translatesAutoresizingMaskIntoConstraints = false
-        levelMeter.widthAnchor.constraint(equalToConstant: 46).isActive = true
-        levelMeter.heightAnchor.constraint(equalToConstant: 8).isActive = true
+        levelMeter.widthAnchor.constraint(equalToConstant: 62).isActive = true
+        levelMeter.heightAnchor.constraint(equalToConstant: 14).isActive = true
         levelMeter.alphaValue = 0   // 永遠佔位（固定 46px 槽），開麥克風才顯形——見 setMicEnabled
 
         gearButton.bezelStyle = .rounded

@@ -184,14 +184,18 @@ public final class RecordSession {
         hud.setRegion(widthPx: Int((selection.width * scale).rounded()),
                       heightPx: Int((selection.height * scale).rounded()))
         // 已 armed（使用者在調框）→ 只跟著更新 HUD 位置，不可重跑進場流程。
-        if state != .armed {
+        let justArmed = (state != .armed)
+        if justArmed {
             state = .armed
             hud.onStart = { [weak self] in self?.startRecording() }
             // 使用者在 HUD 改錄音裝置/開關 → 重掛待命試音錶（讀新設定）。
             hud.onOptionsChanged = { [weak self] in self?.startStandbyMic() }
-            startStandbyMic()   // 待命試音錶：先讓使用者看到麥克風有沒有聲音再決定開始
         }
+        // 順序關鍵：先 show（首次會 buildPanel，其中 levelMeter.alphaValue=0 重設），**再** startStandbyMic
+        // （setMicEnabled 設 alpha=1）。反過來的話首次 arm 時 buildPanel 會把剛設好的 alpha 洗掉、
+        // 電平表被隱藏（互動時因面板跨 session 重用、不再 buildPanel 而僥倖沒露餡；首次啟動就會中）。
         hud.show(near: selection, on: scr, mode: .armed)   // 冪等：調框只更新位置（也順便清掉太小訊息）
+        if justArmed { startStandbyMic() }                 // 待命試音錶：讓使用者看麥克風有沒有聲音
     }
 
     /// 待命麥克風試音錶（Task B2）：依設定的錄影麥克風裝置掛 MicLevelMonitor,餵 HUD 電平表＋無訊號警告。

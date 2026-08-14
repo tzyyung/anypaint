@@ -41,42 +41,40 @@ public final class LevelMeterView: NSView {
     }
 
     public override func draw(_ dirtyRect: NSRect) {
-        // 自檢判亮格＝「alpha>0.3 且 rgb 和>0.5」。硬約束：
-        //  ① 底軌與未亮格一律純黑（rgb 恆 0）——踩過的坑：未亮格用半透明白疊黑背景，合成後
-        //     rgb≈0.77、alpha≈0.31 同時跨過兩門檻＝假亮格（2026-08-13 審查：quiet 79% 誤判）。
-        //  ② 外框用白但 **alpha 0.28（< 0.3 門檻）**——空表也看得出是個「表」，又不被自檢當亮格。
-        //     自檢只驗 loud>quiet，外框是恆定像素，本來就不影響大小關係，壓門檻只是雙保險。
+        // 自檢判「有電平」＝**彩色格**（飽和度 max-min > 0.25），不是「偏亮像素」。這讓外觀與判準脫鉤：
+        //  · 亮格用飽和的綠/黃/紅（會被算）；未亮格/外框/peak 用**低飽和的灰白**（不會被算）。
+        //  · 因此未亮格可以放心用「可見的實心灰」——空表也一眼看得出是一排格子；舊判準（rgb 和>0.5）
+        //    會把任何偏亮像素當亮格，逼未亮格只能純黑（真機 Retina 下看不見），才是原本「黑塊」的病根。
+        //  （2026-08-13 舊坑「半透明白疊黑＝假亮格」在飽和度判準下自然消失：白是低飽和，不會被算。）
         let frame = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let radius: CGFloat = 2
-        let track = NSBezierPath(roundedRect: frame, xRadius: radius, yRadius: radius)
-
-        NSColor.black.withAlphaComponent(0.28).setFill()   // 底軌（純黑）
+        let track = NSBezierPath(roundedRect: frame, xRadius: 3, yRadius: 3)
+        NSColor.black.withAlphaComponent(0.5).setFill()    // 底軌（純黑，加深讓灰格更跳）
         track.fill()
-        NSColor.white.withAlphaComponent(0.28).setStroke() // 外框（白低透明，空表可辨識）
+        NSColor.white.withAlphaComponent(0.35).setStroke() // 外框（白，低飽和＝自檢不算亮格）
         track.lineWidth = 1
         track.stroke()
 
         guard totalBars > 0 else { return }
-        let inner = frame.insetBy(dx: 1.5, dy: 1.5)        // 內縮，格子不貼到外框
-        let gap: CGFloat = 1
+        let inner = frame.insetBy(dx: 2, dy: 2)
+        let gap: CGFloat = 1.5
         let barWidth = (inner.width - gap * CGFloat(totalBars - 1)) / CGFloat(totalBars)
         guard barWidth > 0 else { return }
 
         for i in 0..<totalBars {
             let x = inner.minX + CGFloat(i) * (barWidth + gap)
             let barRect = NSRect(x: x, y: inner.minY, width: barWidth, height: inner.height)
+            let cell = NSBezierPath(roundedRect: barRect, xRadius: 1, yRadius: 1)
 
             let isPeakBar = peakBar > 0 && i == peakBar - 1
-            let color: NSColor
             if isPeakBar {
-                color = NSColor.white               // peak-hold：亮白標最高點
+                NSColor.white.setFill(); cell.fill()                       // peak-hold：亮白標最高點
             } else if i < litBars {
-                color = Self.zoneColor(for: i, totalBars: totalBars)
+                Self.zoneColor(for: i, totalBars: totalBars).setFill(); cell.fill()   // 亮格：分區色
             } else {
-                color = NSColor.black.withAlphaComponent(0.5)   // 未亮格：純黑（不含白，不誤判）
+                // 未亮格：**實心可見灰**——空表也一眼看得出是一排格子（真機 Retina 下細描邊太淡看不見，
+                // 實心才夠清楚）。灰白是**低飽和**色，自檢改用飽和度判亮格後不會被誤算，故可放心用亮灰。
+                NSColor.white.withAlphaComponent(0.4).setFill(); cell.fill()
             }
-            color.setFill()
-            NSBezierPath(rect: barRect).fill()
         }
     }
 

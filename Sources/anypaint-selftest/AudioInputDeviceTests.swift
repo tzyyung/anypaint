@@ -55,8 +55,14 @@ nonisolated func levelMeterViewTests() {
             v.cacheDisplay(in: v.bounds, to: rep)
             var lit = 0
             for x in 0..<rep.pixelsWide { for y in 0..<rep.pixelsHigh {
-                if let c = rep.colorAt(x: x, y: y), c.alphaComponent > 0.3,
-                   (c.redComponent + c.greenComponent + c.blueComponent) > 0.5 { lit += 1 }
+                // 「有電平」＝**彩色**格（綠/黃/紅，飽和度高），不是「任何偏亮像素」。
+                // 舊判準用 rgb 和>0.5＝任何偏亮就算，逼得空格只能純黑（真機看不見）；改成看飽和度
+                // （max-min）＝只認彩色亮格，空格/peak 的灰白（低飽和）一律不算，空格才能用可見的灰。
+                if let c = rep.colorAt(x: x, y: y), c.alphaComponent > 0.3 {
+                    let r = c.redComponent, g = c.greenComponent, b = c.blueComponent
+                    let mx = max(r, g, b), mn = min(r, g, b)
+                    if mx > 0.3 && (mx - mn) > 0.25 { lit += 1 }
+                }
             } }
             return lit
         }
