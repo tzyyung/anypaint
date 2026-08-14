@@ -37,6 +37,8 @@ public final class ScrollSelectionOverlayController {
     public var onSelectionLocked: ((CGRect, NSScreen) -> Void)?
     public var onSelectionChanged: ((CGRect) -> Void)?
     public var onCancelRequested: (() -> Void)?
+    /// 按 R 轉交截圖（錄影框選才掛；滾動截圖不掛＝R 無作用）。
+    public var onReshootRequested: (() -> Void)?
     public private(set) var selectionGlobal: CGRect = .zero
 
     private var window: ScrollSelectionWindow?
@@ -62,6 +64,7 @@ public final class ScrollSelectionOverlayController {
             self.onSelectionChanged?(global)
         }
         window.selectionView?.onCancelRequested = { [weak self] in self?.onCancelRequested?() }
+        window.selectionView?.onReshootRequested = { [weak self] in self?.onReshootRequested?() }
         // anypaint 是選單列 app（.accessory/LSUIElement），平時非前景。nonactivating panel 在
         // 非前景 app 下 makeKeyAndOrderFront 不會真正成為系統 key window → keyDown/Esc 丟失、
         // 事件路由不可靠。必須先 activate 把 app 帶到前景（對齊 SelectionOverlayController.swift:75，
@@ -144,6 +147,8 @@ final class ScrollSelectionView: NSView {
     var onSelectionLocked: ((CGRect) -> Void)?
     var onSelectionChanged: ((CGRect) -> Void)?
     var onCancelRequested: (() -> Void)?
+    /// 按 R：把當下畫面（含工具）轉交截圖流程（錄影框選才接；滾動截圖不設此回呼＝R 無作用）。
+    var onReshootRequested: (() -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -233,6 +238,8 @@ final class ScrollSelectionView: NSView {
         guard mode != .capturing else { super.keyDown(with: event); return }
         if event.keyCode == 53 {   // Esc（capturing 後 Session 接手，overlay 不再處理）
             onCancelRequested?()
+        } else if event.charactersIgnoringModifiers?.lowercased() == "r", onReshootRequested != nil {
+            onReshootRequested?()   // R：轉交截圖（錄影框選才有掛，滾動截圖無此回呼＝不觸發）
         } else {
             super.keyDown(with: event)
         }

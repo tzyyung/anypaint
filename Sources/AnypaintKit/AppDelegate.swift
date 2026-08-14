@@ -120,6 +120,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.beginRecord(direct: true, rect: self.recordSession.lastRecordRegion, autoStart: false)
         }
+        // 錄影框選中按 R：把當下畫面（含工具）轉成截圖，之後截圖與錄影都解除。
+        recordSession.onReshootToScreenshot = { [weak self] in self?.reshootRecordToScreenshot() }
 
         // 全域快鍵（可在設定頁更改；底層為 Carbon，免輔助使用權限）
         KeyboardShortcuts.onKeyDown(for: .capture) { [weak self] in self?.beginCapture() }
@@ -150,42 +152,72 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             defer { self.captureInFlight = false }
             do {
                 let snapshots = try await capturer.captureAllDisplays()
-                overlayController.present(
-                    snapshots: snapshots,
-                    onSelect: { [weak self] image in
-                        self?.pinboard.copy(image: image)
-                        self?.output.autoSaveIfEnabled(image: image, vars: vars)
-                    },
-                    onSave: { [weak self] image in
-                        self?.pinboard.copy(image: image)   // 剪貼簿先有——寫檔失敗也不白截（spec）
-                        self?.output.saveExpanding(template: AppSettings.quickSavePathTemplate,
-                                                    image: image, vars: vars, quiet: false)
-                        self?.output.autoSaveIfEnabled(image: image, vars: vars)
-                    },
-                    onSaveAs: { [weak self] image in
-                        self?.pinboard.copy(image: image)   // 對話框取消也不白截（spec）
-                        self?.output.saveWithPanel(image: image, vars: vars)
-                        self?.output.autoSaveIfEnabled(image: image, vars: vars)
-                    },
-                    onOpen: { [weak self] image in
-                        self?.pinboard.copy(image: image)   // 剪貼簿先有——寫檔或開啟失敗也不白截
-                        self?.output.saveAndOpen(image: image, vars: vars)
-                        self?.output.autoSaveIfEnabled(image: image, vars: vars)
-                    },
-                    onRecognizeText: { [weak self] image, frame in
-                        self?.recognizeText(in: image, near: frame)
-                    },
-                    onPin: { [weak self] image, frame in
-                        self?.pinboard.copy(image: image)                    // 決策：貼＝同時複製
-                        self?.pinController.pin(image: image, frame: frame)
-                        self?.output.autoSaveIfEnabled(image: image, vars: vars)
-                    },
-                    onCancel: { }
-                )
+                presentCaptureOverlay(snapshots: snapshots, vars: vars)
             } catch CaptureError.noPermission {
                 showPermissionAlert()
             } catch {
                 NSLog("anypaint: 擷取失敗 \(error)")
+                NSSound.beep()
+            }
+        }
+    }
+
+    /// 用一組快照起截圖框選 overlay＋接好所有結果處理器（`beginCapture` 與「錄影框選按 R 轉截圖」共用，
+    /// 不複製兩份 handler）。
+    private func presentCaptureOverlay(snapshots: [DisplaySnapshot], vars: [String: String]) {
+        overlayController.present(
+            snapshots: snapshots,
+            onSelect: { [weak self] image in
+                self?.pinboard.copy(image: image)
+                self?.output.autoSaveIfEnabled(image: image, vars: vars)
+            },
+            onSave: { [weak self] image in
+                self?.pinboard.copy(image: image)   // 剪貼簿先有——寫檔失敗也不白截（spec）
+                self?.output.saveExpanding(template: AppSettings.quickSavePathTemplate,
+                                            image: image, vars: vars, quiet: false)
+                self?.output.autoSaveIfEnabled(image: image, vars: vars)
+            },
+            onSaveAs: { [weak self] image in
+                self?.pinboard.copy(image: image)   // 對話框取消也不白截（spec）
+                self?.output.saveWithPanel(image: image, vars: vars)
+                self?.output.autoSaveIfEnabled(image: image, vars: vars)
+            },
+            onOpen: { [weak self] image in
+                self?.pinboard.copy(image: image)   // 剪貼簿先有——寫檔或開啟失敗也不白截
+                self?.output.saveAndOpen(image: image, vars: vars)
+                self?.output.autoSaveIfEnabled(image: image, vars: vars)
+            },
+            onRecognizeText: { [weak self] image, frame in
+                self?.recognizeText(in: image, near: frame)
+            },
+            onPin: { [weak self] image, frame in
+                self?.pinboard.copy(image: image)                    // 決策：貼＝同時複製
+                self?.pinController.pin(image: image, frame: frame)
+                self?.output.autoSaveIfEnabled(image: image, vars: vars)
+            },
+            onCancel: { }
+        )
+    }
+
+    /// 錄影框選中按 R：把**當下畫面（含錄影框選工具本身）**凍結成快照，中止錄影 session，
+    /// 用那張快照起正常截圖流程。順序關鍵：先擷取（此時錄影 overlay/HUD 還在畫面上→入鏡），
+    /// 再中止錄影，最後起截圖。截圖流程結束後兩者都已解除（截圖自行收尾、錄影已中止）。
+    private func reshootRecordToScreenshot() {
+        guard recordSession.isActive, !captureInFlight else { return }
+        captureInFlight = true
+        let vars = CaptureVars.makeVars(title: CaptureVars.currentFrontTitle())
+        Task { @MainActor in
+            defer { self.captureInFlight = false }
+            do {
+                let snapshots = try await capturer.captureAllDisplays(showsCursor: true)   // 含工具
+                recordSession.abortIfActive()          // 中止錄影（dismiss overlay+HUD、還原快鍵走 onFinished .cancelled）
+                presentCaptureOverlay(snapshots: snapshots, vars: vars)
+            } catch CaptureError.noPermission {
+                recordSession.abortIfActive()
+                showPermissionAlert()
+            } catch {
+                recordSession.abortIfActive()
+                NSLog("anypaint: 錄影轉截圖擷取失敗 \(error)")
                 NSSound.beep()
             }
         }

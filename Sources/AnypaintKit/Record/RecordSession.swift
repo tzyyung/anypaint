@@ -25,6 +25,8 @@ public final class RecordSession {
     public var onFinished: ((Outcome, CGFloat) -> Void)?
     /// 完成面板 ↺ 重錄請求（AppDelegate 用存下的 `lastRecordRegion` 走 `.reArm` 重入，不重用自動化入口）。
     public var onReRecord: (() -> Void)?
+    /// 錄影框選中按 R：把當下畫面（含工具）轉交截圖流程。AppDelegate 擷取快照後中止本 session、起截圖。
+    public var onReshootToScreenshot: (() -> Void)?
     /// 最近一次錄製的選區（全域點座標）：完成面板定位／重錄沿用（在 overlay dismiss 前存下——對抗式審查 #8）。
     public private(set) var lastRecordRegion: CGRect = .zero
     /// 最近一次錄製時長（秒）：完成面板中繼資訊用（stop 當下由 recordingStartedAt 算）。
@@ -126,6 +128,7 @@ public final class RecordSession {
             self.enterArmed(sel, scr)
         }
         overlay.onCancelRequested = { [weak self] in self?.cancel() }
+        overlay.onReshootRequested = { [weak self] in self?.onReshootToScreenshot?() }
         present()
         installEscMonitor()   // 逐行對照 ScrollCaptureSession.installEscMonitor（含註解理由）
         armWatchdog(seconds: AppSettings.overlayWatchdogSeconds)
