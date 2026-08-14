@@ -147,10 +147,23 @@ public final class RecordHUDController: NSObject {
         clockLabel.textColor = .systemRed
     }
 
+    /// 選區太小專用訊息（自檢抓到 bug 2026-08-15）：舊版把訊息塞進 clockLabel，但它壓縮優先度低、
+    /// showMessage 沒重算面板寬度→被壓成 0 寬看不見；且該狀態仍露出全部選項與「開始」（此時
+    /// onStart 沒接＝按了沒用）。改成**收起選項/開始/尺寸資訊，只留訊息＋取消**，並 applyContentSize
+    /// 讓面板容納訊息。使用者把選區拉大 → onSelectionChanged→enterArmed→configure(.armed) 會把
+    /// 這些控制項重新顯示，回到正常待命。
     public func showMessage(_ text: String) {
+        micChip.isHidden = true
+        systemAudioChip.isHidden = true
+        levelMeter.alphaValue = 0
+        gearButton.isHidden = true
+        primaryButton.isHidden = true
+        tier2Container.isHidden = true
+        infoLabel.stringValue = ""            // 別顯示上一次的 stale 尺寸
         clockLabel.isHidden = false
         clockLabel.stringValue = text
         clockLabel.textColor = .systemYellow
+        applyContentSize()
         reposition()
     }
 
@@ -279,9 +292,10 @@ public final class RecordHUDController: NSObject {
 
     public func setMicEnabled(_ enabled: Bool, deviceName: String? = nil) {
         micUIVisible = enabled
-        // 用 alpha 而非 isHidden：關麥克風時電平表只是透明，**仍佔住那 46px 槽**，
-        // 麥克風區塊寬度固定，切換不會讓系統聲/更多/開始/取消整排左右移（實機回報 2026-08-14）。
-        levelMeter.alphaValue = enabled ? 1 : 0
+        // 用 alpha 而非 isHidden：關麥克風時電平表**仍佔住那 62px 槽**（麥克風區塊寬度固定，切換
+        // 不會讓系統聲/更多/開始/取消整排左右移，實機回報 2026-08-14）。關閉時用低透明（0.28）顯示
+        // 空表，讓保留的槽看起來是「未啟用的電平表」而非莫名空白（自檢稽核補 2026-08-15）。
+        levelMeter.alphaValue = enabled ? 1 : 0.28
         if !enabled { setNoSignal(false); setMicLevel(0) }
     }
     public func setMicLevel(_ level: Float) { levelMeter.level = level }
@@ -463,6 +477,9 @@ public final class RecordHUDController: NSObject {
         gearButton.isHidden = !armed
         cancelButton.isHidden = !armed
         tier2Container.isHidden = !(armed && tier2Expanded)
+        // armed／recording 都要有主按鈕（開始/停止）；showMessage 太小狀態會把它藏起來，
+        // 這裡務必恢復——否則太小訊息之後再正常 arm，開始鈕回不來（自檢抓到的回歸 2026-08-15）。
+        primaryButton.isHidden = false
         switch mode {
         case .armed:
             // 對抗式審查 #1：syncOptionControls 會列舉音訊裝置（AVCaptureDevice DiscoverySession）＋
