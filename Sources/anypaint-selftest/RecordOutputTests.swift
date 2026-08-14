@@ -47,8 +47,13 @@ nonisolated func recordOutputTests() {
     T.checkTrue("silentFmt: 大小寫容忍 GIF", RecordOutputService.silentFormatWarning(ext: "GIF", hasAudio: true) != nil)
 
     // RecordSavedNotice.message（完成提示文案）
-    T.checkTrue("savedNotice: 成功含檔名＋Finder 提示",
+    T.checkTrue("savedNotice: 成功含檔名＋完成字樣",
                 RecordSavedNotice.message(filename: "a.mp4").contains("a.mp4")
-                && RecordSavedNotice.message(filename: "a.mp4").contains("Finder"))
+                && RecordSavedNotice.message(filename: "a.mp4").contains("完成"))
     T.checkTrue("savedNotice: 失敗訊息", RecordSavedNotice.message(filename: nil).contains("失敗"))
+
+    // AudioInputVolume.clamped（輸入音量 clamp）
+    T.checkEq("inputVol: 負→0", AudioInputVolume.clamped(-0.5), 0)
+    T.checkEq("inputVol: >1→1", AudioInputVolume.clamped(1.7), 1)
+    T.checkEq("inputVol: 範圍內原樣", AudioInputVolume.clamped(0.6), 0.6)
 }

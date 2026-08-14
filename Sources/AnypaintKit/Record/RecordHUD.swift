@@ -34,6 +34,10 @@ public final class RecordHUDController: NSObject {
     private let micCheck = NSButton(checkboxWithTitle: "麥克風", target: nil, action: nil)
     private let systemAudioCheck = NSButton(checkboxWithTitle: "系統聲", target: nil, action: nil)
     private let cursorCheck = NSButton(checkboxWithTitle: "游標", target: nil, action: nil)
+    /// 輸入音量滑桿（改系統裝置輸入增益）＋聲音設定捷徑（Task #1/#3）。
+    private let volumeSlider = NSSlider(value: 0.5, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let volumeIcon = NSTextField(labelWithString: "🔊")
+    private let soundSettingsButton = NSButton(title: "聲音設定", target: nil, action: nil)
     /// 資訊列：待命顯示「存至 <dir> · <W>×<H> px」；錄製顯示「<W>×<H> px · <size>」。
     private let infoLabel = NSTextField(labelWithString: "")
     private let levelMeter = LevelMeterView(frame: NSRect(x: 0, y: 0, width: 60, height: 12))
@@ -140,7 +144,15 @@ public final class RecordHUDController: NSObject {
         micCheck.state = AppSettings.recordMicrophone ? .on : .off
         systemAudioCheck.state = AppSettings.recordSystemAudio ? .on : .off
         cursorCheck.state = AppSettings.recordShowsCursor ? .on : .off
-        micDevicePopup.isEnabled = AppSettings.recordMicrophone   // 沒開麥克風時裝置下拉停用
+        let micOn = AppSettings.recordMicrophone
+        micDevicePopup.isEnabled = micOn   // 沒開麥克風時裝置下拉停用
+        // 輸入音量滑桿：裝置支援才顯示且可調（部分裝置唯讀/不支援）。
+        let vol = micOn ? AudioInputVolume.volume(deviceUID: AppSettings.recordMicrophoneDeviceID) : nil
+        let volSupported = (vol != nil)
+        volumeIcon.isHidden = !(micOn && volSupported)
+        volumeSlider.isHidden = !(micOn && volSupported)
+        if let vol { volumeSlider.doubleValue = Double(vol) }
+        soundSettingsButton.isHidden = !micOn   // 麥克風開才給聲音設定捷徑
     }
 
     /// 即時電平（線性 RMS 0..1）。
@@ -234,6 +246,14 @@ public final class RecordHUDController: NSObject {
         systemAudioCheck.controlSize = .small
         cursorCheck.target = self; cursorCheck.action = #selector(cursorToggled)
         cursorCheck.controlSize = .small
+        volumeSlider.target = self; volumeSlider.action = #selector(volumeChanged)
+        volumeSlider.controlSize = .mini
+        volumeSlider.translatesAutoresizingMaskIntoConstraints = false
+        volumeSlider.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        soundSettingsButton.target = self; soundSettingsButton.action = #selector(soundSettingsTapped)
+        soundSettingsButton.bezelStyle = .rounded
+        soundSettingsButton.controlSize = .small
+        (soundSettingsButton.cell as? NSButtonCell)?.font = .systemFont(ofSize: 11)
         for c in [micCheck, systemAudioCheck, cursorCheck] {
             c.setContentCompressionResistancePriority(.required, for: .horizontal)
             (c.cell as? NSButtonCell)?.font = .systemFont(ofSize: 11)
@@ -244,7 +264,9 @@ public final class RecordHUDController: NSObject {
         infoLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         // 兩列佈局：上列＝控制（模式相依）；下列＝電平表＋資訊＋警告。
-        let controlRow = NSStackView(views: [clockLabel, micDevicePopup, micCheck, systemAudioCheck, cursorCheck,
+        volumeIcon.font = .systemFont(ofSize: 11)
+        let controlRow = NSStackView(views: [clockLabel, micDevicePopup, micCheck, volumeIcon, volumeSlider,
+                                             systemAudioCheck, cursorCheck, soundSettingsButton,
                                              durationField, durationSuffix, primaryButton, cancelButton])
         controlRow.orientation = .horizontal
         controlRow.alignment = .centerY
@@ -285,6 +307,9 @@ public final class RecordHUDController: NSObject {
         micCheck.isHidden = !armed
         systemAudioCheck.isHidden = !armed
         cursorCheck.isHidden = !armed
+        volumeIcon.isHidden = !armed          // 錄製中收起音量/聲音設定（syncOptionControls 會在 armed 再依支援與否調整）
+        volumeSlider.isHidden = !armed
+        soundSettingsButton.isHidden = !armed
         clockLabel.isHidden = armed          // 待命不顯示時鐘（改用提示文字放 infoLabel 前）
         switch mode {
         case .armed:
@@ -321,4 +346,9 @@ public final class RecordHUDController: NSObject {
         AppSettings.recordMicrophoneDeviceID = micDevicePopup.selectedItem?.representedObject as? String
         onOptionsChanged?()
     }
+    @objc private func volumeChanged() {
+        // 改系統裝置輸入增益（等同系統設定→聲音→輸入滑桿）；電平表會即時反映。
+        AudioInputVolume.setVolume(deviceUID: AppSettings.recordMicrophoneDeviceID, Float(volumeSlider.doubleValue))
+    }
+    @objc private func soundSettingsTapped() { AudioInputVolume.openSoundSettings() }
 }
