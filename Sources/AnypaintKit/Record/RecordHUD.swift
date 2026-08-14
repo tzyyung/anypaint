@@ -167,6 +167,17 @@ public final class RecordHUDController: NSObject {
         reposition()
     }
 
+    /// 動畫截圖失敗的短暫視覺提示（審查 #6）：HUD 顯示黃字訊息 ~2.5s 後自動收起。
+    /// 錄影失敗有 done 卡可依附；動畫截圖成功走預覽視窗、失敗沒有面板，故補這條短提示（beep 照舊）。
+    public func showTransientFailure(_ text: String) {
+        cancelDoneTimers()
+        showMessage(text)                       // 黃字訊息＋收起其他控制項（沿用太小訊息樣式）
+        panel?.orderFront(nil)
+        let work = DispatchWorkItem { [weak self] in self?.dismiss() }
+        doneHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+    }
+
     public func dismiss() {
         cancelDoneTimers()
         armedSynced = false

@@ -384,7 +384,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             case .none:
                 break                                            // 取消：HUD 已完整 dismiss
             case .dismissOnly:
-                self.recordSession.dismissHUD()                  // 動畫截圖失敗：收 HUD
+                self.recordSession.presentTransientFailure("動畫截圖失敗，未產生檔案")   // 審查 #6：補視覺提示（beep 照舊）
             case .presentDoneFailed:
                 self.recordSession.presentDoneFailed(detail: "錄製失敗，未產生檔案",
                                                      saveDirectory: self.recordSaveDirectoryURL())

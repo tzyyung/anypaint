@@ -456,6 +456,9 @@ public final class RecordSession {
     /// 動畫截圖路徑（direct:false）或取消：直接收 HUD（不留完成面板）。
     public func dismissHUD() { hud.dismiss() }
 
+    /// 動畫截圖失敗：HUD 短暫顯示提示後自動收（審查 #6，取代只有 beep）。
+    public func presentTransientFailure(_ reason: String) { hud.showTransientFailure(reason) }
+
     private func lastScreenForDone() -> NSScreen? {
         screen ?? Self.screen(containing: lastRecordRegion)
     }
