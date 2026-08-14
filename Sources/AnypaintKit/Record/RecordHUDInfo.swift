@@ -17,11 +17,12 @@ public enum RecordHUDInfo {
         "存至 \(saveLocation(saveDirectory)) · \(regionText(widthPx: widthPx, heightPx: heightPx))"
     }
 
-    /// 檔案大小人類可讀（B/KB/MB）。
+    /// 檔案大小人類可讀（B/KB/MB）。用 `kb.rounded()` 判界：否則 kb∈[1023.5,1024) 會被 `%.0f` 印成
+    /// 「1024 KB」而非「1.0 MB」（審查 #2 邊界修）。
     public static func fileSizeText(bytes: Int64) -> String {
         if bytes < 1024 { return "\(bytes) B" }
         let kb = Double(bytes) / 1024
-        if kb < 1024 { return String(format: "%.0f KB", kb) }
+        if kb.rounded() < 1024 { return String(format: "%.0f KB", kb) }
         return String(format: "%.1f MB", kb / 1024)
     }
 
@@ -39,9 +40,10 @@ public enum RecordHUDInfo {
         success ? "✓ 錄影完成" : "⚠︎ 錄影存檔失敗"
     }
 
-    /// 時長 mm:ss（負值 clamp 0）。
+    /// 時長 mm:ss（負值 clamp 0）。用 floor（無條件捨去）與即時時鐘 `RecordMath.hudClockText` 一致
+    /// （審查 #4：否則 6.7s 時即時顯 00:06、完成卡顯 00:07 對不上）。
     public static func durationText(_ seconds: Double) -> String {
-        let s = max(0, Int(seconds.rounded()))
+        let s = max(0, Int(seconds.rounded(.down)))
         return String(format: "%02d:%02d", s / 60, s % 60)
     }
 

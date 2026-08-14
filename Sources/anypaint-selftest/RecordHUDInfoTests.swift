@@ -19,6 +19,9 @@ nonisolated func recordHUDInfoTests() {
     T.checkEq("hudInfo: B", RecordHUDInfo.fileSizeText(bytes: 512), "512 B")
     T.checkEq("hudInfo: KB", RecordHUDInfo.fileSizeText(bytes: 2048), "2 KB")
     T.checkEq("hudInfo: MB", RecordHUDInfo.fileSizeText(bytes: 3 * 1024 * 1024), "3.0 MB")
+    // 邊界（審查 #2）：kb∈[1023.5,1024) 不可印成「1024 KB」，要滾進 MB
+    T.checkEq("hudInfo: 1024KB 邊界→MB", RecordHUDInfo.fileSizeText(bytes: 1_048_320), "1.0 MB")   // 1023.75 KB
+    T.checkEq("hudInfo: 1023KB 仍 KB", RecordHUDInfo.fileSizeText(bytes: 1_047_552), "1023 KB")     // 1023.0 KB
 
     // recordingInfo（有/無 size）
     T.checkEq("hudInfo: 錄制資訊無大小",
@@ -31,6 +34,7 @@ nonisolated func recordHUDInfoTests() {
     T.checkTrue("hudInfo: done 標題失敗含失敗", RecordHUDInfo.doneTitle(success: false).contains("失敗"))
     T.checkEq("hudInfo: 時長 mm:ss", RecordHUDInfo.durationText(67), "01:07")
     T.checkEq("hudInfo: 時長個位補零", RecordHUDInfo.durationText(7), "00:07")
+    T.checkEq("hudInfo: 時長小數 floor（對齊即時時鐘）", RecordHUDInfo.durationText(6.7), "00:06")
     T.checkEq("hudInfo: 時長負值 clamp 0", RecordHUDInfo.durationText(-3), "00:00")
     T.checkEq("hudInfo: done 資訊列", RecordHUDInfo.doneInfo(saveDirectory: nil), "已存至 ~/Movies/anypaint")
     T.checkEq("hudInfo: done 中繼",

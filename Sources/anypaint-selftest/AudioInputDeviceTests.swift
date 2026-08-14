@@ -47,7 +47,7 @@ nonisolated func levelMeterViewTests() {
     // 只是編譯器在 nonisolated 呼叫鏈裡看不出來——用 assumeIsolated 明示，換掉逐行
     // 「main actor-isolated ... 不能在 nonisolated context 用」的警告（零警告是硬約束）。
     MainActor.assumeIsolated {
-        let v = LevelMeterView(frame: NSRect(x: 0, y: 0, width: 120, height: 20))
+        let v = LevelMeterView(frame: NSRect(x: 0, y: 0, width: 62, height: 14))
         @MainActor func litPixels(level: Float) -> Int {
             v.level = level
             v.layoutSubtreeIfNeeded()

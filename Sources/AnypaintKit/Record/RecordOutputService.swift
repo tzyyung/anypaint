@@ -3,7 +3,8 @@ import AppKit
 /// 動畫截圖的檔案落地。與 CaptureOutputService 平行的 side path（設計文件 §6）：
 /// 現有輸出鏈是影像導向（writePNG），影片/GIF 只重用命名樣板、目錄設定與碰撞遞增，
 /// 不硬塞影像管線。
-public final class RecordOutputService {
+/// 無實例狀態（只有 static／純方法，讀 AppSettings/FileManager）→ 可安全跨執行緒（背景搬檔用）。
+public final class RecordOutputService: Sendable {
     public init() {}
 
     /// 暫存母帶路徑。放系統暫存目錄：丟棄/存檔後即刪，殘留由 cleanupStaleTempFiles 清。

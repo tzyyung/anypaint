@@ -201,6 +201,9 @@ public final class RecordSession {
     /// 待命麥克風試音錶（Task B2）：依設定的錄影麥克風裝置掛 MicLevelMonitor,餵 HUD 電平表＋無訊號警告。
     /// 未開麥克風＝隱藏電平表。
     private func startStandbyMic() {
+        stopStandbyMic()   // 一律先停舊 probe（審查 #1 CONFIRMED）：否則在 HUD 關掉麥克風時，
+                           // onOptionsChanged→startStandbyMic 走 guard-else 早退、舊 tap 沒被停，
+                           // HAL IOProc 繼續佔著麥克風（系統橘點持續亮），UI 卻顯示已關＝隱私/資源漏。
         let opts = RecordOptions.fromSettings()
         guard opts.captureMicrophone else { hud.setMicEnabled(false); return }
         silenceTracker = MicSilenceTracker()
@@ -219,6 +222,7 @@ public final class RecordSession {
 
     /// 錄製中電平回呼（RecordMicSource → 這裡 → HUD）：更新電平表＋無訊號警告。
     private func feedRecordingMicLevel(_ level: Float) {
+        guard state == .recording else { return }   // 審查 #3：收尾後遲到的 HAL 麥克風緩衝別再寫 done 態 HUD
         hud.setMicLevel(level)
         hud.setNoSignal(silenceTracker.update(rms: level, now: ProcessInfo.processInfo.systemUptime))
     }
@@ -422,6 +426,7 @@ public final class RecordSession {
         durationLimit = nil
         state = .idle
         frameSource.onStreamError = nil
+        frameSource.onMicLevel = nil    // 審查 #3：斷開錄製麥克風電平回呼,避免遲到緩衝寫 done 態 HUD
     }
 
     private func teardown() {

@@ -136,6 +136,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func beginCapture() {
         guard !scrollSession.isActive else { return }   // 滾動中不疊凍結（spec §9.1）
         guard !recordSession.isActive else { return }   // 動畫截圖中不疊凍結（spec §9.1）
+        recordSession.dismissHUD()   // 審查 #1：收掉可能還浮著的錄影完成卡，別讓它疊在截圖 overlay 上／Esc 撞
         // 已在框選中 → 再按一次截圖快鍵視為「取消/逃生」。
         if overlayController.isActive {
             overlayController.cancelIfActive()
@@ -279,6 +280,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func pinFromClipboard() {
         guard !scrollSession.isActive else { return }   // 滾動中不疊貼圖（spec §9.1）
         guard !recordSession.isActive else { return }   // 動畫截圖中不疊貼圖（spec §9.1）
+        recordSession.dismissHUD()   // 審查 #1：收掉可能還浮著的錄影完成卡
         guard let image = pinboard.imageFromPasteboard() else {
             NSSound.beep()
             return
@@ -295,6 +297,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         case .record: return                                    // 動畫截圖中 → 不疊加（spec §9.1）
         case .none: break
         }
+        recordSession.dismissHUD()   // 審查 #1：收掉可能還浮著的錄影完成卡
         KeyboardShortcuts.disable(.capture, .pin)               // 滾動中擋另外兩入口（spec §9.1）
         menuBar.setScrollCapturing(true)
         let vars = CaptureVars.makeVars(title: CaptureVars.currentFrontTitle())
@@ -340,6 +343,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         case .freeze, .scroll: return                            // 凍結／滾動中 → 不疊加
         case .none: break
         }
+        recordSession.dismissHUD()   // 審查 #1/#2：收掉可能還浮著的完成卡（含其 15s 計時器/Esc monitor），
+                                     // 否則新錄製框選期間舊計時器會把面板抽掉（stale timer）
         // 螢幕錄製權限預檢（已查 header：preflight 不彈框；request 首次會彈系統框）。
         guard CGPreflightScreenCaptureAccess() else {
             if !CGRequestScreenCaptureAccess() { showPermissionAlert() }
@@ -357,9 +362,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             KeyboardShortcuts.enable(others)                     // 對抗式審查 #1：單一還原出口（不分成敗）
             self.setRecordingMenu(direct: direct, on: false)
-            // 分類＋（錄影成功時）先搬檔到最終位置——拿 finalURL 才 morph（對抗式審查 #2）。
+            // 分類。錄影成功（.saved+direct）已在上面走背景搬檔＋回主緒 present 並 return，不落這裡；
+            // 這條同步 router 只處理 .cancelled／.failed／.saved+動畫截圖（都不需搬檔，saveSucceeded 恆 false）。
             let category: RecordFinishRouter.Category
-            var savedFinalURL: URL?      // 錄影成功搬檔後的最終路徑
             var previewURL: URL?         // 動畫截圖用的暫存母帶
             switch outcome {
             case .cancelled: category = .cancelled
@@ -367,29 +372,25 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             case .saved(let tempURL):
                 category = .saved
                 if direct {
-                    savedFinalURL = self.recordOutput.saveMovie(from: tempURL, vars: vars)
-                    try? FileManager.default.removeItem(at: tempURL)   // 已複製到最終位置,清暫存
-                } else {
-                    previewURL = tempURL
+                    // 錄影搬檔在**背景佇列**做（審查 #2 CONFIRMED：外接/網路碟同步 copyItem 會卡主緒、
+                    // 阻住 done morph），完成後回主緒 present。**成功才刪暫存**（審查 #1 CONFIRMED：舊碼
+                    // 無條件刪，存檔失敗＝唯一母帶被毀、還叫使用者重試卻已無檔可試）。
+                    self.saveMovieAndPresentDone(tempURL: tempURL, vars: vars)
+                    return
                 }
+                previewURL = tempURL
             }
-            // 終端動作決策（純邏輯 RecordFinishRouter，可測）。
-            switch RecordFinishRouter.action(category: category, direct: direct,
-                                             saveSucceeded: savedFinalURL != nil) {
+            switch RecordFinishRouter.action(category: category, direct: direct, saveSucceeded: false) {
             case .none:
                 break                                            // 取消：HUD 已完整 dismiss
             case .dismissOnly:
                 self.recordSession.dismissHUD()                  // 動畫截圖失敗：收 HUD
             case .presentDoneFailed:
-                let reason = (category == .saved) ? "存檔失敗，請檢查磁碟空間或存檔資料夾" : "錄製失敗，未產生檔案"
-                self.recordSession.presentDoneFailed(detail: reason, saveDirectory: self.recordSaveDirectoryURL())
-                UITestServer.shared?.emit("captureFailed", ["reason": category == .saved ? "recordSave" : "recordFinish"])
+                self.recordSession.presentDoneFailed(detail: "錄製失敗，未產生檔案",
+                                                     saveDirectory: self.recordSaveDirectoryURL())
+                UITestServer.shared?.emit("captureFailed", ["reason": "recordFinish"])
             case .presentDone:
-                let saved = savedFinalURL!
-                let bytes = (try? FileManager.default.attributesOfItem(atPath: saved.path)[.size] as? Int64) ?? nil
-                self.recordSession.presentDone(finalURL: saved, sizeBytes: bytes ?? 0,
-                                               saveDirectory: saved.deletingLastPathComponent())
-                UITestServer.shared?.emit("recordSaved", ["path": saved.path])   // 自動化可 wait-event
+                break                                            // 不可達：錄影成功走上面 async 分支
             case .openPreview:
                 self.recordSession.dismissHUD()                  // 動畫截圖：收 HUD,改開預覽
                 if self.recordPreviewController == nil {
@@ -412,6 +413,30 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             KeyboardShortcuts.enable(others)
             setRecordingMenu(direct: direct, on: false)
             return
+        }
+    }
+
+    /// 錄影搬檔（temp→final）在背景佇列做（審查 #2：外接/網路碟同步 copy 會卡主緒），完成後回主緒 morph
+    /// 成 done/doneFailed。**只在 saveMovie 成功後刪暫存**（審查 #1：失敗保留唯一母帶，不遺失）。
+    private func saveMovieAndPresentDone(tempURL: URL, vars: [String: String]) {
+        let out = recordOutput
+        let failDir = recordSaveDirectoryURL()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let saved = out.saveMovie(from: tempURL, vars: vars)
+            if saved != nil { try? FileManager.default.removeItem(at: tempURL) }   // 成功才清暫存
+            let bytes: Int64? = saved.flatMap { (try? FileManager.default.attributesOfItem(atPath: $0.path)[.size]) as? Int64 }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let saved {
+                    self.recordSession.presentDone(finalURL: saved, sizeBytes: bytes ?? 0,
+                                                   saveDirectory: saved.deletingLastPathComponent())
+                    UITestServer.shared?.emit("recordSaved", ["path": saved.path])
+                } else {
+                    self.recordSession.presentDoneFailed(detail: "存檔失敗，請檢查磁碟空間或存檔資料夾",
+                                                         saveDirectory: failDir)
+                    UITestServer.shared?.emit("captureFailed", ["reason": "recordSave"])
+                }
+            }
         }
     }
 

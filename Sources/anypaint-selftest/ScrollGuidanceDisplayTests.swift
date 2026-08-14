@@ -38,6 +38,10 @@ nonisolated func scrollGuidanceDisplayTests() {
     let selLeft = CGRect(x: 0, y: 400, width: 40, height: 100)   // midX20
     let o3 = SelectionGeometry.hudOrigin(selection: selLeft, panelSize: panel, visibleFrame: visible)
     T.checkTrue("hudOrigin: 貼邊 clamp 不出左界", o3.x >= 0)
+    // 貼滿可視高度的選區（上下都放不下）→ 垂直 clamp 進可視區,控制列不跑出畫面（審查 #5）
+    let selTall = CGRect(x: 400, y: 5, width: 200, height: 790)   // minY5 maxY795,幾乎滿高
+    let o4 = SelectionGeometry.hudOrigin(selection: selTall, panelSize: panel, visibleFrame: visible)
+    T.checkTrue("hudOrigin: 貼滿高選區→垂直 clamp 進可視區", o4.y >= 0 && o4.y + panel.height <= 800)
 
     // ScrollStitchOutcome.isWaiting
     T.checkTrue("isWaiting: waitingForMotion", ScrollStitchOutcome.waitingForMotion.isWaiting)

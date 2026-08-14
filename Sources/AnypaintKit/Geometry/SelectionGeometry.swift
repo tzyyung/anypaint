@@ -201,12 +201,15 @@ public enum SelectionGeometry {
     }
 
     /// HUD 浮層位置：預設在選區下緣外 12pt、水平置中；下方超出可視區 → 翻到上緣外；
-    /// 最後水平 clamp 進可視區（避免貼邊選區把 HUD 推出畫面）。ScrollHUD 與 RecordHUD 共用。
+    /// 最後水平**與垂直**都 clamp 進可視區。ScrollHUD 與 RecordHUD 共用。
+    /// 垂直 clamp（審查 #5）：貼滿可視高度的選區時，下方與翻上後的上方都放不下、HUD 會跑出畫面頂端
+    /// （開始/停止/取消整排消失，只能靠全域快鍵逃生）。clamp 後最差情況是壓在選區邊上，但至少看得到、按得到。
     public static func hudOrigin(selection: CGRect, panelSize: CGSize, visibleFrame: CGRect) -> CGPoint {
         var origin = CGPoint(x: selection.midX - panelSize.width / 2,
                              y: selection.minY - panelSize.height - 12)
         if origin.y < visibleFrame.minY { origin.y = selection.maxY + 12 }
         origin.x = min(max(visibleFrame.minX, origin.x), visibleFrame.maxX - panelSize.width)
+        origin.y = min(max(visibleFrame.minY, origin.y), visibleFrame.maxY - panelSize.height)
         return origin
     }
 }

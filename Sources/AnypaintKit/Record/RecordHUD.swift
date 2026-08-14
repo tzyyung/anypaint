@@ -215,7 +215,9 @@ public final class RecordHUDController: NSObject {
         applyContentSize()
         reposition()
         p.orderFrontRegardless()
-        NSApp.activate(ignoringOtherApps: true)   // 修 #9：accessory app 平時非前景,讓按鈕確實可點
+        // 不呼叫 NSApp.activate（審查 #7）：.nonactivatingPanel 的按鈕靠 hit-test 就點得動——實機驗證
+        // 過（TextEdit 前景時 done 的 ✕/↺ 皆可點）。舊 RecordSavedNotice 曾加 activate，但那是另一個視窗；
+        // 這個 morph 面板不需要，加了只會在每次錄完把 anypaint 搶到前景、打斷使用者手上的 app。
         armDoneAutoDismiss()
         installDoneEscMonitor()
     }
@@ -353,7 +355,7 @@ public final class RecordHUDController: NSObject {
         // 開＝亮圖示；關＝🔇（靜音）＋整體變暗。游標無靜音 emoji,以變暗表達關。
         configureChip(micChip, onTitle: "🎙 麥克風", offTitle: "🔇 麥克風", action: #selector(micToggled))
         configureChip(systemAudioChip, onTitle: "🔊 系統聲", offTitle: "🔇 系統聲", action: #selector(systemAudioToggled))
-        configureChip(cursorChip, onTitle: "👆 游標", offTitle: "👆 游標", action: #selector(cursorToggled))
+        configureChip(cursorChip, onTitle: "👆 游標", offTitle: "🚫 游標", action: #selector(cursorToggled))
 
         levelMeter.translatesAutoresizingMaskIntoConstraints = false
         levelMeter.widthAnchor.constraint(equalToConstant: 62).isActive = true
