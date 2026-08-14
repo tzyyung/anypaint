@@ -318,8 +318,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             self.setRecordingMenu(direct: direct, on: false)
             guard let url else { return }                        // 取消或失敗 → 靜默（同 scroll 慣例）
             if direct {
-                // 錄影：直接落地存 MP4＋發存檔通知,不開預覽。
-                if let saved = self.recordOutput.saveMovie(from: url, vars: vars) {
+                // 錄影：直接落地存 MP4，發**畫面上**完成提示（免通知權限，解決「錄完沒表示」）＋系統通知。
+                let saved = self.recordOutput.saveMovie(from: url, vars: vars)
+                RecordSavedNotice.shared.show(fileURL: saved)   // 成功可點擊在 Finder 顯示;失敗顯示失敗
+                if let saved {
                     UITestServer.shared?.emit("recordSaved", ["path": saved.path])   // 自動化可 wait-event
                 } else {
                     UITestServer.shared?.emit("captureFailed", ["reason": "recordSave"])

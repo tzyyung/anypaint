@@ -45,4 +45,10 @@ nonisolated func recordOutputTests() {
     T.checkTrue("silentFmt: mp4+有音軌→nil（含聲音）", RecordOutputService.silentFormatWarning(ext: "mp4", hasAudio: true) == nil)
     T.checkTrue("silentFmt: gif+無音軌→nil", RecordOutputService.silentFormatWarning(ext: "gif", hasAudio: false) == nil)
     T.checkTrue("silentFmt: 大小寫容忍 GIF", RecordOutputService.silentFormatWarning(ext: "GIF", hasAudio: true) != nil)
+
+    // RecordSavedNotice.message（完成提示文案）
+    T.checkTrue("savedNotice: 成功含檔名＋Finder 提示",
+                RecordSavedNotice.message(filename: "a.mp4").contains("a.mp4")
+                && RecordSavedNotice.message(filename: "a.mp4").contains("Finder"))
+    T.checkTrue("savedNotice: 失敗訊息", RecordSavedNotice.message(filename: nil).contains("失敗"))
 }
