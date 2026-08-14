@@ -82,6 +82,9 @@ public final class RecordHUDController: NSObject {
     private let doneView = RecordDoneView()
 
     private var mode: Mode = .armed
+    /// 對抗式審查 #1：本次 armed 期間是否已同步過選項（裝置列舉/HAL 音量很貴）。
+    /// 只在進入 armed 那次 sync；拖動調框（每 tick 呼叫 show）不重複。離開 armed 時重置。
+    private var armedSynced = false
     private var micUIVisible = false
     private var regionPx: (w: Int, h: Int) = (0, 0)
     /// 第二層展開狀態（記憶，spec §3.4）。
@@ -100,6 +103,10 @@ public final class RecordHUDController: NSObject {
     private var doneGeneration = 0
     private var doneHideWork: DispatchWorkItem?
     private var doneEscMonitor: Any?
+    /// 對抗式審查 #2：ivar 保留縮圖 generator（否則本地變數在 async 完成前 dealloc→請求被取消→靜默無圖）。
+    /// 下次 showDone 覆寫＝取消舊請求（token 另擋遲到）；dismiss 時清掉。用 ivar 而非 closure capture，
+    /// 避免把 non-Sendable 的 AVAssetImageGenerator 帶進 @Sendable completion（0 警告紅線）。
+    private var thumbnailGenerator: AVAssetImageGenerator?
 
     private var noticeHideWork: DispatchWorkItem?
 
@@ -134,6 +141,8 @@ public final class RecordHUDController: NSObject {
 
     public func dismiss() {
         cancelDoneTimers()
+        armedSynced = false
+        thumbnailGenerator = nil
         panel?.orderOut(nil)
         onStart = nil; onStop = nil; onCancel = nil
         onReRecord = nil; onDoneClosed = nil
@@ -147,6 +156,7 @@ public final class RecordHUDController: NSObject {
         if panel == nil { buildPanel() }
         lastSelection = selection; lastScreen = screen
         mode = .done
+        armedSynced = false
         doneGeneration &+= 1
         let meta = RecordHUDInfo.doneMeta(durationSec: durationSec,
                                           widthPx: regionPx.w, heightPx: regionPx.h, bytes: sizeBytes)
@@ -162,6 +172,7 @@ public final class RecordHUDController: NSObject {
         if panel == nil { buildPanel() }
         lastSelection = selection; lastScreen = screen
         mode = .doneFailed
+        armedSynced = false
         doneGeneration &+= 1
         doneView.onAction = { [weak self] in self?.handleDoneAction($0) }
         doneView.configureFailed(detail: detail, saveDirectory: saveDirectory)
@@ -184,7 +195,9 @@ public final class RecordHUDController: NSObject {
     private func handleDoneAction(_ action: RecordDonePolicy.Action) {
         switch action {
         case .reRecord:
-            cancelDoneTimers()
+            // 對抗式審查 #3：不預先 cancelDoneTimers——若 re-arm no-op（螢幕拔除等），
+            // done 面板會被孤兒化（無自動收起/Esc）。成功 re-arm 時 configure(.armed) 開頭的
+            // cancelDoneTimers() 會收掉；失敗時計時器/Esc 保留，面板仍能 15s 自動收或 Esc/✕ 關。
             onReRecord?()
         case .close:
             cancelDoneTimers()
@@ -235,6 +248,7 @@ public final class RecordHUDController: NSObject {
         gen.requestedTimeToleranceBefore = CMTime(seconds: 1, preferredTimescale: 600)
         gen.requestedTimeToleranceAfter = CMTime(seconds: 1, preferredTimescale: 600)
         gen.maximumSize = CGSize(width: 240, height: 168)
+        thumbnailGenerator = gen   // 對抗式審查 #2：ivar 保留（見屬性註）；覆寫舊值＝取消上一個請求
         gen.generateCGImageAsynchronously(for: .zero) { [weak self] cg, _, _ in
             guard let cg else { return }
             let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
@@ -432,13 +446,19 @@ public final class RecordHUDController: NSObject {
         tier2Container.isHidden = !(armed && tier2Expanded)
         switch mode {
         case .armed:
-            syncOptionControls()
+            // 對抗式審查 #1：syncOptionControls 會列舉音訊裝置（AVCaptureDevice DiscoverySession）＋
+            // 查 HAL 音量，貴。armed 的 show() 每次拖動調框都會被呼叫（onSelectionChanged→enterArmed→
+            // show），若每 tick 都 sync 就是主緒飽和（CLAUDE.md 紅線）。只在**進入 armed 那一次**同步；
+            // 調框只重定位（下方 applyContentSize/refreshInfo 都很便宜）。裝置/音量另由 micToggled、
+            // gearToggled 明確重新同步。
+            if !armedSynced { syncOptionControls(); armedSynced = true }
             gearButton.title = tier2Expanded ? "⚙ 收合" : "⚙ 更多"
             primaryButton.title = "開始"
         case .recording:
+            armedSynced = false
             primaryButton.title = "停止"
         case .done, .doneFailed:
-            break
+            armedSynced = false
         }
         refreshInfo()
         applyContentSize()
@@ -483,6 +503,7 @@ public final class RecordHUDController: NSObject {
     @objc private func cancelTapped() { onCancel?() }
     @objc private func gearToggled() {
         tier2Expanded.toggle()
+        if tier2Expanded { armedSynced = false }   // 使用者展開第二層＝刷新裝置/音量（非每 tick，便宜）
         configure(mode: .armed)
         reposition()
     }

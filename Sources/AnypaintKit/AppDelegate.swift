@@ -325,42 +325,48 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             KeyboardShortcuts.enable(others)                     // 對抗式審查 #1：單一還原出口（不分成敗）
             self.setRecordingMenu(direct: direct, on: false)
+            // 分類＋（錄影成功時）先搬檔到最終位置——拿 finalURL 才 morph（對抗式審查 #2）。
+            let category: RecordFinishRouter.Category
+            var savedFinalURL: URL?      // 錄影成功搬檔後的最終路徑
+            var previewURL: URL?         // 動畫截圖用的暫存母帶
             switch outcome {
-            case .cancelled:
-                break                                            // 使用者丟棄：HUD 已 dismiss,不顯示完成面板
-            case .failed:
-                // 對抗式審查 #3：writer/啟動/收尾逾時失敗——錄影走完成面板失敗態,動畫截圖靜默收 HUD。
+            case .cancelled: category = .cancelled
+            case .failed:    category = .failed
+            case .saved(let tempURL):
+                category = .saved
                 if direct {
-                    self.recordSession.presentDoneFailed(detail: "錄製失敗，未產生檔案",
-                                                         saveDirectory: self.recordSaveDirectoryURL())
-                    UITestServer.shared?.emit("captureFailed", ["reason": "recordFinish"])
+                    savedFinalURL = self.recordOutput.saveMovie(from: tempURL, vars: vars)
+                    try? FileManager.default.removeItem(at: tempURL)   // 已複製到最終位置,清暫存
                 } else {
-                    self.recordSession.dismissHUD()
+                    previewURL = tempURL
                 }
-            case .saved(let url):
-                if direct {
-                    // 對抗式審查 #2：先 save 到最終位置,拿 finalURL 才 morph 成 done（不指向即將被刪的暫存）。
-                    let saved = self.recordOutput.saveMovie(from: url, vars: vars)
-                    try? FileManager.default.removeItem(at: url)   // 已複製到最終位置,清暫存
-                    if let saved {
-                        let bytes = (try? FileManager.default.attributesOfItem(atPath: saved.path)[.size] as? Int64) ?? nil
-                        self.recordSession.presentDone(finalURL: saved, sizeBytes: bytes ?? 0,
-                                                       saveDirectory: saved.deletingLastPathComponent())
-                        UITestServer.shared?.emit("recordSaved", ["path": saved.path])   // 自動化可 wait-event
-                    } else {
-                        self.recordSession.presentDoneFailed(detail: "存檔失敗，請檢查磁碟空間或存檔資料夾",
-                                                             saveDirectory: self.recordSaveDirectoryURL())
-                        UITestServer.shared?.emit("captureFailed", ["reason": "recordSave"])
-                    }
-                } else {
-                    self.recordSession.dismissHUD()              // 動畫截圖：收 HUD,改開預覽
-                    if self.recordPreviewController == nil {
-                        self.recordPreviewController = RecordPreviewWindowController(output: self.recordOutput,
-                                                                                      pinboard: self.pinboard)
-                    }
-                    Task { @MainActor in
-                        await self.recordPreviewController?.present(movieURL: url, vars: vars, captureScale: captureScale)
-                    }
+            }
+            // 終端動作決策（純邏輯 RecordFinishRouter，可測）。
+            switch RecordFinishRouter.action(category: category, direct: direct,
+                                             saveSucceeded: savedFinalURL != nil) {
+            case .none:
+                break                                            // 取消：HUD 已完整 dismiss
+            case .dismissOnly:
+                self.recordSession.dismissHUD()                  // 動畫截圖失敗：收 HUD
+            case .presentDoneFailed:
+                let reason = (category == .saved) ? "存檔失敗，請檢查磁碟空間或存檔資料夾" : "錄製失敗，未產生檔案"
+                self.recordSession.presentDoneFailed(detail: reason, saveDirectory: self.recordSaveDirectoryURL())
+                UITestServer.shared?.emit("captureFailed", ["reason": category == .saved ? "recordSave" : "recordFinish"])
+            case .presentDone:
+                let saved = savedFinalURL!
+                let bytes = (try? FileManager.default.attributesOfItem(atPath: saved.path)[.size] as? Int64) ?? nil
+                self.recordSession.presentDone(finalURL: saved, sizeBytes: bytes ?? 0,
+                                               saveDirectory: saved.deletingLastPathComponent())
+                UITestServer.shared?.emit("recordSaved", ["path": saved.path])   // 自動化可 wait-event
+            case .openPreview:
+                self.recordSession.dismissHUD()                  // 動畫截圖：收 HUD,改開預覽
+                if self.recordPreviewController == nil {
+                    self.recordPreviewController = RecordPreviewWindowController(output: self.recordOutput,
+                                                                                  pinboard: self.pinboard)
+                }
+                let movieURL = previewURL!
+                Task { @MainActor in
+                    await self.recordPreviewController?.present(movieURL: movieURL, vars: vars, captureScale: captureScale)
                 }
             }
         }
