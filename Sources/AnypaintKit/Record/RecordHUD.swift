@@ -12,32 +12,38 @@ private final class RecordHUDPanel: NSPanel {
 
 /// 圖示開關（使用者選：靠圖示本身表達開/關，不靠藍底——2026-08-14）。
 /// 開＝亮圖示（🎙/🔊/👆）＋滿透明度；關＝靜音圖示（🔇）＋整體變暗。
-/// 用 pushOnPushOff 讓點擊自動切 state 並送 action；state 改變時換標題文字（圖示）與透明度。
+///
+/// **不用 `NSControl.state` 的隱式切換**：使用者點擊時 AppKit 直接改 cell 的 state，不經過覆寫的
+/// `state` setter，`didSet` 不觸發（實機 bug：按系統聲畫面不變）。改成自管 `isOn`＋在 action 明確
+/// `setOn()` 重繪，切換由控制器的 action 顯式呼叫，行為可預期。
 private final class IconToggle: NSButton {
     /// 開/關各自的完整標題（含前置 emoji），例如 "🎙 麥克風" / "🔇 麥克風"。
-    var onTitle = "" { didSet { refresh() } }
-    var offTitle = "" { didSet { refresh() } }
+    var onTitle = "" { didSet { render() } }
+    var offTitle = "" { didSet { render() } }
+    private(set) var isOn = false
 
     override init(frame frameRect: NSRect) { super.init(frame: frameRect); setup() }
     required init?(coder: NSCoder) { fatalError() }
     private func setup() {
-        setButtonType(.pushOnPushOff)
+        setButtonType(.momentaryChange)   // 只當「按鈕」用；開關狀態自管（見型別註）
         isBordered = false
         wantsLayer = true
         layer?.cornerRadius = 8
         font = .systemFont(ofSize: 12)
         contentTintColor = .white
+        render()
     }
-    override var state: NSControl.StateValue { didSet { refresh() } }
     override var intrinsicContentSize: NSSize {
         var s = super.intrinsicContentSize; s.width += 18; s.height = 26; return s
     }
+    /// 設開/關並立即重繪（控制器在 action 與 sync 時呼叫）。
+    func setOn(_ on: Bool) { isOn = on; render() }
     /// 開＝亮圖示＋不透明＋極淡底；關＝🔇 圖示＋半透明＋更淡底（雙重訊號，不用藍色）。
-    private func refresh() {
-        let on = (state == .on)
-        title = on ? onTitle : offTitle
-        alphaValue = on ? 1.0 : 0.5
-        layer?.backgroundColor = NSColor(white: 1, alpha: on ? 0.14 : 0.05).cgColor
+    private func render() {
+        title = isOn ? onTitle : offTitle
+        alphaValue = isOn ? 1.0 : 0.5
+        layer?.backgroundColor = NSColor(white: 1, alpha: isOn ? 0.14 : 0.05).cgColor
+        invalidateIntrinsicContentSize()
     }
 }
 
@@ -485,9 +491,9 @@ public final class RecordHUDController: NSObject {
         }
         micDevicePopup.selectItem(at: selectIndex)
         let micOn = AppSettings.recordMicrophone
-        micChip.state = micOn ? .on : .off
-        systemAudioChip.state = AppSettings.recordSystemAudio ? .on : .off
-        cursorChip.state = AppSettings.recordShowsCursor ? .on : .off
+        micChip.setOn(micOn)
+        systemAudioChip.setOn(AppSettings.recordSystemAudio)
+        cursorChip.setOn(AppSettings.recordShowsCursor)
         micDevicePopup.isEnabled = micOn
         let vol = micOn ? AudioInputVolume.volume(deviceUID: AppSettings.recordMicrophoneDeviceID) : nil
         let volSupported = (vol != nil)
@@ -514,14 +520,24 @@ public final class RecordHUDController: NSObject {
         reposition()
     }
     @objc private func micToggled() {
-        AppSettings.recordMicrophone = (micChip.state == .on)
-        micDevicePopup.isEnabled = (micChip.state == .on)
-        syncOptionControls()
+        let newOn = !micChip.isOn                       // 顯式翻轉＋重繪（不靠 NSControl.state 隱式切換）
+        micChip.setOn(newOn)
+        AppSettings.recordMicrophone = newOn
+        micDevicePopup.isEnabled = newOn
+        syncOptionControls()                            // 重刷裝置/音量列可見性（依開/關）
         applyContentSize(); reposition()
         onOptionsChanged?()
     }
-    @objc private func systemAudioToggled() { AppSettings.recordSystemAudio = (systemAudioChip.state == .on) }
-    @objc private func cursorToggled() { AppSettings.recordShowsCursor = (cursorChip.state == .on) }
+    @objc private func systemAudioToggled() {
+        let newOn = !systemAudioChip.isOn
+        systemAudioChip.setOn(newOn)                    // 明確重繪（修「按了畫面沒變」）
+        AppSettings.recordSystemAudio = newOn
+    }
+    @objc private func cursorToggled() {
+        let newOn = !cursorChip.isOn
+        cursorChip.setOn(newOn)
+        AppSettings.recordShowsCursor = newOn
+    }
     @objc private func micDeviceChanged() {
         AppSettings.recordMicrophoneDeviceID = micDevicePopup.selectedItem?.representedObject as? String
         onOptionsChanged?()
