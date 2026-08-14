@@ -56,6 +56,7 @@ HUD 黃字「麥克風無訊號，檢查裝置」，有訊號即清；**只提�
 |---|---|
 | 逃生路徑：取消（丟棄） | Esc（僅 selecting/armed）、HUD 取消鈕、selecting/armed 中再按同一顆全域快鍵（Carbon，不受 app 前景狀態影響） |
 | 逃生路徑：停止（收檔保留） | recording 中再按同一顆全域快鍵、HUD 停止鈕、倒數到、看門狗、stream error 兜底——五者共用同一條停止程序（§4） |
+| 框選中按 R → 轉截圖 | selecting/armed 按 R：把當下整個螢幕（含框選工具本身）凍結成快照、中止錄影、改走一般截圖選取/標註流程；截圖結束後截圖與錄影都已解除。只有錄影/動畫截圖的 overlay 掛此回呼（`RecordSession.onReshootToScreenshot`→`AppDelegate.reshootRecordToScreenshot`），滾動截圖框選不受影響 |
 | 不限時看門狗 | 10 分鐘自動走正常停止路徑（防忘記停吃光磁碟） |
 | 權限預檢 | `beginAnimatedCapture()` 開頭 `CGPreflightScreenCaptureAccess()` 為 false → `CGRequestScreenCaptureAccess()`（首次觸發系統詢問）→ 仍拒絕 → 走既有 `showPermissionAlert()`、直接 return，不進 session；request 剛被使用者允許也一律 return 讓使用者重按（授權後常需重啟 app 才生效，續跑會拿到黑畫面 stream） |
 | 錄製中顯示游標／點擊高亮圈 | 設定可各自關；**游標關閉時點擊圈勾選框連動停用**（`CaptureSettingsViewController.updateClickRingEnabledState`）——點擊圈要開，游標必須先開（Kap 的 UX 細節，設定 → 控制/截圖分頁） |
