@@ -29,10 +29,19 @@ public final class RecordHUDController: NSObject {
     private let durationSuffix = NSTextField(labelWithString: "秒（空白＝不限）")
     private let primaryButton = NSButton(title: "開始", target: nil, action: nil)
     private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
-    /// 麥克風即時電平表＋裝置名（僅在錄影含麥克風時顯示；待命由 MicLevelMonitor、錄製由 RecordMicSource 餵）。
-    private let micDeviceLabel = NSTextField(labelWithString: "")
+    /// 錄前選項工具列（Task #2，QuickRecorder 式）：錄音裝置下拉＋音訊/游標快速開關。
+    private let micDevicePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let micCheck = NSButton(checkboxWithTitle: "麥克風", target: nil, action: nil)
+    private let systemAudioCheck = NSButton(checkboxWithTitle: "系統聲", target: nil, action: nil)
+    private let cursorCheck = NSButton(checkboxWithTitle: "游標", target: nil, action: nil)
+    /// 資訊列：待命顯示「存至 <dir> · <W>×<H> px」；錄製顯示「<W>×<H> px · <size>」。
+    private let infoLabel = NSTextField(labelWithString: "")
     private let levelMeter = LevelMeterView(frame: NSRect(x: 0, y: 0, width: 60, height: 12))
     private var micUIVisible = false
+    /// 目前選區的像素尺寸（供資訊列；RecordSession 在 show 前 setRegion）。
+    private var regionPx: (w: Int, h: Int) = (0, 0)
+    /// 錄音裝置/音訊/游標設定被使用者在 HUD 改動時通知（RecordSession 重掛待命試音錶／更新資訊）。
+    public var onOptionsChanged: (() -> Void)?
     /// 短暫提示行（例如麥克風權限降級），預設隱藏；樣式照 durationSuffix。
     private let noticeLabel = NSTextField(labelWithString: "")
     private var mode: Mode = .armed
@@ -71,6 +80,7 @@ public final class RecordHUDController: NSObject {
     }
 
     public func showMessage(_ text: String) {
+        clockLabel.isHidden = false   // armed 模式預設隱藏時鐘,錯誤訊息要強制顯示（選區太小）
         clockLabel.stringValue = text
         clockLabel.textColor = .systemYellow
     }
@@ -84,13 +94,53 @@ public final class RecordHUDController: NSObject {
 
     // MARK: 麥克風電平（Task B2）
 
-    /// 顯示/隱藏麥克風電平表＋裝置名（錄影含麥克風才顯示）。
+    /// 顯示/隱藏麥克風電平表（錄影含麥克風才顯示）。裝置名改由裝置下拉呈現,不再另有標籤。
     public func setMicEnabled(_ enabled: Bool, deviceName: String? = nil) {
         micUIVisible = enabled
-        micDeviceLabel.isHidden = !enabled
         levelMeter.isHidden = !enabled
-        if enabled { micDeviceLabel.stringValue = "🎙 " + (deviceName ?? "系統預設") }
-        if !enabled { setNoSignal(false) }
+        if !enabled { setNoSignal(false); setMicLevel(0) }
+    }
+
+    /// 設定目前選區像素尺寸（資訊列用）。show(mode:) 前呼叫。
+    public func setRegion(widthPx: Int, heightPx: Int) {
+        regionPx = (widthPx, heightPx)
+        refreshInfo()
+    }
+
+    /// 錄製中更新檔案大小（資訊列）。
+    public func setRecordingBytes(_ bytes: Int64?) {
+        infoLabel.stringValue = RecordHUDInfo.recordingInfo(widthPx: regionPx.w, heightPx: regionPx.h, bytes: bytes)
+    }
+
+    private func refreshInfo() {
+        switch mode {
+        case .armed:
+            infoLabel.stringValue = RecordHUDInfo.armedInfo(saveDirectory: AppSettings.recordSaveDirectory,
+                                                            widthPx: regionPx.w, heightPx: regionPx.h)
+        case .recording:
+            infoLabel.stringValue = RecordHUDInfo.recordingInfo(widthPx: regionPx.w, heightPx: regionPx.h, bytes: nil)
+        }
+    }
+
+    /// 待命選項工具列初始化：填裝置下拉、依設定設好勾選狀態。armed configure 時呼叫。
+    private func syncOptionControls() {
+        // 裝置下拉：系統預設 + 各裝置（representedObject＝uniqueID；nil＝系統預設）。
+        micDevicePopup.removeAllItems()
+        micDevicePopup.addItem(withTitle: "系統預設")
+        micDevicePopup.lastItem?.representedObject = nil as String?
+        let devices = AudioInputDeviceList.all()
+        let saved = AppSettings.recordMicrophoneDeviceID
+        var selectIndex = 0
+        for (i, d) in devices.enumerated() {
+            micDevicePopup.addItem(withTitle: d.name)
+            micDevicePopup.lastItem?.representedObject = d.uniqueID
+            if d.uniqueID == saved { selectIndex = i + 1 }
+        }
+        micDevicePopup.selectItem(at: selectIndex)
+        micCheck.state = AppSettings.recordMicrophone ? .on : .off
+        systemAudioCheck.state = AppSettings.recordSystemAudio ? .on : .off
+        cursorCheck.state = AppSettings.recordShowsCursor ? .on : .off
+        micDevicePopup.isEnabled = AppSettings.recordMicrophone   // 沒開麥克風時裝置下拉停用
     }
 
     /// 即時電平（線性 RMS 0..1）。
@@ -169,32 +219,55 @@ public final class RecordHUDController: NSObject {
         noticeLabel.setContentCompressionResistancePriority(
             NSLayoutConstraint.Priority(rawValue: 200), for: .horizontal)
 
-        micDeviceLabel.textColor = .white
-        micDeviceLabel.font = .systemFont(ofSize: 12, weight: .regular)
-        micDeviceLabel.lineBreakMode = .byTruncatingTail
-        micDeviceLabel.isHidden = true
         levelMeter.translatesAutoresizingMaskIntoConstraints = false
         levelMeter.widthAnchor.constraint(equalToConstant: 60).isActive = true
         levelMeter.heightAnchor.constraint(equalToConstant: 12).isActive = true
         levelMeter.isHidden = true
 
-        // 佈局：clockLabel 左（🎙 徽章前綴內建於其文字，不佔獨立位置）、
-        // （durationField／durationSuffix，僅 armed）、primaryButton／cancelButton 右、
-        // noticeLabel（隱藏時不佔位）。
-        let stack = NSStackView(views: [clockLabel, micDeviceLabel, levelMeter, durationField, durationSuffix, primaryButton, cancelButton, noticeLabel])
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        // 選項工具列控制項（Task #2）。
+        micDevicePopup.target = self; micDevicePopup.action = #selector(micDeviceChanged)
+        micDevicePopup.controlSize = .small
+        micDevicePopup.font = .systemFont(ofSize: 11)
+        micCheck.target = self; micCheck.action = #selector(micCheckToggled)
+        micCheck.controlSize = .small
+        systemAudioCheck.target = self; systemAudioCheck.action = #selector(systemAudioToggled)
+        systemAudioCheck.controlSize = .small
+        cursorCheck.target = self; cursorCheck.action = #selector(cursorToggled)
+        cursorCheck.controlSize = .small
+        for c in [micCheck, systemAudioCheck, cursorCheck] {
+            c.setContentCompressionResistancePriority(.required, for: .horizontal)
+            (c.cell as? NSButtonCell)?.font = .systemFont(ofSize: 11)
+        }
+        infoLabel.textColor = NSColor(white: 0.75, alpha: 1)
+        infoLabel.font = .systemFont(ofSize: 11, weight: .regular)
+        infoLabel.lineBreakMode = .byTruncatingMiddle
+        infoLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 56))
-        content.addSubview(stack)
+        // 兩列佈局：上列＝控制（模式相依）；下列＝電平表＋資訊＋警告。
+        let controlRow = NSStackView(views: [clockLabel, micDevicePopup, micCheck, systemAudioCheck, cursorCheck,
+                                             durationField, durationSuffix, primaryButton, cancelButton])
+        controlRow.orientation = .horizontal
+        controlRow.alignment = .centerY
+        controlRow.spacing = 8
+        let infoRow = NSStackView(views: [levelMeter, infoLabel, noticeLabel])
+        infoRow.orientation = .horizontal
+        infoRow.alignment = .centerY
+        infoRow.spacing = 8
+
+        let container = NSStackView(views: [controlRow, infoRow])
+        container.orientation = .vertical
+        container.alignment = .leading
+        container.spacing = 6
+        container.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 76))
+        content.addSubview(container)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+            container.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            container.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor),
+            container.topAnchor.constraint(equalTo: content.topAnchor),
+            container.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         ])
         p.contentView = content
         panel = p
@@ -204,18 +277,23 @@ public final class RecordHUDController: NSObject {
     /// （時鐘文字由 updateClock 另外驅動，此處不覆寫 clockLabel）。
     private func configure(mode: Mode) {
         self.mode = mode
+        let armed = (mode == .armed)
+        // 待命才顯示選項工具列（裝置/音訊/游標/秒數）；錄製中收起,只留時鐘/停止。
+        durationField.isHidden = !armed
+        durationSuffix.isHidden = !armed
+        micDevicePopup.isHidden = !armed
+        micCheck.isHidden = !armed
+        systemAudioCheck.isHidden = !armed
+        cursorCheck.isHidden = !armed
+        clockLabel.isHidden = armed          // 待命不顯示時鐘（改用提示文字放 infoLabel 前）
         switch mode {
         case .armed:
-            durationField.isHidden = false
-            durationSuffix.isHidden = false
+            syncOptionControls()             // 填裝置下拉＋依設定設勾選
             primaryButton.title = "開始"
-            clockLabel.textColor = .white
-            clockLabel.stringValue = "按「開始」錄製；秒數欄可留白"
         case .recording:
-            durationField.isHidden = true
-            durationSuffix.isHidden = true
             primaryButton.title = "停止"
         }
+        refreshInfo()
     }
 
     @objc private func primaryTapped() {
@@ -225,4 +303,22 @@ public final class RecordHUDController: NSObject {
         }
     }
     @objc private func cancelTapped() { onCancel?() }
+
+    // MARK: 選項工具列動作（寫 AppSettings + 通知 RecordSession 重掛/更新）
+
+    @objc private func micCheckToggled() {
+        AppSettings.recordMicrophone = (micCheck.state == .on)
+        micDevicePopup.isEnabled = (micCheck.state == .on)
+        onOptionsChanged?()
+    }
+    @objc private func systemAudioToggled() {
+        AppSettings.recordSystemAudio = (systemAudioCheck.state == .on)
+    }
+    @objc private func cursorToggled() {
+        AppSettings.recordShowsCursor = (cursorCheck.state == .on)
+    }
+    @objc private func micDeviceChanged() {
+        AppSettings.recordMicrophoneDeviceID = micDevicePopup.selectedItem?.representedObject as? String
+        onOptionsChanged?()
+    }
 }

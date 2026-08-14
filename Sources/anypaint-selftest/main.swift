@@ -1356,5 +1356,6 @@ captureRoutingTests()
 scrollBottomLogicTests()
 automationCaptureTests()
 recordOutputTests()
+recordHUDInfoTests()
 
 T.finish()

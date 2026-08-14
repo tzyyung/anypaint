@@ -149,10 +149,16 @@ public final class RecordSession {
             hud.showMessage("選區太小，拉大一點才能開始")
             return
         }
+        // 選區像素尺寸給 HUD 資訊列（點×scale）。調框時每次更新。
+        let scale = scr.backingScaleFactor
+        hud.setRegion(widthPx: Int((selection.width * scale).rounded()),
+                      heightPx: Int((selection.height * scale).rounded()))
         // 已 armed（使用者在調框）→ 只跟著更新 HUD 位置，不可重跑進場流程。
         if state != .armed {
             state = .armed
             hud.onStart = { [weak self] in self?.startRecording() }
+            // 使用者在 HUD 改錄音裝置/開關 → 重掛待命試音錶（讀新設定）。
+            hud.onOptionsChanged = { [weak self] in self?.startStandbyMic() }
             startStandbyMic()   // 待命試音錶：先讓使用者看到麥克風有沒有聲音再決定開始
         }
         hud.show(near: selection, on: scr, mode: .armed)   // 冪等：調框只更新位置（也順便清掉太小訊息）
