@@ -552,5 +552,11 @@ public final class RecordHUDController: NSObject {
     @objc private func volumeChanged() {
         AudioInputVolume.setVolume(deviceUID: AppSettings.recordMicrophoneDeviceID, Float(volumeSlider.doubleValue))
     }
-    @objc private func soundSettingsTapped() { AudioInputVolume.openSoundSettings() }
+    @objc private func soundSettingsTapped() {
+        // 開系統「聲音」設定＋**結束框選**：框選 overlay 蓋在系統視窗上、攔截所有點擊，不收掉就
+        // 完全操作不了聲音視窗（實機回報：點了聲音設定卻點不動裡面任何東西）。快速調輸入音量用
+        // HUD 的滑桿即可（不必離開）；會點到「聲音設定」代表要深入檢查裝置，那就把畫面讓給系統視窗。
+        AudioInputVolume.openSoundSettings()
+        onCancel?()
+    }
 }
