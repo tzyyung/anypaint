@@ -279,7 +279,9 @@ public final class RecordHUDController: NSObject {
 
     public func setMicEnabled(_ enabled: Bool, deviceName: String? = nil) {
         micUIVisible = enabled
-        levelMeter.isHidden = !enabled
+        // 用 alpha 而非 isHidden：關麥克風時電平表只是透明，**仍佔住那 46px 槽**，
+        // 麥克風區塊寬度固定，切換不會讓系統聲/更多/開始/取消整排左右移（實機回報 2026-08-14）。
+        levelMeter.alphaValue = enabled ? 1 : 0
         if !enabled { setNoSignal(false); setMicLevel(0) }
     }
     public func setMicLevel(_ level: Float) { levelMeter.level = level }
@@ -342,7 +344,7 @@ public final class RecordHUDController: NSObject {
         levelMeter.translatesAutoresizingMaskIntoConstraints = false
         levelMeter.widthAnchor.constraint(equalToConstant: 46).isActive = true
         levelMeter.heightAnchor.constraint(equalToConstant: 8).isActive = true
-        levelMeter.isHidden = true
+        levelMeter.alphaValue = 0   // 永遠佔位（固定 46px 槽），開麥克風才顯形——見 setMicEnabled
 
         gearButton.bezelStyle = .rounded
         gearButton.isBordered = false
