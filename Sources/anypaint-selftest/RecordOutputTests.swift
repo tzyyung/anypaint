@@ -46,11 +46,21 @@ nonisolated func recordOutputTests() {
     T.checkTrue("silentFmt: gif+無音軌→nil", RecordOutputService.silentFormatWarning(ext: "gif", hasAudio: false) == nil)
     T.checkTrue("silentFmt: 大小寫容忍 GIF", RecordOutputService.silentFormatWarning(ext: "GIF", hasAudio: true) != nil)
 
-    // RecordSavedNotice.message（完成提示文案）
-    T.checkTrue("savedNotice: 成功含檔名＋完成字樣",
-                RecordSavedNotice.message(filename: "a.mp4").contains("a.mp4")
-                && RecordSavedNotice.message(filename: "a.mp4").contains("完成"))
-    T.checkTrue("savedNotice: 失敗訊息", RecordSavedNotice.message(filename: nil).contains("失敗"))
+    // （錄後完成文案已移轉到 RecordHUDInfo.doneTitle，見 recordHUDInfoTests；
+    //   RecordSavedNotice 由統一 morph 工具列取代並刪除。）
+
+    // saveDirectoryPath（完成面板「開啟存檔資料夾」的目錄解析，與 finalMovieURL 同套規則）
+    T.checkEq("saveDir: 未設→~/Movies/anypaint",
+              RecordOutputService.saveDirectoryPath(saveDirectory: nil, home: "/Users/tester"),
+              "/Users/tester/Movies/anypaint")
+    T.checkEq("saveDir: 空→預設",
+              RecordOutputService.saveDirectoryPath(saveDirectory: "", home: "/Users/tester"),
+              "/Users/tester/Movies/anypaint")
+    T.checkEq("saveDir: ~/foo 展開",
+              RecordOutputService.saveDirectoryPath(saveDirectory: "~/foo", home: "/Users/tester"),
+              "/Users/tester/foo")
+    T.checkEq("saveDir: 絕對原樣",
+              RecordOutputService.saveDirectoryPath(saveDirectory: "/tmp/rec", home: "/Users/tester"), "/tmp/rec")
 
     // AudioInputVolume.clamped（輸入音量 clamp）
     T.checkEq("inputVol: 負→0", AudioInputVolume.clamped(-0.5), 0)

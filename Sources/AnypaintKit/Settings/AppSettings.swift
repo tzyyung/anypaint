@@ -252,6 +252,13 @@ public enum AppSettings {
         set { UserDefaults.standard.set(newValue, forKey: recordSystemAudioKey) }
     }
 
+    private static let recordOptionsExpandedKey = "recordOptionsExpanded"
+    /// 待命工具列第二層（裝置/音量/秒數/游標）是否展開（記憶，spec §3.4）。預設收合。
+    public static var recordOptionsExpanded: Bool {
+        get { UserDefaults.standard.bool(forKey: recordOptionsExpandedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: recordOptionsExpandedKey) }
+    }
+
     /// 錄製時包含麥克風（需要 TCC 授權；未授權時啟動處會降級關閉，不中斷錄影——spec §3）。
     /// 預設關。
     public static var recordMicrophone: Bool {

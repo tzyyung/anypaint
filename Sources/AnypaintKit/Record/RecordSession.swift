@@ -10,10 +10,25 @@ public final class RecordSession {
     public enum State { case idle, selecting, armed, recording, finishing }
     public private(set) var state: State = .idle
     public var isActive: Bool { state != .idle }
-    /// 收尾回呼。母帶 URL；nil＝取消或失敗。第二參數＝擷取螢幕 backingScaleFactor
-    /// （語意同 `ScrollCaptureSession.onFinished`：呼叫端換算預覽/裁切要用它，不能自己問
-    /// `NSScreen.main`——混合 DPI 多螢幕下會用錯 scale）。
-    public var onFinished: ((URL?, CGFloat) -> Void)?
+
+    /// 收尾結果（對抗式審查 #1/#3：單一終結回呼帶結果，不拆兩條 callback）。
+    /// `.saved`＝母帶暫存 URL（呼叫端負責搬到最終位置後才 `presentDone`）；`.failed`＝可讀原因；
+    /// `.cancelled`＝使用者丟棄（HUD 已完整 dismiss，不顯示完成面板）。
+    public enum Outcome: Equatable {
+        case saved(tempURL: URL)
+        case failed(reason: String)
+        case cancelled
+    }
+    /// 收尾回呼。第二參數＝擷取螢幕 backingScaleFactor（語意同 `ScrollCaptureSession.onFinished`：
+    /// 呼叫端換算預覽/裁切要用它，不能自己問 `NSScreen.main`——混合 DPI 多螢幕下會用錯 scale）。
+    /// **單一還原出口**：呼叫端不論成功失敗都要在此開頭恢復快鍵/選單（對抗式審查 #1）。
+    public var onFinished: ((Outcome, CGFloat) -> Void)?
+    /// 完成面板 ↺ 重錄請求（AppDelegate 用存下的 `lastRecordRegion` 走 `.reArm` 重入，不重用自動化入口）。
+    public var onReRecord: (() -> Void)?
+    /// 最近一次錄製的選區（全域點座標）：完成面板定位／重錄沿用（在 overlay dismiss 前存下——對抗式審查 #8）。
+    public private(set) var lastRecordRegion: CGRect = .zero
+    /// 最近一次錄製時長（秒）：完成面板中繼資訊用（stop 當下由 recordingStartedAt 算）。
+    private var lastElapsed: Double = 0
 
     /// 不限時錄製的看門狗上限：10 分鐘自動走正常停止（防忘記停吃磁碟，設計文件 §2）。
     static let maxRecordingSeconds: Double = 600
@@ -83,6 +98,18 @@ public final class RecordSession {
                 hud.showTransientNotice("🤖 遠端自動化錄影")   // 混淆代理人對策 b：遠端觸發要有可見標示
             }
         }
+    }
+
+    /// ↺ 重錄專用（對抗式審查 #5）：用鎖定選區重入 **armed**——不 auto-start、不掛「🤖遠端自動化」
+    /// 標籤、保留使用者的秒數/裝置設定（讓他再按開始）。與 `startProgrammatically` 的差別正是不往下推到
+    /// recording，避免把本地使用者點擊誤標成遠端自動化並吞掉時限。
+    /// - Parameter rect: AppKit 全域座標（點，左下原點）。
+    public func startArmed(rect: CGRect) {
+        guard state == .idle, let screen = Self.screen(containing: rect) else { return }
+        var locked = false
+        enterSelecting(on: screen) { locked = overlay.presentLocked(rect, on: screen) }
+        guard locked else { teardown(); return }
+        // presentLocked 觸發 onSelectionLocked → enterArmed；選區太小時停在訊息態，與互動路徑一致。
     }
 
     /// selecting 進場共用碼（`begin()`／`startProgrammatically(rect:)` 唯一差異只在怎麼把選區
@@ -219,6 +246,7 @@ public final class RecordSession {
         recordingStartedAt = ProcessInfo.processInfo.systemUptime
         startClock()
         let selectionGlobal = overlay.selectionGlobal
+        lastRecordRegion = selectionGlobal   // 對抗式審查 #8：在 overlay dismiss 前存下,供完成面板定位／重錄
         let url = output.tempMovieURL()
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -244,8 +272,8 @@ public final class RecordSession {
                     // 任何回饋。至少給一聲 beep（TCC 權限 alert 的完整流程屬 AppDelegate 層，
                     // 不在這裡做）。
                     NSSound.beep()
-                    self.teardown()
-                    self.onFinished?(nil, screen.backingScaleFactor)
+                    self.teardownKeepingHUD()   // 留 HUD 讓呼叫端 morph 成失敗態（或 dismiss）
+                    self.onFinished?(.failed(reason: "startFailed"), screen.backingScaleFactor)
                     UITestServer.shared?.emit("recordingFailed", ["reason": "startFailed: \(error)"])
                     NSLog("anypaint: 動畫截圖 stream 啟動失敗 %@", String(describing: error))
                 }
@@ -300,13 +328,14 @@ public final class RecordSession {
             do {
                 let url = try await self.frameSource.stopAndFinish()
                 guard self.state == .finishing else { return }   // 期間被 cancel（防二次 onFinished）
-                self.teardown()
-                self.onFinished?(url, scale)
+                self.lastElapsed = ProcessInfo.processInfo.systemUptime - self.recordingStartedAt
+                self.teardownKeepingHUD()   // 留 HUD 原地 morph 成 done（呼叫端 save 完才 showDone）
+                self.onFinished?(.saved(tempURL: url), scale)
                 UITestServer.shared?.emit("recordingStopped", ["outputURL": url.path])
             } catch {
                 guard self.state == .finishing else { return }
-                self.teardown()
-                self.onFinished?(nil, scale)
+                self.teardownKeepingHUD()
+                self.onFinished?(.failed(reason: "finishFailed"), scale)
                 UITestServer.shared?.emit("recordingFailed", ["reason": "finishFailed: \(error)"])
                 // NSLog 在未公證自簽 app 撈不到（CLAUDE.md 診斷原則）——不論哪種失敗都要有
                 // 使用者感知得到的回饋，否則整段錄製「憑空消失」使用者卻毫無所覺。
@@ -322,9 +351,9 @@ public final class RecordSession {
     private func cancel() {
         guard state != .idle, state != .finishing else { return }   // finishing 不接受取消（同 scroll 理由）
         let wasRecording = state == .recording
-        teardown()
+        teardown()                                                  // 取消＝完整 teardown（含 dismiss HUD，不留 done 面板）
         if wasRecording { Task { await frameSource.abort() } }      // 丟母帶＋刪暫存
-        onFinished?(nil, screen?.backingScaleFactor ?? 2)
+        onFinished?(.cancelled, screen?.backingScaleFactor ?? 2)
         UITestServer.shared?.emit("recordingAborted", [:])
     }
 
@@ -349,8 +378,8 @@ public final class RecordSession {
                 // 這條放生路徑原本零回饋（NSLog 在未公證自簽 app 撈不到——CLAUDE.md）——
                 // 使用者只會看到框與 HUD 憑空消失，比照上面 writerFailed 的 beep 給個訊號。
                 NSSound.beep()
-                self.teardown()
-                self.onFinished?(nil, self.screen?.backingScaleFactor ?? 2)
+                self.teardownKeepingHUD()
+                self.onFinished?(.failed(reason: "finishingTimeout"), self.screen?.backingScaleFactor ?? 2)
                 UITestServer.shared?.emit("recordingFailed", ["reason": "finishingTimeout"])
             default:
                 self.cancel()                    // selecting/armed 逾時＝取消
@@ -372,19 +401,50 @@ public final class RecordSession {
         if let monitor { eventMonitors.append(monitor) }
     }
 
-    private func teardown() {
-        stopStandbyMic()               // 待命試音錶（Task B2）；錄製中已在 startRecording stop 過,重複無害
+    /// 收乾淨但**保留 HUD 面板**（成功/失敗收尾用）：overlay dismiss、但不 `hud.dismiss()`，
+    /// 讓呼叫端把 HUD 原地 morph 成 done/doneFailed（或動畫截圖路徑另行 `dismissHUD()`）。
+    /// 對抗式審查 #8：`lastRecordRegion` 已在 startRecording 存好，這裡才 dismiss overlay。
+    private func teardownKeepingHUD() {
+        stopStandbyMic()
         clock?.invalidate(); clock = nil
         watchdog?.cancel(); watchdog = nil
         for m in eventMonitors { NSEvent.removeMonitor(m) }
         eventMonitors.removeAll()
         clickRing.teardown()
         overlay.dismiss()
-        hud.dismiss()
         durationLimit = nil
         state = .idle
-        // 這次 session 的 stream 已經死透（或從未活過）：清掉回呼，避免上一段錄製的死 stream
-        // 遲到觸發的錯誤在下一段全新錄製開始後才送達、把新 session 也一起 stopRecording() 掉。
         frameSource.onStreamError = nil
+    }
+
+    private func teardown() {
+        teardownKeepingHUD()
+        hud.dismiss()
+    }
+
+    // MARK: 完成面板出口（AppDelegate save 完後驅動；spec §3.2）
+
+    /// 成功：把 HUD 原地 morph 成完成面板。`finalURL`＝已搬到最終位置的檔案；`sizeBytes`＝其大小。
+    public func presentDone(finalURL: URL, sizeBytes: Int64, saveDirectory: URL?) {
+        guard let screen = lastScreenForDone() else { hud.dismiss(); return }
+        hud.onReRecord = { [weak self] in self?.onReRecord?() }
+        hud.onDoneClosed = { [weak self] in self?.dismissHUD() }
+        hud.showDone(near: lastRecordRegion, on: screen, url: finalURL,
+                     durationSec: lastElapsed, sizeBytes: sizeBytes, saveDirectory: saveDirectory)
+    }
+
+    /// 失敗：把 HUD 原地 morph 成失敗態。
+    public func presentDoneFailed(detail: String, saveDirectory: URL?) {
+        guard let screen = lastScreenForDone() else { hud.dismiss(); return }
+        hud.onReRecord = { [weak self] in self?.onReRecord?() }
+        hud.onDoneClosed = { [weak self] in self?.dismissHUD() }
+        hud.showDoneFailed(near: lastRecordRegion, on: screen, detail: detail, saveDirectory: saveDirectory)
+    }
+
+    /// 動畫截圖路徑（direct:false）或取消：直接收 HUD（不留完成面板）。
+    public func dismissHUD() { hud.dismiss() }
+
+    private func lastScreenForDone() -> NSScreen? {
+        screen ?? Self.screen(containing: lastRecordRegion)
     }
 }

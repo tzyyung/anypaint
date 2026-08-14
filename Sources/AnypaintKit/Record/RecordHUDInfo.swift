@@ -31,4 +31,27 @@ public enum RecordHUDInfo {
         guard let bytes else { return base }
         return base + " · " + fileSizeText(bytes: bytes)
     }
+
+    // MARK: 完成態（取代 RecordSavedNotice；統一 morph 工具列的錄後文字）
+
+    /// 完成標題（純函式,可測；取代 `RecordSavedNotice.message`）：成功給勾＋字樣,失敗給警告。
+    public static func doneTitle(success: Bool) -> String {
+        success ? "✓ 錄影完成" : "⚠︎ 錄影存檔失敗"
+    }
+
+    /// 時長 mm:ss（負值 clamp 0）。
+    public static func durationText(_ seconds: Double) -> String {
+        let s = max(0, Int(seconds.rounded()))
+        return String(format: "%02d:%02d", s / 60, s % 60)
+    }
+
+    /// 完成資訊列：「已存至 <dir>」。
+    public static func doneInfo(saveDirectory: String?) -> String {
+        "已存至 \(saveLocation(saveDirectory))"
+    }
+
+    /// 完成中繼資訊：「⏱ 00:07 · 800×600 px · 3.2 MB」。
+    public static func doneMeta(durationSec: Double, widthPx: Int, heightPx: Int, bytes: Int64) -> String {
+        "⏱ \(durationText(durationSec)) · \(regionText(widthPx: widthPx, heightPx: heightPx)) · \(fileSizeText(bytes: bytes))"
+    }
 }

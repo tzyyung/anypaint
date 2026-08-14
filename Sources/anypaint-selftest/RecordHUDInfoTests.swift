@@ -25,4 +25,22 @@ nonisolated func recordHUDInfoTests() {
               RecordHUDInfo.recordingInfo(widthPx: 640, heightPx: 480, bytes: nil), "640×480 px")
     T.checkEq("hudInfo: 錄制資訊含大小",
               RecordHUDInfo.recordingInfo(widthPx: 640, heightPx: 480, bytes: 1024 * 1024), "640×480 px · 1.0 MB")
+
+    // 完成態（取代 RecordSavedNotice.message；統一 morph 工具列的錄後文字）
+    T.checkTrue("hudInfo: done 標題成功含完成", RecordHUDInfo.doneTitle(success: true).contains("完成"))
+    T.checkTrue("hudInfo: done 標題失敗含失敗", RecordHUDInfo.doneTitle(success: false).contains("失敗"))
+    T.checkEq("hudInfo: 時長 mm:ss", RecordHUDInfo.durationText(67), "01:07")
+    T.checkEq("hudInfo: 時長個位補零", RecordHUDInfo.durationText(7), "00:07")
+    T.checkEq("hudInfo: 時長負值 clamp 0", RecordHUDInfo.durationText(-3), "00:00")
+    T.checkEq("hudInfo: done 資訊列", RecordHUDInfo.doneInfo(saveDirectory: nil), "已存至 ~/Movies/anypaint")
+    T.checkEq("hudInfo: done 中繼",
+              RecordHUDInfo.doneMeta(durationSec: 7, widthPx: 800, heightPx: 600, bytes: 3 * 1024 * 1024 + 209715),
+              "⏱ 00:07 · 800×600 px · 3.2 MB")
+
+    // RecordDonePolicy（收起策略純值）
+    T.checkEq("donePolicy: 自動收起 15s", RecordDonePolicy.dismissAfterSeconds, 15)
+    T.checkTrue("donePolicy: 播放後收面板", RecordDonePolicy.dismissesPanel(after: .play))
+    T.checkTrue("donePolicy: 重錄後收面板", RecordDonePolicy.dismissesPanel(after: .reRecord))
+    T.checkTrue("donePolicy: 關閉後收面板", RecordDonePolicy.dismissesPanel(after: .close))
+    T.checkTrue("donePolicy: 拖曳不收面板", !RecordDonePolicy.dismissesPanel(after: .drag))
 }

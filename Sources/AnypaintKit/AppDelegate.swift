@@ -114,6 +114,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // 沿用 present() 已存的處理器閉包（含原始 vars），故這裡只需擷取＋換場。
         overlayController.onReshoot = { [weak self] in self?.reshootOverlay() }
 
+        // ↺ 重錄（完成面板）：用最近選區走 .reArm 重入 armed（不 auto-start／不掛自動化標籤，
+        // 對抗式審查 #5）。經 beginRecord 重跑完整 disable/menu/onFinished 設定，不漏互斥。
+        recordSession.onReRecord = { [weak self] in
+            guard let self else { return }
+            self.beginRecord(direct: true, rect: self.recordSession.lastRecordRegion, autoStart: false)
+        }
+
         // 全域快鍵（可在設定頁更改；底層為 Carbon，免輔助使用權限）
         KeyboardShortcuts.onKeyDown(for: .capture) { [weak self] in self?.beginCapture() }
         KeyboardShortcuts.onKeyDown(for: .pin) { [weak self] in self?.pinFromClipboard() }
@@ -293,7 +300,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 錄影統一入口。`direct=false`＝動畫截圖(收尾開預覽)；`direct=true`＝錄影(收尾直接存 MP4)。
     /// 兩者共用 SCStream→WriterBox 底層,只在**收尾**分叉（spec §6：共用底層、收尾分叉）。
-    private func beginRecord(direct: Bool, rect: CGRect? = nil) {
+    /// - Parameter autoStart: 有 `rect` 時，`true`＝RPC 自動化（直接錄，`startProgrammatically`）；
+    ///   `false`＝↺ 重錄（重入 armed 讓使用者再按開始，`startArmed`——對抗式審查 #5）。無 `rect` 時無意義。
+    private func beginRecord(direct: Bool, rect: CGRect? = nil, autoStart: Bool = true) {
         switch activeMode {
         case .record: recordSession.cancelIfActive(); return   // 再按＝armed 取消／recording 停止收檔
         case .freeze, .scroll: return                            // 凍結／滾動中 → 不疊加
@@ -312,33 +321,53 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         setRecordingMenu(direct: direct, on: true)
         // %title% 於按下快鍵當下凍結（spec，同 beginScrollCapture 理由）。
         let vars = CaptureVars.makeVars(title: CaptureVars.currentFrontTitle())
-        recordSession.onFinished = { [weak self] url, captureScale in
+        recordSession.onFinished = { [weak self] outcome, captureScale in
             guard let self else { return }
-            KeyboardShortcuts.enable(others)                     // 恢復點集中在單一出口
+            KeyboardShortcuts.enable(others)                     // 對抗式審查 #1：單一還原出口（不分成敗）
             self.setRecordingMenu(direct: direct, on: false)
-            guard let url else { return }                        // 取消或失敗 → 靜默（同 scroll 慣例）
-            if direct {
-                // 錄影：直接落地存 MP4，發**畫面上**完成提示（免通知權限，解決「錄完沒表示」）＋系統通知。
-                let saved = self.recordOutput.saveMovie(from: url, vars: vars)
-                RecordSavedNotice.shared.show(fileURL: saved)   // 成功可點擊在 Finder 顯示;失敗顯示失敗
-                if let saved {
-                    UITestServer.shared?.emit("recordSaved", ["path": saved.path])   // 自動化可 wait-event
+            switch outcome {
+            case .cancelled:
+                break                                            // 使用者丟棄：HUD 已 dismiss,不顯示完成面板
+            case .failed:
+                // 對抗式審查 #3：writer/啟動/收尾逾時失敗——錄影走完成面板失敗態,動畫截圖靜默收 HUD。
+                if direct {
+                    self.recordSession.presentDoneFailed(detail: "錄製失敗，未產生檔案",
+                                                         saveDirectory: self.recordSaveDirectoryURL())
+                    UITestServer.shared?.emit("captureFailed", ["reason": "recordFinish"])
                 } else {
-                    UITestServer.shared?.emit("captureFailed", ["reason": "recordSave"])
+                    self.recordSession.dismissHUD()
                 }
-                try? FileManager.default.removeItem(at: url)     // 已複製到最終位置,清暫存
-            } else {
-                if self.recordPreviewController == nil {
-                    self.recordPreviewController = RecordPreviewWindowController(output: self.recordOutput,
-                                                                                  pinboard: self.pinboard)
-                }
-                Task { @MainActor in
-                    // present(movieURL:vars:captureScale:) 是 async（需先讀母帶 naturalSize）。
-                    await self.recordPreviewController?.present(movieURL: url, vars: vars, captureScale: captureScale)
+            case .saved(let url):
+                if direct {
+                    // 對抗式審查 #2：先 save 到最終位置,拿 finalURL 才 morph 成 done（不指向即將被刪的暫存）。
+                    let saved = self.recordOutput.saveMovie(from: url, vars: vars)
+                    try? FileManager.default.removeItem(at: url)   // 已複製到最終位置,清暫存
+                    if let saved {
+                        let bytes = (try? FileManager.default.attributesOfItem(atPath: saved.path)[.size] as? Int64) ?? nil
+                        self.recordSession.presentDone(finalURL: saved, sizeBytes: bytes ?? 0,
+                                                       saveDirectory: saved.deletingLastPathComponent())
+                        UITestServer.shared?.emit("recordSaved", ["path": saved.path])   // 自動化可 wait-event
+                    } else {
+                        self.recordSession.presentDoneFailed(detail: "存檔失敗，請檢查磁碟空間或存檔資料夾",
+                                                             saveDirectory: self.recordSaveDirectoryURL())
+                        UITestServer.shared?.emit("captureFailed", ["reason": "recordSave"])
+                    }
+                } else {
+                    self.recordSession.dismissHUD()              // 動畫截圖：收 HUD,改開預覽
+                    if self.recordPreviewController == nil {
+                        self.recordPreviewController = RecordPreviewWindowController(output: self.recordOutput,
+                                                                                      pinboard: self.pinboard)
+                    }
+                    Task { @MainActor in
+                        await self.recordPreviewController?.present(movieURL: url, vars: vars, captureScale: captureScale)
+                    }
                 }
             }
         }
-        if let rect { recordSession.startProgrammatically(rect: rect) } else { recordSession.begin() }
+        if let rect {
+            if autoStart { recordSession.startProgrammatically(rect: rect) }   // RPC 自動化
+            else { recordSession.startArmed(rect: rect) }                      // ↺ 重錄
+        } else { recordSession.begin() }
         // begin()／startProgrammatically() 在無主螢幕時會靜默 no-op（onFinished 永不 fire）——
         // 若沒真的進場就立刻把剛 disable 的快鍵/選單恢復，否則其餘入口永久失效需重啟。
         guard recordSession.isActive else {
@@ -346,6 +375,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             setRecordingMenu(direct: direct, on: false)
             return
         }
+    }
+
+    /// 目前設定的錄影存檔目錄 URL（完成面板失敗態「開啟存檔資料夾」用）。
+    private func recordSaveDirectoryURL() -> URL {
+        URL(fileURLWithPath: RecordOutputService.saveDirectoryPath(
+            saveDirectory: AppSettings.recordSaveDirectory, home: NSHomeDirectory()), isDirectory: true)
     }
 
     /// 依模式切正確的選單項標題（動畫截圖／錄影 各自的「停止…」）。
@@ -389,11 +424,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 return ["ok": false, "error": "noScreenRecordingPermission"]
             }
             // direct:true＝錄影（直接落地存 MP4，完成發 recordSaved 事件）；否則動畫截圖（開預覽）。
-            beginRecord(direct: command.json["direct"] as? Bool ?? false, rect: rect)
+            // arm:true＝只進待命（不 auto-start，走 startArmed）：讓自動化設好選項/看 armed 二層工具列，
+            // 之後由使用者按開始或 abortRecord 收掉。與 direct 正交。
+            let arm = command.json["arm"] as? Bool ?? false
+            beginRecord(direct: command.json["direct"] as? Bool ?? false, rect: rect, autoStart: !arm)
             // beginRecord 全程同步：呼叫回來後 state 已經是最終結果，不必等回呼。
             switch recordSession.state {
             case .recording:
                 return ["ok": true]
+            case .armed where arm:
+                return ["ok": true, "state": "armed"]   // arm 模式停在待命＝成功
             case .selecting:
                 // enterArmed 選區太小時早退，state 停在 .selecting（不是 .armed——早退分支
                 // 完全沒碰 state，見 RecordSession.startProgrammatically 的註解）。

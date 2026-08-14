@@ -37,6 +37,15 @@ public final class RecordOutputService {
         return CaptureSaver.uniquedURL(directory: URL(fileURLWithPath: dirPath), filename: name, exists: exists)
     }
 
+    /// 存檔目錄解析（純函式,可測；與 `finalMovieURL` 同一套 dir 規則）：nil/空→`~/Movies/anypaint`，
+    /// 展開 `~`／相對補 `home`。失敗完成面板「開啟存檔資料夾」用。
+    public static func saveDirectoryPath(saveDirectory: String?, home: String) -> String {
+        let dirRaw = (saveDirectory?.isEmpty == false) ? saveDirectory! : "~/Movies/anypaint"
+        if dirRaw == "~" { return home }
+        if dirRaw.hasPrefix("~/") { return home + String(dirRaw.dropFirst(1)) }
+        return FilenameTemplate.ensureAbsolute(dirRaw, home: home)
+    }
+
     /// 「錄影」直接落地：把暫存母帶複製到 `finalMovieURL`（`recordSaveDirectory`）＋發存檔通知。
     /// 不開預覽（與 `saveCopy`＝預覽匯出那條分開）。失敗回 nil。
     @discardableResult
