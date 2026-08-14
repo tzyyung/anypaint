@@ -41,35 +41,39 @@ public final class LevelMeterView: NSView {
     }
 
     public override func draw(_ dirtyRect: NSRect) {
-        // 背景與未亮格一律用純黑（rgb 分量恆為 0）——格框靠深淺兩層黑色的 alpha 對比
-        // 呈現，不靠混進白色。踩過的坑：先前未亮格用「半透明白疊在黑背景上」，合成後
-        // rgb 和 ≈0.77、alpha≈0.31，剛好同時跨過自檢「alpha>0.3 且 rgb 和>0.5」兩個
-        // 門檻——這是合成色的假訊號，不是真的亮格，導致靜音時仍有大量像素被誤判為亮
-        // （2026-08-13 審查抓到：quiet 亮格佔比 79%）。黑色不管疊多少層 alpha，rgb 和
-        // 恆為 0，永遠不會被那個判準誤傷。
-        NSColor.black.withAlphaComponent(0.15).setFill()
-        bounds.fill()
+        // 自檢判亮格＝「alpha>0.3 且 rgb 和>0.5」。硬約束：
+        //  ① 底軌與未亮格一律純黑（rgb 恆 0）——踩過的坑：未亮格用半透明白疊黑背景，合成後
+        //     rgb≈0.77、alpha≈0.31 同時跨過兩門檻＝假亮格（2026-08-13 審查：quiet 79% 誤判）。
+        //  ② 外框用白但 **alpha 0.28（< 0.3 門檻）**——空表也看得出是個「表」，又不被自檢當亮格。
+        //     自檢只驗 loud>quiet，外框是恆定像素，本來就不影響大小關係，壓門檻只是雙保險。
+        let frame = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let radius: CGFloat = 2
+        let track = NSBezierPath(roundedRect: frame, xRadius: radius, yRadius: radius)
+
+        NSColor.black.withAlphaComponent(0.28).setFill()   // 底軌（純黑）
+        track.fill()
+        NSColor.white.withAlphaComponent(0.28).setStroke() // 外框（白低透明，空表可辨識）
+        track.lineWidth = 1
+        track.stroke()
 
         guard totalBars > 0 else { return }
-        let gap: CGFloat = 2
-        let barWidth = (bounds.width - gap * CGFloat(totalBars - 1)) / CGFloat(totalBars)
+        let inner = frame.insetBy(dx: 1.5, dy: 1.5)        // 內縮，格子不貼到外框
+        let gap: CGFloat = 1
+        let barWidth = (inner.width - gap * CGFloat(totalBars - 1)) / CGFloat(totalBars)
         guard barWidth > 0 else { return }
 
         for i in 0..<totalBars {
-            let x = CGFloat(i) * (barWidth + gap)
-            let barRect = NSRect(x: x, y: 0, width: barWidth, height: bounds.height)
+            let x = inner.minX + CGFloat(i) * (barWidth + gap)
+            let barRect = NSRect(x: x, y: inner.minY, width: barWidth, height: inner.height)
 
             let isPeakBar = peakBar > 0 && i == peakBar - 1
             let color: NSColor
             if isPeakBar {
-                // peak-hold 格：不管當下是否亮起（衰減後可能已高於目前亮格），
-                // 都用亮白標出剛剛到過的最高點，與下面的 dB 分區色明顯區隔。
-                color = NSColor.white
+                color = NSColor.white               // peak-hold：亮白標最高點
             } else if i < litBars {
                 color = Self.zoneColor(for: i, totalBars: totalBars)
             } else {
-                // 未亮格：比背景略深的黑，形成可見的格框，同樣不含白色分量。
-                color = NSColor.black.withAlphaComponent(0.35)
+                color = NSColor.black.withAlphaComponent(0.5)   // 未亮格：純黑（不含白，不誤判）
             }
             color.setFill()
             NSBezierPath(rect: barRect).fill()
