@@ -10,9 +10,14 @@ private final class RecordHUDPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-/// pill 開關（🎙/🔊/游標）：藍色填底＝開，取代原本的 NSButton(checkboxWithTitle:)。
-/// 用 pushOnPushOff 讓點擊自動切 state 並送 action；state 改變時換 layer 底色。
-private final class PillToggle: NSButton {
+/// 圖示開關（使用者選：靠圖示本身表達開/關，不靠藍底——2026-08-14）。
+/// 開＝亮圖示（🎙/🔊/👆）＋滿透明度；關＝靜音圖示（🔇）＋整體變暗。
+/// 用 pushOnPushOff 讓點擊自動切 state 並送 action；state 改變時換標題文字（圖示）與透明度。
+private final class IconToggle: NSButton {
+    /// 開/關各自的完整標題（含前置 emoji），例如 "🎙 麥克風" / "🔇 麥克風"。
+    var onTitle = "" { didSet { refresh() } }
+    var offTitle = "" { didSet { refresh() } }
+
     override init(frame frameRect: NSRect) { super.init(frame: frameRect); setup() }
     required init?(coder: NSCoder) { fatalError() }
     private func setup() {
@@ -22,23 +27,22 @@ private final class PillToggle: NSButton {
         layer?.cornerRadius = 8
         font = .systemFont(ofSize: 12)
         contentTintColor = .white
-        updateFill()
     }
-    override var state: NSControl.StateValue { didSet { updateFill() } }
+    override var state: NSControl.StateValue { didSet { refresh() } }
     override var intrinsicContentSize: NSSize {
-        var s = super.intrinsicContentSize; s.width += 20; s.height = 26; return s
+        var s = super.intrinsicContentSize; s.width += 18; s.height = 26; return s
     }
-    private func updateFill() {
-        layer?.backgroundColor = (state == .on
-            ? NSColor.controlAccentColor.withAlphaComponent(0.34)
-            : NSColor(white: 1, alpha: 0.14)).cgColor
-        layer?.borderWidth = state == .on ? 1 : 0
-        layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.9).cgColor
+    /// 開＝亮圖示＋不透明＋極淡底；關＝🔇 圖示＋半透明＋更淡底（雙重訊號，不用藍色）。
+    private func refresh() {
+        let on = (state == .on)
+        title = on ? onTitle : offTitle
+        alphaValue = on ? 1.0 : 0.5
+        layer?.backgroundColor = NSColor(white: 1, alpha: on ? 0.14 : 0.05).cgColor
     }
 }
 
 /// 統一 morph 錄影工具列（spec 2026-08-14）。同一面板、同一錨點貫穿：
-/// - `.armed`：二層——第一層 🎙/🔊 pill＋⚙＋開始/取消；點 ⚙ 展開第二層（裝置/音量/秒數/游標）。
+/// - `.armed`：二層——第一層 🎙/🔊 圖示開關＋⚙＋開始/取消；點 ⚙ 展開第二層（裝置/音量/秒數/游標）。
 /// - `.recording`：極簡列——● 時鐘＋電平＋停止。
 /// - `.done` / `.doneFailed`：contentView 換成 `RecordDoneView`（縮圖/播放/Finder/複製/重錄）。
 @MainActor
@@ -58,8 +62,8 @@ public final class RecordHUDController: NSObject {
 
     // 第一層（tier1）＋資訊列控制項
     private let clockLabel = NSTextField(labelWithString: "")
-    private let micChip = PillToggle()
-    private let systemAudioChip = PillToggle()
+    private let micChip = IconToggle()
+    private let systemAudioChip = IconToggle()
     private let levelMeter = LevelMeterView(frame: NSRect(x: 0, y: 0, width: 46, height: 8))
     private let gearButton = NSButton(title: "⚙", target: nil, action: nil)
     private let primaryButton = NSButton(title: "開始", target: nil, action: nil)
@@ -74,7 +78,7 @@ public final class RecordHUDController: NSObject {
     private let soundSettingsButton = NSButton(title: "聲音設定…", target: nil, action: nil)
     private let durationField = NSTextField(string: "")
     private let durationSuffix = NSTextField(labelWithString: "秒（空白＝不限）")
-    private let cursorChip = PillToggle()
+    private let cursorChip = IconToggle()
 
     // 版面容器
     private var armedStack: NSStackView!
@@ -319,9 +323,10 @@ public final class RecordHUDController: NSObject {
         clockLabel.lineBreakMode = .byTruncatingTail
         clockLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        configureChip(micChip, title: "🎙 麥克風", action: #selector(micToggled))
-        configureChip(systemAudioChip, title: "🔊 系統聲", action: #selector(systemAudioToggled))
-        configureChip(cursorChip, title: "👆 游標", action: #selector(cursorToggled))
+        // 開＝亮圖示；關＝🔇（靜音）＋整體變暗。游標無靜音 emoji,以變暗表達關。
+        configureChip(micChip, onTitle: "🎙 麥克風", offTitle: "🔇 麥克風", action: #selector(micToggled))
+        configureChip(systemAudioChip, onTitle: "🔊 系統聲", offTitle: "🔇 系統聲", action: #selector(systemAudioToggled))
+        configureChip(cursorChip, onTitle: "👆 游標", offTitle: "👆 游標", action: #selector(cursorToggled))
 
         levelMeter.translatesAutoresizingMaskIntoConstraints = false
         levelMeter.widthAnchor.constraint(equalToConstant: 46).isActive = true
@@ -398,8 +403,9 @@ public final class RecordHUDController: NSObject {
         panel = p
     }
 
-    private func configureChip(_ chip: PillToggle, title: String, action: Selector) {
-        chip.title = title
+    private func configureChip(_ chip: IconToggle, onTitle: String, offTitle: String, action: Selector) {
+        chip.onTitle = onTitle
+        chip.offTitle = offTitle
         chip.target = self
         chip.action = action
     }
@@ -464,7 +470,7 @@ public final class RecordHUDController: NSObject {
         applyContentSize()
     }
 
-    /// 待命選項：填裝置下拉、依設定設 pill 開關與音量。
+    /// 待命選項：填裝置下拉、依設定設圖示開關與音量。
     private func syncOptionControls() {
         micDevicePopup.removeAllItems()
         micDevicePopup.addItem(withTitle: "系統預設")
