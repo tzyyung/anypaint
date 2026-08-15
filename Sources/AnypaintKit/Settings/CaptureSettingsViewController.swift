@@ -280,10 +280,17 @@ final class CaptureSettingsViewController: NSViewController {
                 // updateMicMonitorState() 的 guard 自然落到 stop()——不需要另外分支呼叫 stop()。
                 self.updateMicMonitorState()
                 if !granted {
+                    // 已拒絕過時 requestAccess 不再跳系統框——這裡提供「開啟系統設定」直接跳到麥克風面板
+                    // （與螢幕錄製/輔助使用一致：沒權限就引導使用者去設定,不只是說一句）。
                     let alert = NSAlert()
                     alert.messageText = "需要麥克風權限"
-                    alert.informativeText = "請到「系統設定 › 隱私權與安全性 › 麥克風」開啟 anypaint。"
-                    alert.runModal()
+                    alert.informativeText = "請在「系統設定 › 隱私權與安全性 › 麥克風」開啟 anypaint。"
+                    alert.addButton(withTitle: "開啟系統設定")
+                    alert.addButton(withTitle: "取消")
+                    if alert.runModal() == .alertFirstButtonReturn,
+                       let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
             }
         }
