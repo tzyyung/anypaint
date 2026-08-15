@@ -21,9 +21,13 @@ public enum Hotkeys {
     private static var suspended: Set<String> = []             // 目前互斥暫停的 rawValue
     private static var tapActive = false                       // tap 真的在跑（權限給了＋建成功）
     private static var wakeObserverInstalled = false
+    private static var trustPollTimer: Timer?
 
     /// 目前是否走 tap 路徑（供設定頁/自檢顯示實際生效狀態,與「設定值」區分）。
     public static var isTapActive: Bool { tapActive }
+
+    /// tap 因輪詢到授權而**自動**啟用時通知（設定頁刷新狀態；使用者授權後不必回來重按開關）。
+    public static var onTapActivated: (() -> Void)?
 
     /// 啟動時註冊 5 顆快鍵的動作（tap 命中與 Carbon `onKeyDown` 共用同一動作）。呼叫端仍各自
     /// `KeyboardShortcuts.onKeyDown(for:)` 接 Carbon 路徑;這裡的 actions 供 tap 命中時派發。
@@ -38,8 +42,13 @@ public enum Hotkeys {
     @discardableResult
     public static func applyMode(_ mode: HotkeyInterceptMode) -> Bool {
         tap?.stop(); tap = nil; tapActive = false
+        trustPollTimer?.invalidate(); trustPollTimer = nil
         guard mode != .off else { reconcileCarbon(); return false }
-        guard AXIsProcessTrusted() else { reconcileCarbon(); return false }   // 沒權限→退回 Carbon
+        guard AXIsProcessTrusted() else {
+            reconcileCarbon()
+            startTrustPolling()   // 尚未授權→輪詢等待,授權後自動啟用（使用者不必回來重按）
+            return false
+        }
         let t = HotkeyEventTap(bindingsProvider: { Hotkeys.activeBindings() },
                                onMatch: { name in Hotkeys.actions[name]?() })
         guard t.start(level: mode == .hid ? .hid : .session) else { reconcileCarbon(); return false }
@@ -47,6 +56,30 @@ public enum Hotkeys {
         tapActive = true
         KeyboardShortcuts.disable(names)   // tap 接管→全面停用 Carbon,避免雙觸發
         return true
+    }
+
+    /// 開啟「系統設定 → 隱私權與安全性 → 輔助使用」面板（直接跳到那一頁）。
+    public static func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// 設定模式非 off 但尚未授權時,每秒檢查一次授權狀態;一拿到就自動 `applyMode` 啟用 tap 並
+    /// `onTapActivated` 通知 UI。模式被切回 off、或已啟用即停止輪詢。
+    private static func startTrustPolling() {
+        trustPollTimer?.invalidate()
+        let t = Timer(timeInterval: 1.0, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                let mode = AppSettings.hotkeyInterceptMode
+                guard mode != .off else { trustPollTimer?.invalidate(); trustPollTimer = nil; return }
+                guard AXIsProcessTrusted() else { return }   // 還沒授權,繼續等
+                trustPollTimer?.invalidate(); trustPollTimer = nil
+                if applyMode(mode) { onTapActivated?() }      // 授權到手→啟用+通知
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        trustPollTimer = t
     }
 
     /// 互斥暫停（取代 `KeyboardShortcuts.disable`）：tap 模式只更新暫停集（tap 讀 activeBindings 即時反映）;

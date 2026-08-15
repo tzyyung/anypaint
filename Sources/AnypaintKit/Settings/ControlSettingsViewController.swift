@@ -110,11 +110,16 @@ final class ControlSettingsViewController: NSViewController {
 
     @objc private func interceptMainChanged() {
         if interceptMainToggle.state == .on {
-            _ = Hotkeys.requestAccessibilityIfNeeded()   // 未授權→彈系統對話框並開啟隱私權面板
             let mode: HotkeyInterceptMode = interceptHidToggle.state == .on ? .hid : .session
             AppSettings.hotkeyInterceptMode = mode
+            // 授權後自動生效（不必回來重按）：applyMode 未授權時內部開始輪詢,拿到授權即啟用並回呼刷新。
+            Hotkeys.onTapActivated = { [weak self] in self?.updateInterceptStatus() }
             Hotkeys.applyMode(mode)
             interceptHidToggle.isEnabled = true
+            if !Hotkeys.isTapActive {
+                _ = Hotkeys.requestAccessibilityIfNeeded()   // 系統對話框(把 app 加進清單,含開啟系統設定按鈕)
+                Hotkeys.openAccessibilitySettings()          // 直接跳到輔助使用面板(涵蓋「曾拒絕、系統不再跳框」)
+            }
         } else {
             AppSettings.hotkeyInterceptMode = .off
             Hotkeys.applyMode(.off)
@@ -141,7 +146,7 @@ final class ControlSettingsViewController: NSViewController {
             interceptStatus.stringValue = "已啟用低階攔截（\(mode == .hid ? "HID" : "session") 層）。若仍被搶，試試加強模式。"
             interceptStatus.textColor = .systemGreen
         } else {
-            interceptStatus.stringValue = "尚未取得輔助使用權限。請到「系統設定 → 隱私權與安全性 → 輔助使用」勾選 anypaint，再重新開啟此開關。"
+            interceptStatus.stringValue = "尚未取得輔助使用權限。已為你開啟系統設定，在「輔助使用」清單勾選 anypaint 後會自動生效。"
             interceptStatus.textColor = .systemOrange
         }
     }
