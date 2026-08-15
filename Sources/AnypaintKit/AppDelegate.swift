@@ -527,6 +527,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             // abortIfActive 對它是 no-op，回值要老實反映「其實沒中止掉」，不能報 ok:true
             // 卻讓呼叫端以為母帶已經丟棄（review fix round 1 Important 5）。
             return ["ok": !recordSession.isActive, "state": "\(recordSession.state)"]
+        case "simulateRecordDiskFailure":
+            // 測試注入（僅 --uitest）：模擬錄製中 writer 磁碟失敗（磁碟滿/斷線）。觸發健康輪詢→停止
+            // →diskFailed 失敗卡片這整條 UI 路徑,讓「磁碟失敗」在不塞爆磁碟下也能實機驗（長錄審查 #1）。
+            // 只有真的在 recording 中才有意義（回 ok 反映是否生效）。之後會發 recordingFailed 事件。
+            return ["ok": recordSession.simulateDiskFailureForTest()]
         case "openSettings":
             openSettings()
             return ["ok": true]

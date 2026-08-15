@@ -483,6 +483,16 @@ public final class RecordSession {
     /// 動畫截圖失敗：HUD 短暫顯示提示後自動收（審查 #6，取代只有 beep）。
     public func presentTransientFailure(_ reason: String) { hud.showTransientFailure(reason) }
 
+    /// 測試注入（**僅 --uitest RPC `simulateRecordDiskFailure`**）：模擬錄製中 writer 磁碟失敗,
+    /// 走「健康輪詢→停止→diskFailed 失敗卡片」整條 UI 路徑（磁碟滿無法在不塞爆磁碟下實測,用此鉤子
+    /// 在實機驗那條路徑）。非 recording 時 no-op。回傳是否真的在錄（呼叫端據此判斷有沒有生效）。
+    @discardableResult
+    public func simulateDiskFailureForTest() -> Bool {
+        guard state == .recording else { return false }
+        frameSource.simulateWriterFailureForTest()
+        return true
+    }
+
     /// done 卡定位螢幕：`self.screen` 仍在線上才用它,否則以選區中心重新解析（多螢幕審查 #2：
     /// arm 當下抓的 `NSScreen` 從不重抓,拔掉錄影螢幕後會 stale,`visibleFrame` 指向已不存在的座標
     /// → done 卡落到畫面外;`screen ?? …` 舊寫法永遠拿到非 nil 的 stale 值,fallback 從不觸發）。

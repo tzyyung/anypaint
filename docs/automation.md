@@ -55,6 +55,7 @@ agent）不必操作滑鼠鍵盤就能查狀態、截自己的 UI、以及驅動
 | `captureRegion` | `rect`: `"x,y,w,h"`（全域座標，點）；`save`（Bool，可省，預設 false） | `{ok:true}`（**非同步**：立即回 ok，擷取/裁切/複製完成後發 `captureCompleted` 事件；`save:true` 時額外用 `quickSavePathTemplate` 存檔，路徑放事件 payload） | `{ok:false, error:"badRect"}`（`rect` 解析失敗）／`{ok:false, error:"noScreenRecordingPermission"}`（`CGPreflightScreenCaptureAccess()` 為 false，同 `startRecord` 的理由不進互動式權限流程） |
 | `recognizeText` | `rect`: `"x,y,w,h"`（全域座標，點） | `{ok:true}`（**非同步**：擷取該區→OCR，完成發 `textRecognized` 事件，文字同時進剪貼簿） | `badRect`／`noScreenRecordingPermission`（同 `captureRegion`） |
 | `pinClipboard` | 無 | `{ok:true}`（把剪貼簿裡的圖釘成置頂浮窗，**同步**：不需擷取螢幕） | `{ok:false, error:"noImage"}`（剪貼簿沒有可讀影像）／`{ok:false, error:"busy"}`（滾動/錄影進行中，不疊加） |
+| `simulateRecordDiskFailure` | 無 | `{ok:<是否真的在 recording 中生效>}`（**測試注入**：模擬錄製中 `AVAssetWriter` 磁碟失敗——磁碟滿/斷線在不塞爆磁碟下無法實測,用此鉤子驗「健康輪詢→錄製中停止→`diskFailed` 失敗卡片」整條路徑。下一次 `clockTick` 健康輪詢會抓到,發 `recordingFailed{reason:"diskFailed: …"}`、不存檔、刪暫存母帶,HUD morph 成「磁碟寫入失敗（可能已滿或斷線），錄影已停止」失敗卡片。非 `.recording` 時回 `{ok:false}` no-op） | — |
 | 其他未知命令 | — | — | `{ok:false, error:"unknownCommand:<cmd>"}` |
 
 **選區必須完整落在單一螢幕內**（`captureRegion`/`recognizeText` 的裁切用 `AutomationCapture.cropPlan`，

@@ -45,6 +45,12 @@ public final class WriterBox: @unchecked Sendable {
     /// 最近一次**影像**格 append 是否因 `isReadyForMoreMediaData=false` 被丟（sampleQueue 上讀寫）。
     /// 供 `healthSnapshot` 當「寫入跟不上」的即時提示——外接碟慢時會持續為 true（長錄審查 #2）。
     private var lastScreenAppendDropped = false
+    /// 測試注入（**僅 --uitest RPC `simulateRecordDiskFailure` 可觸發**——正式流程永不設定,那條命令
+    /// 只在 UITestServer 掛載）：模擬 writer 中途 `.failed`（磁碟滿/斷線）。設 true 後 `healthSnapshot`
+    /// 回報 failed、`finish` 直接走 writerFailed 分支（丟掉母帶）。**不碰每格 `append` 熱路徑**——
+    /// 只在 0.5s 輪詢的 `healthSnapshot` 與一次性的 `finish` 讀,對錄製零額外成本。sampleQueue 上設。
+    private var simulatedFailure = false
+    func simulateFailureForTest() { simulatedFailure = true }
     /// `finish`／`cancel` 第一次被呼叫就鎖住，之後兩者皆變 no-op；`append` 也一併擋掉。
     /// 補的是一個實機會撞到的競態：`RecordFrameSource.start()` 的 await 期間被 `abort()`
     /// 打斷時，`abort()` 與 `start()` 自己的收尾分支可能對同一個 box 各呼叫一次 cancel()——
@@ -103,7 +109,7 @@ public final class WriterBox: @unchecked Sendable {
     /// 在錄製中週期輪詢——failed 讓 session 在錄製中就停止收檔,不必等到 stop 才發現整檔已毀
     /// （長錄審查 #1）。`AVAssetWriter.status` 可安全查詢,此處只在 sampleQueue 上讀。
     var healthSnapshot: (failed: Bool, behind: Bool) {
-        (writer.status == .failed, lastScreenAppendDropped)
+        (simulatedFailure || writer.status == .failed, lastScreenAppendDropped)
     }
 
     /// sampleQueue 上呼叫；gate 同 append（isTerminal／status），session gate 交給 audio.append。
@@ -122,6 +128,14 @@ public final class WriterBox: @unchecked Sendable {
             return
         }
         isTerminal = true
+        if simulatedFailure {
+            // 測試注入的磁碟失敗：真 writer 其實仍健康（.writing）,cancelWriting 丟掉半成品母帶
+            // （呼叫端 stopAndFinish 的 .failure 分支會刪暫存檔）,回 writerFailed 走與真磁碟失敗
+            // 相同的收檔失敗路徑（diskFailed 卡片）。
+            if writer.status == .writing { writer.cancelWriting() }
+            completion(.failure(.writerFailed(nil)))
+            return
+        }
         guard writer.status == .writing else {
             // 中途已經離開 .writing（磁碟滿→.failed 等 QuickRecorder 教訓；或已被取消／完成）：
             // 不能再呼叫 endSession／markAsFinished／finishWriting／cancelWriting，這些對非
@@ -480,6 +494,12 @@ public final class RecordFrameSource: NSObject {
             let snap = box.healthSnapshot
             Task { @MainActor in cb(snap.failed, snap.behind) }
         }
+    }
+
+    /// 測試注入（**僅 --uitest**）：把當前 WriterBox 標記為模擬磁碟失敗——下一次 `pollHealth`
+    /// 就回報 failed,且 `stopAndFinish` 走 writerFailed 分支。在 sampleQueue 上設,遵守 box 觸碰紀律。
+    public func simulateWriterFailureForTest() {
+        sampleQueue.async { [box] in box?.simulateFailureForTest() }
     }
 }
 
