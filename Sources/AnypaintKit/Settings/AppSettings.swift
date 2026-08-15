@@ -294,6 +294,16 @@ public enum AppSettings {
         }
     }
 
+    // MARK: - 全域快鍵攔截
+
+    private static let hotkeyInterceptModeKey = "hotkeyInterceptMode"
+    /// 快鍵攔截模式（見 `HotkeyInterceptMode`）。預設 `off`＝純 Carbon、零權限（現行行為）。
+    /// `session`/`hid` 用 CGEventTap 搶在前景 app 之前攔鍵,對付 TeamViewer 這類搶鍵工具（需輔助使用）。
+    public static var hotkeyInterceptMode: HotkeyInterceptMode {
+        get { HotkeyInterceptMode(rawValue: UserDefaults.standard.string(forKey: hotkeyInterceptModeKey) ?? "") ?? .off }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: hotkeyInterceptModeKey) }
+    }
+
     // MARK: - UI 自動化
 
     private static let allowLocalAutomationKey = "allowLocalAutomation"

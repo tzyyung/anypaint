@@ -98,9 +98,9 @@ final class MenuBarController: NSObject {
 // 關選單時才一次爆發——KeyboardShortcuts 官方要求開選單時停用、關閉時恢復。
 extension MenuBarController: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
-        KeyboardShortcuts.disable(Self.allShortcuts)
+        Hotkeys.suspend(Self.allShortcuts)
     }
     func menuDidClose(_ menu: NSMenu) {
-        KeyboardShortcuts.enable(Self.allShortcuts)
+        Hotkeys.resume(Self.allShortcuts)
     }
 }

@@ -1358,5 +1358,6 @@ automationCaptureTests()
 recordOutputTests()
 recordHUDInfoTests()
 recordFinishRouterTests()
+hotkeyMatchTests()
 
 T.finish()

@@ -129,6 +129,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         KeyboardShortcuts.onKeyDown(for: .scrollCapture) { [weak self] in self?.beginScrollCapture() }
         KeyboardShortcuts.onKeyDown(for: .animatedCapture) { [weak self] in self?.beginAnimatedCapture() }
         KeyboardShortcuts.onKeyDown(for: .record) { [weak self] in self?.beginRecordDirect() }
+
+        // 全域快鍵攔截協調層：註冊動作（tap 命中與上面 Carbon onKeyDown 共用同一動作）＋套用目前模式。
+        // 預設 off＝純 Carbon 零權限；session/hid＝CGEventTap 搶鍵（設定頁開啟,見 ControlSettings）。
+        Hotkeys.register([
+            (.capture, { [weak self] in self?.beginCapture() }),
+            (.pin, { [weak self] in self?.pinFromClipboard() }),
+            (.scrollCapture, { [weak self] in self?.beginScrollCapture() }),
+            (.animatedCapture, { [weak self] in self?.beginAnimatedCapture() }),
+            (.record, { [weak self] in self?.beginRecordDirect() }),
+        ])
+        Hotkeys.applyMode(AppSettings.hotkeyInterceptMode)
     }
 
     // MARK: - 截圖：凍結 → 框選 → 複製到剪貼簿
@@ -298,12 +309,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         case .none: break
         }
         recordSession.dismissHUD()   // 審查 #1：收掉可能還浮著的錄影完成卡
-        KeyboardShortcuts.disable(.capture, .pin)               // 滾動中擋另外兩入口（spec §9.1）
+        Hotkeys.suspend(.capture, .pin)               // 滾動中擋另外兩入口（spec §9.1）
         menuBar.setScrollCapturing(true)
         let vars = CaptureVars.makeVars(title: CaptureVars.currentFrontTitle())
         scrollSession.onFinished = { [weak self] image, captureScale in
             guard let self else { return }
-            KeyboardShortcuts.enable(.capture, .pin)            // 恢復點集中在單一出口（spec §9.1）
+            Hotkeys.resume(.capture, .pin)            // 恢復點集中在單一出口（spec §9.1）
             self.menuBar.setScrollCapturing(false)
             guard let image else { return }                     // 取消或 0 格 → 靜默（spec §3）
             if self.previewController == nil {
@@ -316,7 +327,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // begin() 在無主螢幕時會靜默 no-op（onFinished 永不 fire）——
         // 若沒真的進場就立刻把剛 disable 的快鍵/選單恢復，否則 .capture/.pin 永久失效需重啟。
         guard scrollSession.isActive else {
-            KeyboardShortcuts.enable(.capture, .pin)
+            Hotkeys.resume(.capture, .pin)
             menuBar.setScrollCapturing(false)
             return
         }
@@ -354,13 +365,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let others: [KeyboardShortcuts.Name] = direct
             ? [.capture, .pin, .scrollCapture, .animatedCapture]
             : [.capture, .pin, .scrollCapture, .record]
-        KeyboardShortcuts.disable(others)
+        Hotkeys.suspend(others)
         setRecordingMenu(direct: direct, on: true)
         // %title% 於按下快鍵當下凍結（spec，同 beginScrollCapture 理由）。
         let vars = CaptureVars.makeVars(title: CaptureVars.currentFrontTitle())
         recordSession.onFinished = { [weak self] outcome, captureScale in
             guard let self else { return }
-            KeyboardShortcuts.enable(others)                     // 對抗式審查 #1：單一還原出口（不分成敗）
+            Hotkeys.resume(others)                     // 對抗式審查 #1：單一還原出口（不分成敗）
             self.setRecordingMenu(direct: direct, on: false)
             // 分類。錄影成功（.saved+direct）已在上面走背景搬檔＋回主緒 present 並 return，不落這裡；
             // 這條同步 router 只處理 .cancelled／.failed／.saved+動畫截圖（都不需搬檔，saveSucceeded 恆 false）。
@@ -415,7 +426,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // begin()／startProgrammatically() 在無主螢幕時會靜默 no-op（onFinished 永不 fire）——
         // 若沒真的進場就立刻把剛 disable 的快鍵/選單恢復，否則其餘入口永久失效需重啟。
         guard recordSession.isActive else {
-            KeyboardShortcuts.enable(others)
+            Hotkeys.resume(others)
             setRecordingMenu(direct: direct, on: false)
             return
         }
@@ -532,6 +543,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             // →diskFailed 失敗卡片這整條 UI 路徑,讓「磁碟失敗」在不塞爆磁碟下也能實機驗（長錄審查 #1）。
             // 只有真的在 recording 中才有意義（回 ok 反映是否生效）。之後會發 recordingFailed 事件。
             return ["ok": recordSession.simulateDiskFailureForTest()]
+        case "hotkeyState":
+            // 唯讀狀態：設定模式、是否已授權輔助使用、tap 是否真的生效（active）。供實機驗證權限閘門/退回。
+            return ["ok": true, "mode": AppSettings.hotkeyInterceptMode.rawValue,
+                    "trusted": AXIsProcessTrusted(), "tapActive": Hotkeys.isTapActive]
+        case "setHotkeyInterceptMode":
+            // 測試/自動化：設模式並套用（等同設定頁開關）。回套用後的實際生效狀態。
+            let raw = command.json["mode"] as? String ?? "off"
+            let mode = HotkeyInterceptMode(rawValue: raw) ?? .off
+            AppSettings.hotkeyInterceptMode = mode
+            Hotkeys.applyMode(mode)
+            return ["ok": true, "mode": mode.rawValue, "trusted": AXIsProcessTrusted(),
+                    "tapActive": Hotkeys.isTapActive]
         case "openSettings":
             openSettings()
             return ["ok": true]

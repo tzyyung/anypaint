@@ -12,6 +12,9 @@ final class ControlSettingsViewController: NSViewController {
     private var mouseView: NSView!
     private var overlayFields: [OverlayAction: OverlayKeyRecorderField] = [:]
     private var overlayWarnings: [OverlayAction: NSTextField] = [:]
+    private var interceptMainToggle: NSButton!
+    private var interceptHidToggle: NSButton!
+    private var interceptStatus: NSTextField!
 
     override func loadView() {
         segment.target = self
@@ -59,11 +62,88 @@ final class ControlSettingsViewController: NSViewController {
                                         shortcutRow(title: "貼圖：", name: .pin),
                                         shortcutRow(title: "滾動截圖：", name: .scrollCapture),
                                         shortcutRow(title: "動畫截圖：", name: .animatedCapture),
-                                        shortcutHint])
+                                        shortcutHint,
+                                        buildHotkeyInterceptSection()])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
         return stack
+    }
+
+    /// 進階：當截圖快鍵被 TeamViewer 等 event-tap 工具攔走時,改用 CGEventTap 搶在前景 app 之前接收
+    /// （需輔助使用權限）。預設關＝現行零權限 Carbon。設計文件 `2026-08-15-hotkey-eventtap-design.md`。
+    private func buildHotkeyInterceptSection() -> NSView {
+        let title = NSTextField(labelWithString: "進階：搶回被攔截的快鍵")
+        title.font = .boldSystemFont(ofSize: 12)
+
+        // 情境說明放灰字提示行（checkbox 標題不換行,塞長句會被截斷）。
+        let hint = NSTextField(labelWithString: "當截圖快鍵被 TeamViewer 等軟體攔走時，用系統低階攔截搶先接收。")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        hint.lineBreakMode = .byWordWrapping
+        hint.maximumNumberOfLines = 2
+        hint.preferredMaxLayoutWidth = 420
+
+        let mode = AppSettings.hotkeyInterceptMode
+        interceptMainToggle = NSButton(checkboxWithTitle: "啟用低階攔截（需輔助使用權限）",
+                                       target: self, action: #selector(interceptMainChanged))
+        interceptMainToggle.state = mode != .off ? .on : .off
+
+        interceptHidToggle = NSButton(checkboxWithTitle: "加強模式（HID 層，衝突風險較大）",
+                                      target: self, action: #selector(interceptHidChanged))
+        interceptHidToggle.state = mode == .hid ? .on : .off
+        interceptHidToggle.isEnabled = mode != .off
+
+        interceptStatus = NSTextField(labelWithString: "")
+        interceptStatus.font = .systemFont(ofSize: 11)
+        interceptStatus.lineBreakMode = .byWordWrapping
+        interceptStatus.maximumNumberOfLines = 3
+        interceptStatus.preferredMaxLayoutWidth = 420
+
+        let stack = NSStackView(views: [title, hint, interceptMainToggle, interceptHidToggle, interceptStatus])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        updateInterceptStatus()
+        return stack
+    }
+
+    @objc private func interceptMainChanged() {
+        if interceptMainToggle.state == .on {
+            _ = Hotkeys.requestAccessibilityIfNeeded()   // 未授權→彈系統對話框並開啟隱私權面板
+            let mode: HotkeyInterceptMode = interceptHidToggle.state == .on ? .hid : .session
+            AppSettings.hotkeyInterceptMode = mode
+            Hotkeys.applyMode(mode)
+            interceptHidToggle.isEnabled = true
+        } else {
+            AppSettings.hotkeyInterceptMode = .off
+            Hotkeys.applyMode(.off)
+            interceptHidToggle.isEnabled = false
+        }
+        updateInterceptStatus()
+    }
+
+    @objc private func interceptHidChanged() {
+        guard interceptMainToggle.state == .on else { return }
+        let mode: HotkeyInterceptMode = interceptHidToggle.state == .on ? .hid : .session
+        AppSettings.hotkeyInterceptMode = mode
+        Hotkeys.applyMode(mode)
+        updateInterceptStatus()
+    }
+
+    /// 顯示實際生效狀態（與「設定值」區分）：權限沒給時開關雖打勾但 tap 沒起來,要講清楚下一步。
+    private func updateInterceptStatus() {
+        let mode = AppSettings.hotkeyInterceptMode
+        if mode == .off {
+            interceptStatus.stringValue = "目前使用一般全域快鍵（免額外權限）。遇到被搶鍵才需要開啟。"
+            interceptStatus.textColor = .secondaryLabelColor
+        } else if Hotkeys.isTapActive {
+            interceptStatus.stringValue = "已啟用低階攔截（\(mode == .hid ? "HID" : "session") 層）。若仍被搶，試試加強模式。"
+            interceptStatus.textColor = .systemGreen
+        } else {
+            interceptStatus.stringValue = "尚未取得輔助使用權限。請到「系統設定 → 隱私權與安全性 → 輔助使用」勾選 anypaint，再重新開啟此開關。"
+            interceptStatus.textColor = .systemOrange
+        }
     }
 
     private func shortcutRow(title: String, name: KeyboardShortcuts.Name) -> NSView {
