@@ -526,11 +526,16 @@ public final class RecordHUDController: NSObject {
         cursorChip.setOn(AppSettings.recordShowsCursor)
         micDevicePopup.isEnabled = micOn
         let vol = micOn ? AudioInputVolume.volume(deviceUID: AppSettings.recordMicrophoneDeviceID) : nil
-        let volSupported = (vol != nil)
-        volumeIcon.isHidden = !(micOn && volSupported)
-        volumeSlider.isHidden = !(micOn && volSupported)
-        if let vol { volumeSlider.doubleValue = Double(vol) }
-        soundSettingsButton.isHidden = !micOn
+        let volActive = (vol != nil)   // 麥克風開且該裝置支援音量
+        // 永遠佔位（不用 isHidden，比照電平表的保留槽）：切換麥克風/裝置時版面寬度固定,不再忽大忽小
+        // （使用者回報）。關麥克風或裝置不支援音量→停用＋變淡,不隱藏。
+        volumeIcon.alphaValue = volActive ? 1 : 0.28
+        volumeSlider.isEnabled = volActive
+        volumeSlider.alphaValue = volActive ? 1 : 0.28
+        volumeSlider.doubleValue = Double(vol ?? 0.5)
+        soundSettingsButton.isEnabled = micOn
+        (soundSettingsButton.cell as? NSButtonCell)?.imageDimsWhenDisabled = true
+        soundSettingsButton.alphaValue = micOn ? 1 : 0.5
     }
 
     // MARK: 動作
