@@ -424,14 +424,15 @@ public final class RecordHUDController: NSObject {
         let infoRow = NSStackView(views: [infoLabel, noticeLabel])
         infoRow.orientation = .horizontal; infoRow.alignment = .centerY; infoRow.spacing = 8
 
-        let deviceRow = NSStackView(views: [labeled("裝置"), micDevicePopup])
+        // 裝置下拉右邊原本留白（使用者回報）——把音量群組（喇叭圖示/滑桿/聲音設定）併到同一列填滿,
+        // 少一列更緊湊。中間插一段小固定間隔,和下拉之間不貼死。
+        let deviceRow = NSStackView(views: [labeled("裝置"), micDevicePopup, fixedGap(18),
+                                            volumeIcon, volumeSlider, soundSettingsButton])
         deviceRow.orientation = .horizontal; deviceRow.alignment = .centerY; deviceRow.spacing = 6
-        let volumeRow = NSStackView(views: [volumeIcon, volumeSlider, soundSettingsButton])
-        volumeRow.orientation = .horizontal; volumeRow.alignment = .centerY; volumeRow.spacing = 6
         let durationRow = NSStackView(views: [labeled("限時"), durationField, durationSuffix, spacer(), cursorChip])
         durationRow.orientation = .horizontal; durationRow.alignment = .centerY; durationRow.spacing = 6
 
-        tier2Container = NSStackView(views: [separator(), deviceRow, volumeRow, durationRow])
+        tier2Container = NSStackView(views: [separator(), deviceRow, durationRow])
         tier2Container.orientation = .vertical; tier2Container.alignment = .leading; tier2Container.spacing = 7
 
         armedStack = NSStackView(views: [tier1, infoRow, tier2Container])
@@ -453,6 +454,13 @@ public final class RecordHUDController: NSObject {
         let v = NSView()
         v.setContentHuggingPriority(.init(1), for: .horizontal)
         v.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        return v
+    }
+    /// 固定寬度的間隔（不像 spacer 會被壓成 0）——同一列內把兩組控件隔開一段。
+    private func fixedGap(_ w: CGFloat) -> NSView {
+        let v = NSView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.widthAnchor.constraint(equalToConstant: w).isActive = true
         return v
     }
     private func separator() -> NSView {
