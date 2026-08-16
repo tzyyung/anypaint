@@ -76,13 +76,12 @@ public final class RecordHUDController: NSObject {
     private let micChip = IconToggle()
     private let systemAudioChip = IconToggle()
     private let levelMeter = LevelMeterView(frame: NSRect(x: 0, y: 0, width: 62, height: 14))
-    private let gearButton = NSButton(title: "⚙", target: nil, action: nil)
     private let primaryButton = NSButton(title: "開始", target: nil, action: nil)
     private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
     private let infoLabel = NSTextField(labelWithString: "")
     private let noticeLabel = NSTextField(labelWithString: "")
 
-    // 第二層（tier2，點 ⚙ 展開）
+    // 第二層（tier2）：armed 時永遠顯示（原 ⚙ 收合已移除——footprint 已小，收合性價比低）
     private let micDevicePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let volumeIcon = NSTextField(labelWithString: "🔊")
     private let volumeSlider = NSSlider(value: 0.5, minValue: 0, maxValue: 1, target: nil, action: nil)
@@ -102,11 +101,6 @@ public final class RecordHUDController: NSObject {
     private var armedSynced = false
     private var micUIVisible = false
     private var regionPx: (w: Int, h: Int) = (0, 0)
-    /// 第二層展開狀態（記憶，spec §3.4）。
-    private var tier2Expanded: Bool {
-        get { AppSettings.recordOptionsExpanded }
-        set { AppSettings.recordOptionsExpanded = newValue }
-    }
     /// 錄製中是否含麥克風（影響時鐘徽章）。
     public var micActive = false
 
@@ -156,7 +150,6 @@ public final class RecordHUDController: NSObject {
         micChip.isHidden = true
         systemAudioChip.isHidden = true
         levelMeter.alphaValue = 0
-        gearButton.isHidden = true
         primaryButton.isHidden = true
         tier2Container.isHidden = true
         infoLabel.stringValue = ""            // 別顯示上一次的 stale 尺寸
@@ -373,12 +366,6 @@ public final class RecordHUDController: NSObject {
         levelMeter.heightAnchor.constraint(equalToConstant: 14).isActive = true
         levelMeter.alphaValue = 0   // 永遠佔位（固定 46px 槽），開麥克風才顯形——見 setMicEnabled
 
-        gearButton.bezelStyle = .rounded
-        gearButton.isBordered = false
-        gearButton.font = .systemFont(ofSize: 14)
-        gearButton.contentTintColor = .white
-        gearButton.target = self; gearButton.action = #selector(gearToggled)
-
         primaryButton.bezelStyle = .rounded
         primaryButton.target = self; primaryButton.action = #selector(primaryTapped)
         cancelButton.bezelStyle = .rounded
@@ -418,7 +405,7 @@ public final class RecordHUDController: NSObject {
         durationSuffix.font = .systemFont(ofSize: 11)
 
         let tier1 = NSStackView(views: [clockLabel, micChip, levelMeter, systemAudioChip,
-                                        spacer(), gearButton, primaryButton, cancelButton])
+                                        spacer(), primaryButton, cancelButton])
         tier1.orientation = .horizontal; tier1.alignment = .centerY; tier1.spacing = 7
 
         let infoRow = NSStackView(views: [infoLabel, noticeLabel])
@@ -486,7 +473,7 @@ public final class RecordHUDController: NSObject {
                                                       visibleFrame: scr.visibleFrame))
     }
 
-    /// armed：二層（依 tier2Expanded 展開）；recording：極簡列（收 chips/gear/cancel、時鐘出）。
+    /// armed：完整面板（tier1＋第二層永遠顯示）；recording：極簡列（收 chips/cancel、時鐘出）。
     private func configure(mode: Mode) {
         self.mode = mode
         cancelDoneTimers()
@@ -495,9 +482,8 @@ public final class RecordHUDController: NSObject {
         clockLabel.isHidden = armed
         micChip.isHidden = !armed
         systemAudioChip.isHidden = !armed
-        gearButton.isHidden = !armed
         cancelButton.isHidden = !armed
-        tier2Container.isHidden = !(armed && tier2Expanded)
+        tier2Container.isHidden = !armed   // armed 永遠展開第二層（已移除 ⚙ 收合）
         // armed／recording 都要有主按鈕（開始/停止）；showMessage 太小狀態會把它藏起來，
         // 這裡務必恢復——否則太小訊息之後再正常 arm，開始鈕回不來（自檢抓到的回歸 2026-08-15）。
         primaryButton.isHidden = false
@@ -506,10 +492,9 @@ public final class RecordHUDController: NSObject {
             // 對抗式審查 #1：syncOptionControls 會列舉音訊裝置（AVCaptureDevice DiscoverySession）＋
             // 查 HAL 音量，貴。armed 的 show() 每次拖動調框都會被呼叫（onSelectionChanged→enterArmed→
             // show），若每 tick 都 sync 就是主緒飽和（CLAUDE.md 紅線）。只在**進入 armed 那一次**同步；
-            // 調框只重定位（下方 applyContentSize/refreshInfo 都很便宜）。裝置/音量另由 micToggled、
-            // gearToggled 明確重新同步。
+            // 調框只重定位（下方 applyContentSize/refreshInfo 都很便宜）。裝置/音量另由 micToggled
+            // 明確重新同步。
             if !armedSynced { syncOptionControls(); armedSynced = true }
-            gearButton.title = tier2Expanded ? "⚙ 收合" : "⚙ 更多"
             primaryButton.title = "開始"
         case .recording:
             armedSynced = false
@@ -558,12 +543,6 @@ public final class RecordHUDController: NSObject {
         }
     }
     @objc private func cancelTapped() { onCancel?() }
-    @objc private func gearToggled() {
-        tier2Expanded.toggle()
-        if tier2Expanded { armedSynced = false }   // 使用者展開第二層＝刷新裝置/音量（非每 tick，便宜）
-        configure(mode: .armed)
-        reposition()
-    }
     @objc private func micToggled() {
         let newOn = !micChip.isOn                       // 顯式翻轉＋重繪（不靠 NSControl.state 隱式切換）
         micChip.setOn(newOn)
