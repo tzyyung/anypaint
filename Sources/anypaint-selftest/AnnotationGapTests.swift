@@ -50,4 +50,37 @@ nonisolated func annotationGapTests() {
     var litPixels = 0
     for i in stride(from: 3, to: buf.count, by: 4) where buf[i] > 0 { litPixels += 1 }
     T.checkTrue(".measure 渲染: 有非透明像素（標籤/框已畫）", litPixels > 0)
+
+    // 4) AnnotationDocument.hitTestAll：由上而下（最上層在前）、只回命中的（重疊循環選取用）。
+    let d2 = AnnotationDocument()
+    let low = Annotation(shape: .rect(CGRect(x: 0, y: 0, width: 100, height: 100)), style: style)
+    let high = Annotation(shape: .rect(CGRect(x: 50, y: 50, width: 100, height: 100)), style: style)
+    d2.add(low); d2.add(high)   // high 後加＝在上層
+    let both = d2.hitTestAll(at: CGPoint(x: 75, y: 75))   // 重疊區
+    T.checkEq("hitTestAll: 重疊回兩個", both.count, 2)
+    T.checkEq("hitTestAll: 最上層在前", both.first?.id, high.id)
+    T.checkEq("hitTestAll: 只命中 low 的區域", d2.hitTestAll(at: CGPoint(x: 10, y: 10)).map(\.id), [low.id])
+    T.checkTrue("hitTestAll: 空白回空", d2.hitTestAll(at: CGPoint(x: 500, y: 500)).isEmpty)
+
+    // 5) snapshotObjects / restore：surface 換底圖存/還原整份標註,並清空 undo/redo 與選取。
+    let d3 = AnnotationDocument()
+    d3.add(a)
+    let snap = d3.snapshotObjects()
+    T.checkEq("snapshotObjects: 複本內容", snap.map(\.id), [a.id])
+    d3.selectedID = a.id
+    d3.restore(objects: [])
+    T.checkTrue("restore: 換成空", d3.isEmpty)
+    T.checkTrue("restore: 清 undo", !d3.canUndo)
+    T.checkTrue("restore: 清選取", d3.selectedID == nil)
+    d3.restore(objects: snap)
+    T.checkEq("restore: 還原回內容", d3.objects.map(\.id), [a.id])
+
+    // 6) AnnotationInput.nextSelection：重疊循環選取決策
+    let id0 = UUID(), id1 = UUID(), id2 = UUID()
+    T.checkEq("nextSelection: 無選取→最上層", AnnotationInput.nextSelection(hits: [id0, id1], current: nil), id0)
+    T.checkEq("nextSelection: 選中最上→下一個", AnnotationInput.nextSelection(hits: [id0, id1], current: id0), id1)
+    T.checkEq("nextSelection: 選中最後→循環回第一", AnnotationInput.nextSelection(hits: [id0, id1], current: id1), id0)
+    T.checkEq("nextSelection: current 不在命中清單→最上層",
+              AnnotationInput.nextSelection(hits: [id0, id1], current: id2), id0)
+    T.checkTrue("nextSelection: 空→nil", AnnotationInput.nextSelection(hits: [], current: id0) == nil)
 }

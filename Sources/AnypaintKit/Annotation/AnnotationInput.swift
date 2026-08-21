@@ -1,3 +1,4 @@
+import Foundation
 import CoreGraphics
 
 /// 標註工具的**輸入邏輯純函式**（無 AppKit、無 view 狀態,selftest 可測）。
@@ -59,6 +60,16 @@ public enum AnnotationInput {
     /// 工具列點擊的切換規則：點到當前工具＝取消（回 nil）、點到別的＝切過去。
     public static func toggledTool(tapped: AnnotationTool, active: AnnotationTool?) -> AnnotationTool? {
         tapped == active ? nil : tapped
+    }
+
+    /// 重疊選取的循環決策：`hits`＝該點命中的 id（最上層在前）。
+    /// 目前選中的若在命中清單→回**下一個**（循環到下層,再點又回最上層）；否則回最上層。空→nil。
+    public static func nextSelection(hits: [UUID], current: UUID?) -> UUID? {
+        guard !hits.isEmpty else { return nil }
+        if let cur = current, let idx = hits.firstIndex(of: cur) {
+            return hits[(idx + 1) % hits.count]
+        }
+        return hits[0]
     }
 
     /// 滾輪調粗細的累加器：把連續 scrollingDeltaY 累加進 `accum`,每滿 ±`step` 就吐一格

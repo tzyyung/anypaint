@@ -160,13 +160,9 @@ extension SelectionView {
     func selectAnnotation(at p: CGPoint, allowMoveStart: Bool, includeLocked: Bool = true) {
         var hits = annotations.hitTestAll(at: p)
         if !includeLocked { hits = hits.filter { !isLocked($0.id) } }
-        guard !hits.isEmpty else { deselect(); return }
-        let chosen: Annotation
-        if let cur = annotations.selectedID, let idx = hits.firstIndex(where: { $0.id == cur }) {
-            chosen = hits[(idx + 1) % hits.count]   // 再點一下→下一個（循環）
-        } else {
-            chosen = hits[0]                          // 最上層
-        }
+        guard let chosenID = AnnotationInput.nextSelection(hits: hits.map(\.id),
+                                                           current: annotations.selectedID),
+              let chosen = hits.first(where: { $0.id == chosenID }) else { deselect(); return }
         annotations.selectedID = chosen.id
         selectedPolygonNode = nil
         hotAnnotationID = chosen.id
