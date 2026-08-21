@@ -276,6 +276,81 @@ extension SelectionView {
         return true
     }
 
+    // MARK: 美化背景（#1 Backdrop）
+
+    /// 目前框選（含標註）合成成一張像素圖——美化的來源。沒有有效框回 nil。
+    private func compositedSelectionImage() -> CGImage? {
+        guard let sel = selection, sel.width > minSize, sel.height > minSize else { return nil }
+        let pixelRect = CoordinateUtils.pixelCropRect(
+            selection: sel, displayPointSize: bounds.size, scale: snapshot.scale)
+        guard let cropped = snapshot.cgImage.cropping(to: pixelRect) else { return nil }
+        if annotations.isEmpty { return cropped }
+        return AnnotationRenderer.composite(
+            objects: annotations.objects, overCropped: cropped, selection: sel,
+            scale: snapshot.scale, counterNumbers: counterNumbersMap(),
+            sourceProvider: frozenImageProvider()) ?? cropped
+    }
+
+    /// 開啟美化：合成來源、開面板、套一次預設預覽。已在美化中／無有效框＝忽略。
+    func beginBackdrop() {
+        guard !isBackdropActive else { return }
+        commitTextEditing()
+        guard let source = compositedSelectionImage() else { NSSound.beep(); return }
+        backdropSource = source
+        backdropPreviewApplied = false
+        let panel = BackdropPanel(initial: BackdropStyle())
+        panel.onStyleChanged = { [weak self] style in self?.applyBackdropPreview(style) }
+        panel.onCommit = { [weak self] in self?.commitBackdrop() }
+        panel.onCancel = { [weak self] in self?.cancelBackdrop() }
+        addSubview(panel)
+        backdropPanel = panel
+        applyBackdropPreview(panel.style)   // 套初始預覽（也會擺好面板位置）
+    }
+
+    /// 依 style 重套預覽：從來源重算 backdrop → 換底圖。前一層預覽先 revert,只留一層 undo。
+    func applyBackdropPreview(_ style: BackdropStyle) {
+        guard let source = backdropSource else { return }
+        if backdropPreviewApplied { revertSurface() }   // 退掉上一層預覽,避免堆疊
+        guard let out = BackdropRenderer.render(source: source, style: style, scale: snapshot.scale) else {
+            NSSound.beep(); return
+        }
+        replaceSurface(with: out)
+        backdropPreviewApplied = true
+        layoutBackdropPanel()
+    }
+
+    /// 完成美化：留下目前結果（surface 上那層 undo 保留→可 ⌘Z 還原），收面板。
+    func commitBackdrop() {
+        teardownBackdrop()
+    }
+
+    /// 取消美化：退掉預覽那層（回到美化前），收面板。
+    func cancelBackdrop() {
+        if backdropPreviewApplied { revertSurface() }
+        teardownBackdrop()
+    }
+
+    private func teardownBackdrop() {
+        backdropPanel?.removeFromSuperview()
+        backdropPanel = nil
+        backdropSource = nil
+        backdropPreviewApplied = false
+        needsDisplay = true
+    }
+
+    /// 面板擺在工具列下方、水平對齊工具列（超出畫面就夾回）。
+    private func layoutBackdropPanel() {
+        guard let panel = backdropPanel else { return }
+        let size = panel.fittingSize
+        let tb = toolbar.frame
+        var x = tb.minX
+        var y = tb.minY - size.height - 8   // 工具列下方
+        if y < 8 { y = tb.maxY + 8 }        // 下方放不下就改到上方
+        x = min(max(8, x), bounds.width - size.width - 8)
+        y = min(max(8, y), bounds.height - size.height - 8)
+        panel.frame = CGRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
     /// 命中既有文字物件（由上到下找第一個）；點擊路由與 hover 提示共用（驗收回饋 Fix 2；
     /// threshold 統一 4，與 hover 虛線框 inset 一致——清理項）。
     func hitTextObject(at p: CGPoint) -> Annotation? {

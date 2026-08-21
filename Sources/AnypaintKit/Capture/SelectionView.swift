@@ -103,6 +103,15 @@ final class SelectionView: NSView {
     var lockedAnnotations: Set<UUID> = []
     func isLocked(_ id: UUID) -> Bool { lockedAnnotations.contains(id) }
 
+    // MARK: 美化背景（#1 Backdrop）——即時預覽 session
+    /// 美化面板（開啟中才非 nil）。
+    var backdropPanel: BackdropPanel?
+    /// 美化的來源影像（session 開始時合成好的「選區＋標註」圖，之後每次調參從它重套）。
+    var backdropSource: CGImage?
+    /// 這次 session 是否已在 surface 上套過一層預覽（下一次調參要先 revert 那層再重套，避免堆疊）。
+    var backdropPreviewApplied = false
+    var isBackdropActive: Bool { backdropPanel != nil }
+
     /// 有選取物件（Task 4 keyMonitor 的 Esc 分層依賴）。
     var hasSelection: Bool { annotations.selectedID != nil }
 
@@ -205,6 +214,7 @@ final class SelectionView: NSView {
         toolbar.onCancel = { [weak self] in self?.onCancel?() }
         toolbar.onCrop = { [weak self] in self?.cropToSelectedPolygon() }
         toolbar.onPerspective = { [weak self] in self?.perspectiveCorrectSelected() }
+        toolbar.onBeautify = { [weak self] in self?.beginBackdrop() }
         toolbar.onToolSelected = { [weak self] tool in
             guard let self else { return }
             self.commitTextEditing()   // 編輯中切工具＝先落字，避免編輯器與工具狀態不同步

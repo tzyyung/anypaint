@@ -27,6 +27,8 @@ final class SelectionToolbar: NSView {
     var onCrop: (() -> Void)?
     /// 按「拉直」＝把選中的 4 角多邊形透視校正成正矩形，換成編輯中的新底圖。
     var onPerspective: (() -> Void)?
+    /// 按「美化」＝把目前框選（含標註）放到裝飾背景上（開背景面板即時預覽）。
+    var onBeautify: (() -> Void)?
 
     private var toolButtons: [AnnotationTool: NSButton] = [:]
     private var colorButtons: [AnnotationColor: NSButton] = [:]
@@ -128,6 +130,11 @@ final class SelectionToolbar: NSView {
             setHelp(help, for: b)
             toolsRow.addArrangedSubview(b)
         }
+        // 美化背景：把框選（含標註）放到裝飾背景上——全域轉換,不需選中多邊形,一律顯示。
+        let beautifyButton = NSButton()
+        configureSymbolButton(beautifyButton, "wand.and.stars", #selector(beautifyAction))
+        setHelp("美化背景：把截圖放到裝飾背景上（邊距／圓角／陰影／漸層）", for: beautifyButton)
+        toolsRow.addArrangedSubview(beautifyButton)
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
         cancel.bezelStyle = .rounded
         cancel.controlSize = .small
@@ -281,6 +288,7 @@ final class SelectionToolbar: NSView {
     @objc private func redoTapped() { onRedo?() }
     @objc private func cropAction() { onCrop?() }
     @objc private func perspectiveAction() { onPerspective?() }
+    @objc private func beautifyAction() { onBeautify?() }
 
     /// 依目前選取狀態顯示/隱藏影像轉換動作鈕（選中封閉多邊形＝可裁切；4 角＝可拉直）。
     func setTransformActions(canCrop: Bool, canPerspective: Bool) {
