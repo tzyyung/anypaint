@@ -69,11 +69,12 @@ extension SelectionView {
     /// 回 true＝已處理（不要畫新的）；回 false＝點在空白,清掉選取,呼叫端去畫新圖形。
     func selectOrEditExistingBeforeDraw(at p: CGPoint) -> Bool {
         if tryGrabSelectedHandle(at: p) { needsDisplay = true; return true }
-        if !annotations.hitTestAll(at: p).isEmpty {
-            selectAnnotation(at: p, allowMoveStart: true)   // 點到圖形（含鎖定）→ 改選,重疊可循環
+        // 只有「未鎖定」的圖形會攔截來改選/編輯；鎖定的穿透 → 可在其上繼續畫（要解鎖用選取工具）。
+        if annotations.hitTestAll(at: p).contains(where: { !isLocked($0.id) }) {
+            selectAnnotation(at: p, allowMoveStart: true, includeLocked: false)
             return true
         }
-        // 空白 → 要畫新的：先清掉目前選取（控制點消失）。
+        // 空白或只有鎖定圖形 → 要畫新的：先清掉目前選取（控制點消失）。
         if annotations.selectedID != nil { annotations.selectedID = nil; selectedPolygonNode = nil; refreshTransformActions() }
         return false
     }
@@ -153,8 +154,10 @@ extension SelectionView {
 
     /// 點選圖形（決定性）：命中最上層；若目前選中的就在命中清單→再點循環到下層（重疊選取）。
     /// 鎖定的也選得到（才能解鎖）,但不進移動候選（不可拖）。
-    func selectAnnotation(at p: CGPoint, allowMoveStart: Bool) {
-        let hits = annotations.hitTestAll(at: p)
+    /// includeLocked=false（畫圖工具用）：鎖定的視為穿透,不攔截,好在其上繼續畫。
+    func selectAnnotation(at p: CGPoint, allowMoveStart: Bool, includeLocked: Bool = true) {
+        var hits = annotations.hitTestAll(at: p)
+        if !includeLocked { hits = hits.filter { !isLocked($0.id) } }
         guard !hits.isEmpty else { deselect(); return }
         let chosen: Annotation
         if let cur = annotations.selectedID, let idx = hits.firstIndex(where: { $0.id == cur }) {
