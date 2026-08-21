@@ -116,6 +116,11 @@ public final class AnnotationDocument {
         objects.reversed().first { $0.hitTest(point, threshold: threshold) }
     }
 
+    /// 命中的全部物件,由上而下（最上層在前）。重疊時「再點循環選下層」用。
+    public func hitTestAll(at point: CGPoint, threshold: CGFloat = 8) -> [Annotation] {
+        objects.reversed().filter { $0.hitTest(point, threshold: threshold) }
+    }
+
     /// 由上而下命中**文字**物件（文字工具 hover/拖曳用）；非文字物件跳過。
     public func hitTextObject(at point: CGPoint, threshold: CGFloat = 4) -> Annotation? {
         objects.reversed().first {

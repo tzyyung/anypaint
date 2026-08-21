@@ -82,7 +82,10 @@ extension SelectionView {
                 chromePath.lineWidth = 1
                 NSColor.white.setStroke()
                 chromePath.stroke()
-                if let poly = editablePolygon(of: selected) {
+                let locked = isLocked(selID)
+                if locked {
+                    // 鎖定：只畫虛線框＋鎖鈕,不畫控制點/節點（不可拖）。
+                } else if let poly = editablePolygon(of: selected) {
                     // 多邊形：畫每個角點節點 handle（角點各自拖），選中的節點以橘色標示。
                     if selectDrag == nil || selectDragBegan == false {
                         for (i, hp) in poly.points.enumerated() {

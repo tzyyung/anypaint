@@ -87,13 +87,6 @@ extension SelectionView {
             hoveredTextID = newHover
             needsDisplay = true
         }
-        // 懸停標註 → 記錄以顯示鎖/解鎖鈕（含鎖定的,才能解鎖）。不限工具（即選即編下畫圖工具也要能鎖）。
-        // 用 annotationHover（圖形 ∪ 鎖鈕範圍）→ 移向鎖鈕途中不脫離,鎖鈕構得到。變化才重繪。
-        let newAnnHover = annotationHover(at: p)
-        if newAnnHover != hoveredAnnotationID {
-            hoveredAnnotationID = newAnnHover
-            needsDisplay = true
-        }
         updateWindowCandidate(at: p)
         let prev = hoverPoint
         hoverPoint = p
@@ -102,10 +95,6 @@ extension SelectionView {
     override func mouseExited(with event: NSEvent) {
         if hoveredTextID != nil {
             hoveredTextID = nil
-            needsDisplay = true
-        }
-        if hoveredAnnotationID != nil {
-            hoveredAnnotationID = nil
             needsDisplay = true
         }
         if windowCandidate != nil {

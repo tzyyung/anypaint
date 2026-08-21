@@ -69,14 +69,8 @@ extension SelectionView {
     /// 回 true＝已處理（不要畫新的）；回 false＝點在空白,清掉選取,呼叫端去畫新圖形。
     func selectOrEditExistingBeforeDraw(at p: CGPoint) -> Bool {
         if tryGrabSelectedHandle(at: p) { needsDisplay = true; return true }
-        if let hit = annotations.hitTest(at: p), !isLocked(hit.id) {
-            annotations.selectedID = hit.id
-            selectedPolygonNode = nil
-            hotAnnotationID = hit.id
-            toolbar.setStyle(hit.style)
-            selectDrag = .moving(id: hit.id, startMouse: p, startShape: hit.shape)
-            refreshTransformActions()
-            needsDisplay = true
+        if !annotations.hitTestAll(at: p).isEmpty {
+            selectAnnotation(at: p, allowMoveStart: true)   // 點到圖形（含鎖定）→ 改選,重疊可循環
             return true
         }
         // 空白 → 要畫新的：先清掉目前選取（控制點消失）。
@@ -121,11 +115,10 @@ extension SelectionView {
     // MARK: 鎖定（滑鼠移到圖形上出現鎖/解鎖鈕；鎖上不可動,預設解鎖）
 
     /// 目前該顯示鎖/解鎖鈕的標註（懸停的＋選中的，去重）。
+    /// 只有**選取中**那一個顯示鎖/解鎖鈕（鎖定的也能被選取,以便解鎖）。不用 hover——
+    /// hover 在重疊時會跳來跳去、小鈕構不到（實機教訓）。綁「目前選取」＝決定性。
     func lockIconTargets() -> [UUID] {
-        var ids: [UUID] = []
-        if let h = hoveredAnnotationID { ids.append(h) }
-        if let s = annotations.selectedID, s != hoveredAnnotationID { ids.append(s) }
-        return ids
+        annotations.selectedID.map { [$0] } ?? []
     }
 
     /// 鎖/解鎖鈕的位置（標註外框右上角外側；夾進畫面）。繪製與命中共用。
@@ -138,31 +131,7 @@ extension SelectionView {
         return r
     }
 
-    /// hover 有效範圍＝圖形外框 ∪ 鎖鈕，外擴一點：滑鼠從圖形移向（圖形外的）鎖鈕途中不會脫離,
-    /// 否則鎖鈕一離開圖形就消失、永遠按不到（實機教訓）。
-    func annotationHoverRegion(for ann: Annotation) -> CGRect {
-        ann.bounds.union(annotationLockIconRect(for: ann)).insetBy(dx: -6, dy: -6)
-    }
-
-    /// 滑鼠位置對應的 hover 標註。**不限工具**——即選即編下畫圖工具也要能鎖。
-    /// 優先序：
-    /// 1. 目前 hover 的是**鎖定**圖形且仍在其 hover 範圍（圖形∪鎖鈕）內 → 黏住不放。
-    ///    這樣「移向解鎖鈕途中經過另一個重疊圖形」不會被搶走,鎖鈕不消失（否則重疊的鎖定圖形永遠解不了）。
-    /// 2. 命中圖形本體（由上而下）。
-    /// 3. 仍在「目前 hover 或選中」那顆的 hover 範圍內 → 維持,橋接圖形到鎖鈕之間的空隙。
-    func annotationHover(at p: CGPoint) -> UUID? {
-        if let cur = hoveredAnnotationID, isLocked(cur),
-           let ann = annotations.objects.first(where: { $0.id == cur }),
-           annotationHoverRegion(for: ann).contains(p) { return cur }
-        if let hit = annotations.hitTest(at: p) { return hit.id }
-        for id in [hoveredAnnotationID, annotations.selectedID].compactMap({ $0 }) {
-            if let ann = annotations.objects.first(where: { $0.id == id }),
-               annotationHoverRegion(for: ann).contains(p) { return id }
-        }
-        return nil
-    }
-
-    /// 命中鎖/解鎖鈕 → 回該標註 id（不限工具）。
+    /// 命中鎖/解鎖鈕 → 回該標註 id（選取中那個）。
     func hitLockIcon(at p: CGPoint) -> UUID? {
         for id in lockIconTargets() {
             guard let ann = annotations.objects.first(where: { $0.id == id }) else { continue }
@@ -171,14 +140,38 @@ extension SelectionView {
         return nil
     }
 
-    /// 切換鎖定：鎖上時若正選中它就解除選取（鎖了不該留可拖的控制點）。
+    /// 切換鎖定：**維持選取**（鎖定後鎖鈕仍在,可再解鎖；但控制點隱藏、不可拖）。
     func toggleLock(_ id: UUID) {
-        if lockedAnnotations.contains(id) {
-            lockedAnnotations.remove(id)
+        if lockedAnnotations.contains(id) { lockedAnnotations.remove(id) }
+        else { lockedAnnotations.insert(id) }
+        annotations.selectedID = id      // 確保仍選中（鎖鈕綁在選取上）
+        selectedPolygonNode = nil
+        selectDrag = nil
+        refreshTransformActions()
+        needsDisplay = true
+    }
+
+    /// 點選圖形（決定性）：命中最上層；若目前選中的就在命中清單→再點循環到下層（重疊選取）。
+    /// 鎖定的也選得到（才能解鎖）,但不進移動候選（不可拖）。
+    func selectAnnotation(at p: CGPoint, allowMoveStart: Bool) {
+        let hits = annotations.hitTestAll(at: p)
+        guard !hits.isEmpty else { deselect(); return }
+        let chosen: Annotation
+        if let cur = annotations.selectedID, let idx = hits.firstIndex(where: { $0.id == cur }) {
+            chosen = hits[(idx + 1) % hits.count]   // 再點一下→下一個（循環）
         } else {
-            lockedAnnotations.insert(id)
-            if annotations.selectedID == id { deselect() }
+            chosen = hits[0]                          // 最上層
         }
+        annotations.selectedID = chosen.id
+        selectedPolygonNode = nil
+        hotAnnotationID = chosen.id
+        toolbar.setStyle(chosen.style)
+        if activeTool == .select { toolbar.setStyleRowVisible(true) }
+        if allowMoveStart, !isLocked(chosen.id) {
+            selectDrag = .moving(id: chosen.id, startMouse: p, startShape: chosen.shape)
+        }
+        refreshTransformActions()
+        if let sel = selection { layoutToolbar(for: sel) }
         needsDisplay = true
     }
 
@@ -245,6 +238,7 @@ extension SelectionView {
                                    frameGlobal: snapshot.frameGlobal, scale: scale, windows: [])
         backgroundImage = NSImage(cgImage: newFull, size: snapshot.pointSize)
         annotations.restore(objects: [])
+        lockedAnnotations.removeAll()   // 標註已清空,鎖定狀態一併清
         selection = CGRect(x: CGFloat(ox) / scale, y: CGFloat(oy) / scale,
                            width: CGFloat(cw) / scale, height: CGFloat(ch) / scale)
         selectedPolygonNode = nil
@@ -286,20 +280,8 @@ extension SelectionView {
     func handleSelectDown(at p: CGPoint) {
         // 目前選取圖形的節點/控制點優先（鎖定不給拖）。
         if tryGrabSelectedHandle(at: p) { return }
-        guard let hit = annotations.hitTest(at: p) else {
-            deselect()
-            return
-        }
-        if isLocked(hit.id) { return }   // 鎖定的圖形不可選取/移動（解鎖走懸停的鎖鈕）
-        annotations.selectedID = hit.id
-        selectedPolygonNode = nil   // 點到物件本體（非節點）＝清掉節點選取
-        hotAnnotationID = hit.id   // 重設熱狀態（同上）
-        toolbar.setStyle(hit.style)
-        toolbar.setStyleRowVisible(true)   // 選取了物件＝樣式列出現（spec）
-        if let sel = selection { layoutToolbar(for: sel) }   // 高度變化要重新定位工具列
-        selectDrag = .moving(id: hit.id, startMouse: p, startShape: hit.shape)
-        refreshTransformActions()   // 選到多邊形→顯示裁切/拉直
-        needsDisplay = true
+        // 點到圖形（含鎖定的,才能解鎖）→ 選取；重疊時再點循環到下層；鎖定的不進移動。空白→解除選取。
+        selectAnnotation(at: p, allowMoveStart: true)
     }
 
     /// 文字：在點擊處開新編輯器。命中既有文字的情況已在 mouseDown 分流成拖曳候選

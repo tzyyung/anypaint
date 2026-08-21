@@ -99,8 +99,6 @@ final class SelectionView: NSView {
     /// 被鎖定（不可移動/縮放/編輯）的標註 id。預設解鎖（不在集合內＝可動）。
     /// view 端狀態,不進標註 undo（鎖定是編輯輔助,不是內容）。
     var lockedAnnotations: Set<UUID> = []
-    /// select 工具下滑鼠懸停的標註 id（用來顯示鎖/解鎖鈕）。
-    var hoveredAnnotationID: UUID?
     func isLocked(_ id: UUID) -> Bool { lockedAnnotations.contains(id) }
 
     /// 有選取物件（Task 4 keyMonitor 的 Esc 分層依賴）。
