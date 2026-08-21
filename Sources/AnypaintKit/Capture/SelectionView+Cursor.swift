@@ -34,10 +34,11 @@ extension SelectionView {
     }
 
     func cursor(at point: CGPoint) -> NSCursor {
-        // 鎖定圖形上（非工具列）＝箭頭,暗示不可拖（點鎖頭解鎖仍可）。
         let onToolbar = !toolbar.isHidden && toolbar.frame.contains(point)
-        if !onToolbar, let hit = annotations.hitTest(at: point), isLocked(hit.id) {
-            return .arrow
+        if !onToolbar {
+            if hitLockIcon(at: point) != nil { return .pointingHand }          // 鎖頭可點＝手指
+            if let c = annotationEditCursor(at: point) { return c }            // 選取物件的控制點/節點（任何工具）
+            if let hit = annotations.hitTest(at: point), isLocked(hit.id) { return .arrow }  // 鎖定＝不可拖
         }
         // 鎖框時無控制點、不可移動 → edgeAxis/insideSelection 皆視為無。
         var edgeAxis: SelectionGeometry.ResizeAxis?
@@ -52,6 +53,18 @@ extension SelectionView {
             isSelectTool: activeTool == .select, selectCursor: selectCursorKind(at: point),
             isDrawingTool: activeTool != nil, edgeAxis: edgeAxis, insideSelection: inside)
         return nsCursor(for: kind)
+    }
+
+    /// 選取物件的可拖控制點/節點游標（**任何工具**下皆生效,統一模型：畫圖工具也能編輯選取物件）。
+    /// 未選取/鎖定＝nil（鎖定不可拖,交給上層回箭頭）。多邊形節點＝開手（抓著移動）;8 向 handle＝方向 resize。
+    private func annotationEditCursor(at point: CGPoint) -> NSCursor? {
+        guard let id = annotations.selectedID, !isLocked(id),
+              let sel = annotations.objects.first(where: { $0.id == id }) else { return nil }
+        if hitPolygonNode(point, for: sel) != nil { return .openHand }
+        if let h = hitAnnotationHandle(point, for: sel) {
+            return nsCursor(for: .resize(SelectionGeometry.resizeAxis(for: h)))
+        }
+        return nil
     }
 
     /// select 工具游標（純決策部分）：選取物件四角 handle＝對角 resize；命中物件＝開手；其餘＝箭頭。

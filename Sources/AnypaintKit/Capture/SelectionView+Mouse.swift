@@ -161,6 +161,7 @@ extension SelectionView {
                     annotations.updateWithoutSnapshot(id: id) { a in
                         a.shape = .polygon(points: moved.points, closed: moved.closed)
                     }
+                    NSCursor.closedHand.set()   // 拖節點中＝握拳（對應 hover 的開手）
                     needsDisplay = true
                 }
             }
