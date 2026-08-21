@@ -116,10 +116,12 @@ extension SelectionView {
     // MARK: 鎖定（滑鼠移到圖形上出現鎖/解鎖鈕；鎖上不可動,預設解鎖）
 
     /// 目前該顯示鎖/解鎖鈕的標註（懸停的＋選中的，去重）。
-    /// 只有**選取中**那一個顯示鎖/解鎖鈕（鎖定的也能被選取,以便解鎖）。不用 hover——
-    /// hover 在重疊時會跳來跳去、小鈕構不到（實機教訓）。綁「目前選取」＝決定性。
+    /// 該顯示鎖/解鎖鈕的標註：**所有鎖定的**（常駐 🔒＝狀態一目了然、點它解鎖）＋**選取中**那個
+    /// （未鎖＝🔓 可上鎖）。不用 hover（重疊會跳、小鈕構不到,實機教訓）；鎖定用常駐徽章＝決定性。
     func lockIconTargets() -> [UUID] {
-        annotations.selectedID.map { [$0] } ?? []
+        var ids = annotations.objects.compactMap { isLocked($0.id) ? $0.id : nil }
+        if let s = annotations.selectedID, !ids.contains(s) { ids.append(s) }
+        return ids
     }
 
     /// 鎖/解鎖鈕的位置（標註外框右上角外側；夾進畫面）。繪製與命中共用。

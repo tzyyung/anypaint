@@ -34,6 +34,11 @@ extension SelectionView {
     }
 
     func cursor(at point: CGPoint) -> NSCursor {
+        // 鎖定圖形上（非工具列）＝箭頭,暗示不可拖（點鎖頭解鎖仍可）。
+        let onToolbar = !toolbar.isHidden && toolbar.frame.contains(point)
+        if !onToolbar, let hit = annotations.hitTest(at: point), isLocked(hit.id) {
+            return .arrow
+        }
         // 鎖框時無控制點、不可移動 → edgeAxis/insideSelection 皆視為無。
         var edgeAxis: SelectionGeometry.ResizeAxis?
         var inside = false
