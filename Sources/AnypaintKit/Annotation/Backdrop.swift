@@ -4,12 +4,14 @@ import CoreGraphics
 /// #1 美化背景（Backdrop）：把截圖放到裝飾背景上（padding＋背景＋圓角＋陰影）。
 /// 這裡是**純資料與版面**，零 UI 依賴；渲染在 `BackdropRenderer`、view 接線在 SelectionView。
 
-/// 背景選項：一組精選純色＋漸層預設（CaseIterable → 面板逐一列出）。
+/// 背景選項：一組精選純色＋線性漸層＋桌布（放射漸層）預設（CaseIterable → 面板逐一列出）。
 public enum BackdropBackground: String, CaseIterable {
     // 純色
     case white, graphite, indigo
-    // 漸層（由左上到右下兩色標）
+    // 線性漸層（由左上到右下兩色標）
     case sunset, ocean, mint, grape
+    // 桌布（放射漸層，中心→外圈；比線性更有「桌布」感）
+    case aurora, bloom, dusk
 
     public var displayName: String {
         switch self {
@@ -20,13 +22,19 @@ public enum BackdropBackground: String, CaseIterable {
         case .ocean: return "海洋"
         case .mint: return "薄荷"
         case .grape: return "葡萄"
+        case .aurora: return "極光"
+        case .bloom: return "花漾"
+        case .dusk: return "暮色"
         }
     }
 
-    public var isGradient: Bool {
+    /// 有漸層（線性或放射）；純色回 false。
+    public var isGradient: Bool { gradientColors != nil }
+    /// 放射漸層（桌布類）；線性漸層與純色回 false。
+    public var isRadial: Bool {
         switch self {
-        case .white, .graphite, .indigo: return false
-        case .sunset, .ocean, .mint, .grape: return true
+        case .aurora, .bloom, .dusk: return true
+        default: return false
         }
     }
 
@@ -40,11 +48,11 @@ public enum BackdropBackground: String, CaseIterable {
         case .white:    return Self.c(0.96, 0.96, 0.97)
         case .graphite: return Self.c(0.16, 0.17, 0.20)
         case .indigo:   return Self.c(0.20, 0.23, 0.44)
-        case .sunset, .ocean, .mint, .grape: return nil
+        default:        return nil
         }
     }
 
-    /// 漸層的兩個色標（左上→右下）；純色回 nil。
+    /// 漸層的兩個色標（線性＝左上→右下；放射＝中心→外圈）；純色回 nil。
     public var gradientColors: [CGColor]? {
         switch self {
         case .white, .graphite, .indigo: return nil
@@ -52,6 +60,9 @@ public enum BackdropBackground: String, CaseIterable {
         case .ocean:  return [Self.c(0.129, 0.576, 0.690), Self.c(0.427, 0.835, 0.929)]
         case .mint:   return [Self.c(0.263, 0.914, 0.482), Self.c(0.220, 0.976, 0.843)]
         case .grape:  return [Self.c(0.498, 0.000, 1.000), Self.c(0.882, 0.000, 1.000)]
+        case .aurora: return [Self.c(0.435, 0.855, 0.753), Self.c(0.180, 0.208, 0.373)]  // 中心青綠→外深藍
+        case .bloom:  return [Self.c(1.000, 0.780, 0.870), Self.c(0.541, 0.170, 0.470)]  // 中心粉→外莓紫
+        case .dusk:   return [Self.c(1.000, 0.639, 0.400), Self.c(0.204, 0.157, 0.365)]  // 中心橘→外靛
         }
     }
 }
@@ -59,6 +70,8 @@ public enum BackdropBackground: String, CaseIterable {
 /// 一次美化的樣式參數。padding／圓角以**點**表示（跨 DPI 一致，渲染時乘 scale）。
 public struct BackdropStyle: Equatable {
     public var background: BackdropBackground
+    /// 自訂純色背景（非 nil 時**蓋過** `background` 預設，填成這個純色）。
+    public var customColor: CGColor?
     public var paddingPt: CGFloat
     public var cornerRadiusPt: CGFloat
     public var shadow: Bool
@@ -67,9 +80,10 @@ public struct BackdropStyle: Equatable {
     public static let paddingRange: ClosedRange<CGFloat> = 0...160
     public static let cornerRange: ClosedRange<CGFloat> = 0...48
 
-    public init(background: BackdropBackground = .sunset, paddingPt: CGFloat = 48,
+    public init(background: BackdropBackground = .sunset, customColor: CGColor? = nil, paddingPt: CGFloat = 48,
                 cornerRadiusPt: CGFloat = 14, shadow: Bool = true) {
         self.background = background
+        self.customColor = customColor
         self.paddingPt = BackdropStyle.clampPadding(paddingPt)
         self.cornerRadiusPt = BackdropStyle.clampCorner(cornerRadiusPt)
         self.shadow = shadow

@@ -19,8 +19,12 @@ public enum BackdropRenderer {
                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         let canvas = CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h))
 
-        // 1) 背景（純色或漸層；漸層由左上→右下）
-        drawBackground(style.background, in: canvas, ctx: ctx)
+        // 1) 背景：自訂色優先（純色）；否則走預設（純色／線性漸層／放射桌布）。
+        if let custom = style.customColor {
+            ctx.setFillColor(custom); ctx.fill(canvas)
+        } else {
+            drawBackground(style.background, in: canvas, ctx: ctx)
+        }
 
         // 2) 內容矩形＋圓角路徑
         let content = BackdropLayout.contentRect(sourcePixelSize: srcSize, paddingPt: style.paddingPt, scale: scale)
@@ -65,13 +69,22 @@ public enum BackdropRenderer {
             ctx.fill(rect)
             return
         }
-        // 左上 → 右下（CGContext 左下原點：起點 (minX, maxY)、終點 (maxX, minY)）。
         ctx.saveGState()
         ctx.addRect(rect); ctx.clip()
-        ctx.drawLinearGradient(gradient,
-                               start: CGPoint(x: rect.minX, y: rect.maxY),
-                               end: CGPoint(x: rect.maxX, y: rect.minY),
-                               options: [])
+        if bg.isRadial {
+            // 放射（桌布）：中心亮 → 外圈；半徑蓋到最遠角落。
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            let radius = hypot(rect.width, rect.height) / 2
+            ctx.drawRadialGradient(gradient, startCenter: center, startRadius: 0,
+                                   endCenter: center, endRadius: radius,
+                                   options: [.drawsAfterEndLocation])
+        } else {
+            // 線性：左上 → 右下（CGContext 左下原點：起點 (minX, maxY)、終點 (maxX, minY)）。
+            ctx.drawLinearGradient(gradient,
+                                   start: CGPoint(x: rect.minX, y: rect.maxY),
+                                   end: CGPoint(x: rect.maxX, y: rect.minY),
+                                   options: [])
+        }
         ctx.restoreGState()
     }
 }

@@ -6,7 +6,7 @@ import Foundation
 nonisolated func backdropTests() {
 
     // ── 單元：BackdropBackground ──────────────────────────────
-    T.checkEq("bg: 全部預設數", BackdropBackground.allCases.count, 7)
+    T.checkEq("bg: 全部預設數", BackdropBackground.allCases.count, 10)
     for bg in BackdropBackground.allCases {
         if bg.isGradient {
             T.checkTrue("bg: \(bg.rawValue) 漸層有兩色標", (bg.gradientColors?.count ?? 0) == 2)
@@ -14,9 +14,14 @@ nonisolated func backdropTests() {
         } else {
             T.checkTrue("bg: \(bg.rawValue) 純色有顏色", bg.solidColor != nil)
             T.checkTrue("bg: \(bg.rawValue) 純色無漸層", bg.gradientColors == nil)
+            T.checkTrue("bg: \(bg.rawValue) 純色非放射", !bg.isRadial)
         }
         T.checkTrue("bg: \(bg.rawValue) 有中文名", !bg.displayName.isEmpty)
     }
+    // 桌布＝放射漸層；線性漸層不是放射。
+    T.checkTrue("bg: aurora/bloom/dusk 是放射",
+                BackdropBackground.aurora.isRadial && BackdropBackground.bloom.isRadial && BackdropBackground.dusk.isRadial)
+    T.checkTrue("bg: sunset 是線性(非放射)", BackdropBackground.sunset.isGradient && !BackdropBackground.sunset.isRadial)
 
     // ── 單元：BackdropStyle 夾限與預設 ──────────────────────────
     let def = BackdropStyle()
@@ -91,6 +96,29 @@ nonisolated func backdropTests() {
     T.checkTrue("render: 漸層角落非來源紅（藍綠系）", gTopLeft.2 > gTopLeft.0)
     T.checkTrue("render: 漸層左上右下不同色（真的有漸層）",
                 gTopLeft != gBotRight)
+
+    // ── 整合：桌布放射漸層 → 角落不透明、中心與角落不同色（放射變化） ──────
+    let radialStyle = BackdropStyle(background: .aurora, paddingPt: 30, cornerRadiusPt: 0, shadow: false)
+    guard let radialOut = BackdropRenderer.render(source: source, style: radialStyle, scale: 1) else {
+        T.checkTrue("render: 桌布輸出", false); return
+    }
+    let radp = pixels(of: radialOut)
+    let rCorner = rgba(radp, 3, 3)
+    let rMidTop = rgba(radp, radialOut.width / 2, 3)   // 上緣中點（比角落靠近放射中心）
+    T.checkTrue("render: 桌布角落不透明", rCorner.3 == 255)
+    T.checkTrue("render: 桌布放射有變化（角落≠上緣中點）", rCorner != rMidTop)
+
+    // ── 整合：自訂色蓋過預設 → 角落＝自訂色、中心＝來源 ───────────────
+    let customStyle = BackdropStyle(background: .sunset,
+        customColor: CGColor(srgbRed: 0, green: 0.8, blue: 0, alpha: 1), paddingPt: 20, cornerRadiusPt: 0, shadow: false)
+    T.checkTrue("style: 預設無自訂色", BackdropStyle().customColor == nil)
+    guard let customOut = BackdropRenderer.render(source: source, style: customStyle, scale: 1) else {
+        T.checkTrue("render: 自訂色輸出", false); return
+    }
+    let cp = pixels(of: customOut)
+    let cCorner = rgba(cp, 3, 3)
+    T.checkTrue("render: 自訂色角落是綠（蓋過 sunset）", cCorner.1 > 150 && cCorner.0 < 100 && cCorner.2 < 100)
+    T.checkTrue("render: 自訂色中心仍是來源紅", rgba(cp, cp.w / 2, cp.h / 2).0 > 200)
 
     // ── 整合：圓角把內容角落切掉 → 內容矩形角落是背景、中心仍是來源 ──
     let roundStyle = BackdropStyle(background: .graphite, paddingPt: 20, cornerRadiusPt: 30, shadow: false)

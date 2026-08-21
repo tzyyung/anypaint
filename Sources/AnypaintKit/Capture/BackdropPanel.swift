@@ -31,6 +31,7 @@ final class BackdropPanel: NSView {
     private let cornerSlider = DragEndSlider()
     private let cornerValue = NSTextField(labelWithString: "")
     private let shadowSwitch = NSButton()
+    private let customColorWell = NSColorWell()
 
     init(initial: BackdropStyle) {
         self.style = initial
@@ -80,6 +81,18 @@ final class BackdropPanel: NSView {
             swatchRow.addArrangedSubview(b)
         }
 
+        // 自訂色：色井（點開系統色盤選任意色，蓋過預設）。
+        let customLabel = NSTextField(labelWithString: "自訂")
+        customLabel.font = .systemFont(ofSize: 11)
+        customLabel.textColor = .white
+        customColorWell.target = self
+        customColorWell.action = #selector(customColorChanged)
+        customColorWell.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        customColorWell.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        let customRow = NSStackView(views: [customLabel, customColorWell])
+        customRow.orientation = .horizontal
+        customRow.spacing = 8
+
         paddingSlider.minValue = Double(BackdropStyle.paddingRange.lowerBound)
         paddingSlider.maxValue = Double(BackdropStyle.paddingRange.upperBound)
         paddingSlider.target = self
@@ -111,7 +124,7 @@ final class BackdropPanel: NSView {
         buttonRow.spacing = 8
         buttonRow.distribution = .fillEqually
 
-        let stack = NSStackView(views: [title, swatchRow, paddingRow, cornerRow, shadowSwitch, buttonRow])
+        let stack = NSStackView(views: [title, swatchRow, customRow, paddingRow, cornerRow, shadowSwitch, buttonRow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -152,9 +165,11 @@ final class BackdropPanel: NSView {
 
     /// 依目前 style 更新控件外觀（選中框、slider 值、文字）。
     private func syncControls() {
+        // 選中框：用了自訂色就都不亮（改由色井代表選取）；否則亮在目前預設上。
         for (bg, b) in swatches {
-            b.layer?.borderWidth = (bg == style.background) ? 2.5 : 0
+            b.layer?.borderWidth = (style.customColor == nil && bg == style.background) ? 2.5 : 0
         }
+        if let c = style.customColor, let ns = NSColor(cgColor: c) { customColorWell.color = ns }
         paddingSlider.doubleValue = Double(style.paddingPt)
         cornerSlider.doubleValue = Double(style.cornerRadiusPt)
         paddingValue.stringValue = "\(Int(style.paddingPt)) pt"
@@ -167,6 +182,11 @@ final class BackdropPanel: NSView {
     @objc private func swatchTapped(_ sender: NSButton) {
         guard let raw = sender.identifier?.rawValue, let bg = BackdropBackground(rawValue: raw) else { return }
         style.background = bg
+        style.customColor = nil   // 選預設＝清掉自訂色
+        emit()
+    }
+    @objc private func customColorChanged() {
+        style.customColor = customColorWell.color.cgColor   // 自訂色蓋過預設
         emit()
     }
     @objc private func paddingChanged() {

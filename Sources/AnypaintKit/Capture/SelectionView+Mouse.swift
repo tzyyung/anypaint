@@ -477,8 +477,9 @@ extension SelectionView {
             if let id = annotations.selectedID { annotations.bringToFront(id: id); syncUndoButtons(); needsDisplay = true }
         case .sendToBack:
             if let id = annotations.selectedID { annotations.sendToBack(id: id); syncUndoButtons(); needsDisplay = true }
-        case .escape:        // 分層：多邊形成形中取消 draft → 編輯中完成編輯 → 有選取解除選取 → 否則取消（spec）
-            if !polygonDraft.isEmpty { polygonDraft = []; needsDisplay = true }
+        case .escape:        // 分層：美化面板開著→只取消美化 → 多邊形成形中取消 draft → 編輯中完成編輯 → 有選取解除選取 → 否則取消（spec）
+            if isBackdropActive { cancelBackdrop() }
+            else if !polygonDraft.isEmpty { polygonDraft = []; needsDisplay = true }
             else if isEditingText { commitTextEditing() }
             else if hasSelection { deselect() }
             else { onCancel?() }
