@@ -310,8 +310,8 @@ extension SelectionView {
         needsDisplay = true
     }
 
-    // 右鍵：命中任一標註物件（不限已選取、不限目前工具）→ 選取它並彈出 z-order/刪除選單；
-    // 空白處＝維持既有逃生路徑（onCancel，一個字不能動）。
+    // 右鍵＝一律開選單（慣例）。命中圖形→鎖定/z-order/刪除；空白→取消截圖（＋全部解鎖）。
+    // **不再裸擊取消**：右鍵想開鎖定選單卻差幾像素點到空白就整張標註全沒的地雷（改成選單裡按）。
     override func rightMouseDown(with event: NSEvent) {
         onInteraction?()
         commitTextEditing()   // 重編輯中的原物件在 draw() 被跳過但 hitTest 不跳過：
@@ -319,7 +319,14 @@ extension SelectionView {
                               // 內容做靜默 no-op（總審查 Important）；先落字對齊 mouseDown 慣例。
         let p = convert(event.locationInWindow, from: nil)
         guard let hit = annotations.hitTest(at: p) else {
-            onCancel?()
+            // 空白：開選單（保留「取消截圖」逃生路徑,但要在選單裡按,不會誤觸）。
+            let menu = NSMenu()
+            if !lockedAnnotations.isEmpty {
+                menu.addItem(makeContextMenuItem(title: "全部解鎖", action: #selector(contextUnlockAll)))
+                menu.addItem(.separator())
+            }
+            menu.addItem(makeContextMenuItem(title: "取消截圖", action: #selector(contextCancel)))
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
             return
         }
         annotations.selectedID = hit.id
@@ -350,6 +357,12 @@ extension SelectionView {
     @objc private func contextToggleLock() {
         guard let id = annotations.selectedID else { return }
         toggleLock(id)   // 維持選取（若之後非 select 工具,rightMouseDown 收尾會 deselect）
+    }
+    @objc private func contextCancel() { onCancel?() }
+    @objc private func contextUnlockAll() {
+        lockedAnnotations.removeAll()
+        refreshTransformActions()
+        needsDisplay = true
     }
     @objc private func contextBringToFront() {
         guard let id = annotations.selectedID else { return }
