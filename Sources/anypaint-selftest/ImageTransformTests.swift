@@ -24,6 +24,16 @@ nonisolated func imageTransformTests() {
     T.checkEq("xform: rectifiedSize 非4角→zero",
               ImageTransform.rectifiedSize(corners: [.zero, .zero]), CGSize.zero)
 
+    // orderedCorners：亂序 4 點 → [tl,tr,br,bl]（左上原點 y 向下）
+    let shuffled = [CGPoint(x: 100, y: 0),   // tr
+                    CGPoint(x: 0, y: 0),     // tl
+                    CGPoint(x: 0, y: 60),    // bl
+                    CGPoint(x: 100, y: 60)]  // br
+    T.checkEq("xform: orderedCorners",
+              ImageTransform.orderedCorners(shuffled),
+              [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0),
+               CGPoint(x: 100, y: 60), CGPoint(x: 0, y: 60)])
+
     // pixelBoundingBox
     T.checkEq("xform: pixelBoundingBox",
               ImageTransform.pixelBoundingBox([CGPoint(x: 5, y: 8), CGPoint(x: 25, y: 8),

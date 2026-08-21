@@ -26,6 +26,18 @@ public enum ImageTransform {
         return CGSize(width: max(1, w), height: max(1, h))
     }
 
+    /// 把任意順序的 4 點依位置排成 [topLeft, topRight, bottomRight, bottomLeft]
+    /// （像素座標,左上原點,y 向下）。用 x±y 判角：tl 最小 x+y、br 最大 x+y、tr 最大 x−y、bl 最小 x−y。
+    /// 非 4 點回原陣列。
+    public static func orderedCorners(_ pts: [CGPoint]) -> [CGPoint] {
+        guard pts.count == 4 else { return pts }
+        let tl = pts.min { $0.x + $0.y < $1.x + $1.y }!
+        let br = pts.max { $0.x + $0.y < $1.x + $1.y }!
+        let tr = pts.max { $0.x - $0.y < $1.x - $1.y }!
+        let bl = pts.min { $0.x - $0.y < $1.x - $1.y }!
+        return [tl, tr, br, bl]
+    }
+
     /// 多邊形（像素座標,左上原點）的整數外接框——裁切輸出尺寸。
     public static func pixelBoundingBox(_ pts: [CGPoint]) -> CGRect {
         guard let first = pts.first else { return .zero }

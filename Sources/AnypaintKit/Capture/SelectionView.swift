@@ -5,8 +5,18 @@ import AppKit
 /// 框選視圖：顯示凍結影像、可拖出/調整選取框，按工具列「複製」才裁切完成。
 /// 座標一律用「點、左下原點」，裁切時交給 CoordinateUtils 翻轉成像素。
 final class SelectionView: NSView {
-    let snapshot: DisplaySnapshot
-    let backgroundImage: NSImage
+    // 影像轉換（裁切/透視）會就地換底圖 → 可變（見 replaceSurface）。
+    var snapshot: DisplaySnapshot
+    var backgroundImage: NSImage
+
+    /// 影像轉換的 surface undo：換底圖前存下整個編輯狀態,⌘Z 在標註 undo 用盡後回退到這裡。
+    struct SurfaceState {
+        let snapshot: DisplaySnapshot
+        let backgroundImage: NSImage
+        let objects: [Annotation]
+        let selection: CGRect?
+    }
+    var surfaceUndoStack: [SurfaceState] = []
 
     var selection: CGRect?
     let handleSize: CGFloat = 8
@@ -92,6 +102,7 @@ final class SelectionView: NSView {
         selectDrag = nil
         selectDragBegan = false
         selectedPolygonNode = nil
+        refreshTransformActions()   // 解除選取→隱藏裁切/拉直
         if activeTool == .select {
             // select 工具下無選取＝隱藏樣式列（spec：選了繪製工具或選取了物件才出現）；
             // 高度變化要重新定位工具列（比照 onToolSelected 既有做法）。
@@ -181,6 +192,8 @@ final class SelectionView: NSView {
         toolbar.onOpen = { [weak self] in self?.openConfirm() }
         toolbar.onRecognizeText = { [weak self] in self?.recognizeTextConfirm() }
         toolbar.onCancel = { [weak self] in self?.onCancel?() }
+        toolbar.onCrop = { [weak self] in self?.cropToSelectedPolygon() }
+        toolbar.onPerspective = { [weak self] in self?.perspectiveCorrectSelected() }
         toolbar.onToolSelected = { [weak self] tool in
             guard let self else { return }
             self.commitTextEditing()   // 編輯中切工具＝先落字，避免編輯器與工具狀態不同步

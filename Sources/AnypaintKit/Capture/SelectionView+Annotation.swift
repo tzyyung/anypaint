@@ -69,6 +69,96 @@ extension SelectionView {
         return true
     }
 
+    // MARK: 影像轉換（非矩形裁切／透視校正）——就地換底圖,可 undo
+
+    /// 選中的封閉多邊形（≥3 點）＝裁切/透視的輸入；沒有就 nil。
+    func selectedClosedPolygon() -> (id: UUID, poly: EditablePolygon)? {
+        guard let id = annotations.selectedID,
+              let a = annotations.objects.first(where: { $0.id == id }),
+              let poly = editablePolygon(of: a), poly.closed, poly.points.count >= 3 else { return nil }
+        return (id, poly)
+    }
+
+    var canCropToPolygon: Bool { selectedClosedPolygon() != nil }
+    var canPerspectiveCorrect: Bool { selectedClosedPolygon()?.poly.points.count == 4 }
+
+    private func toImagePixels(_ pts: [CGPoint]) -> [CGPoint] {
+        pts.map { ImageTransform.imagePixel(viewPoint: $0, viewHeight: bounds.height, scale: snapshot.scale) }
+    }
+
+    /// 非矩形裁切：選中多邊形遮罩底圖 → 去背新圖 → 換底圖。
+    func cropToSelectedPolygon() {
+        guard let s = selectedClosedPolygon() else { return }
+        guard let cropped = ImageTransform.maskedCrop(source: snapshot.cgImage,
+                                                      imagePolygon: toImagePixels(s.poly.points)) else {
+            NSSound.beep(); return
+        }
+        replaceSurface(with: cropped)
+    }
+
+    /// 透視校正：選中的 4 角 quad → 拉直 → 換底圖。
+    func perspectiveCorrectSelected() {
+        guard let s = selectedClosedPolygon(), s.poly.points.count == 4 else { return }
+        let ordered = ImageTransform.orderedCorners(toImagePixels(s.poly.points))
+        guard let corrected = ImageTransform.perspectiveCorrect(source: snapshot.cgImage,
+                                                                imageCorners: ordered) else {
+            NSSound.beep(); return
+        }
+        replaceSurface(with: corrected)
+    }
+
+    /// 就地換底圖：把 corrected（snapshot.scale 像素）嵌進整螢幕暗底畫布中央,
+    /// selection＝該影像區,清標註,存一層 surface undo。
+    func replaceSurface(with corrected: CGImage) {
+        let scale = snapshot.scale
+        let fullW = snapshot.cgImage.width, fullH = snapshot.cgImage.height
+        guard let ctx = CGContext(
+            data: nil, width: fullW, height: fullH, bitsPerComponent: 8, bytesPerRow: 0,
+            space: snapshot.cgImage.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        ctx.setFillColor(CGColor(gray: 0.12, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: fullW, height: fullH))
+        let cw = min(corrected.width, fullW), ch = min(corrected.height, fullH)
+        let ox = (fullW - cw) / 2, oy = (fullH - ch) / 2   // ctx 左下原點
+        ctx.interpolationQuality = .high
+        ctx.draw(corrected, in: CGRect(x: ox, y: oy, width: cw, height: ch))
+        guard let newFull = ctx.makeImage() else { return }
+
+        surfaceUndoStack.append(SurfaceState(snapshot: snapshot, backgroundImage: backgroundImage,
+                                             objects: annotations.snapshotObjects(), selection: selection))
+        snapshot = DisplaySnapshot(displayID: snapshot.displayID, cgImage: newFull, screen: snapshot.screen,
+                                   frameGlobal: snapshot.frameGlobal, scale: scale, windows: [])
+        backgroundImage = NSImage(cgImage: newFull, size: snapshot.pointSize)
+        annotations.restore(objects: [])
+        selection = CGRect(x: CGFloat(ox) / scale, y: CGFloat(oy) / scale,
+                           width: CGFloat(cw) / scale, height: CGFloat(ch) / scale)
+        selectedPolygonNode = nil
+        selectDrag = nil
+        activeTool = nil
+        toolbar.setActiveTool(nil)
+        toolbar.setStyleRowVisible(false)
+        clearHotAnnotation()
+        if let sel = selection { layoutToolbar(for: sel) }
+        toolbar.isHidden = false
+        syncUndoButtons()
+        needsDisplay = true
+    }
+
+    /// 回退一層 surface（⌘Z 在標註 undo 用盡後）。回傳是否有回退。
+    @discardableResult
+    func revertSurface() -> Bool {
+        guard let s = surfaceUndoStack.popLast() else { return false }
+        snapshot = s.snapshot
+        backgroundImage = s.backgroundImage
+        annotations.restore(objects: s.objects)
+        selection = s.selection
+        selectedPolygonNode = nil
+        if let sel = selection { layoutToolbar(for: sel) }
+        syncUndoButtons()
+        needsDisplay = true
+        return true
+    }
+
     /// 命中既有文字物件（由上到下找第一個）；點擊路由與 hover 提示共用（驗收回饋 Fix 2；
     /// threshold 統一 4，與 hover 虛線框 inset 一致——清理項）。
     func hitTextObject(at p: CGPoint) -> Annotation? {
@@ -106,6 +196,7 @@ extension SelectionView {
         toolbar.setStyleRowVisible(true)   // 選取了物件＝樣式列出現（spec）
         if let sel = selection { layoutToolbar(for: sel) }   // 高度變化要重新定位工具列
         selectDrag = .moving(id: hit.id, startMouse: p, startShape: hit.shape)
+        refreshTransformActions()   // 選到多邊形→顯示裁切/拉直
         needsDisplay = true
     }
 
@@ -172,7 +263,11 @@ extension SelectionView {
         selectDragBegan = false
         textDragCandidate = nil
         textDragBegan = false
-        guard annotations.canUndo else { return }
+        // 標註 undo 用盡後,⌘Z 再按＝回退一層影像轉換（換底圖）。
+        guard annotations.canUndo else {
+            if revertSurface() { clearHotAnnotation() }
+            return
+        }
         annotations.undo()
         clearHotAnnotation()   // spec：undo/redo 清除熱狀態
         syncUndoButtons()
@@ -198,7 +293,15 @@ extension SelectionView {
     }
 
     func syncUndoButtons() {
-        toolbar.setUndoState(canUndo: annotations.canUndo, canRedo: annotations.canRedo)
+        // canUndo 也涵蓋「回退影像轉換」——標註空但有 surface 可退時,undo 仍可按。
+        toolbar.setUndoState(canUndo: annotations.canUndo || !surfaceUndoStack.isEmpty,
+                             canRedo: annotations.canRedo)
+        refreshTransformActions()
+    }
+
+    /// 依目前選取狀態刷新「裁切／拉直」動作鈕顯隱。
+    func refreshTransformActions() {
+        toolbar.setTransformActions(canCrop: canCropToPolygon, canPerspective: canPerspectiveCorrect)
     }
 
     /// 序號編號查表（渲染時算、不存死——刪除/undo 天然正確）。

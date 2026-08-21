@@ -23,6 +23,10 @@ final class SelectionToolbar: NSView {
     var onUndo: (() -> Void)?
     var onRedo: (() -> Void)?
     var onStyleChanged: ((AnnotationStyle) -> Void)?
+    /// 按「裁切」＝把選中的封閉多邊形外裁掉（去背），換成編輯中的新底圖。
+    var onCrop: (() -> Void)?
+    /// 按「拉直」＝把選中的 4 角多邊形透視校正成正矩形，換成編輯中的新底圖。
+    var onPerspective: (() -> Void)?
 
     private var toolButtons: [AnnotationTool: NSButton] = [:]
     private var colorButtons: [AnnotationColor: NSButton] = [:]
@@ -56,6 +60,9 @@ final class SelectionToolbar: NSView {
     }()
     private let undoButton = NSButton()
     private let redoButton = NSButton()
+    /// 影像轉換動作鈕（選中封閉多邊形才顯示；4 角時才顯示「拉直」）。
+    private let cropButton = NSButton(title: "裁切", target: nil, action: nil)
+    private let perspectiveButton = NSButton(title: "拉直", target: nil, action: nil)
     private let styleRow = NSStackView()
     private var activeTool: AnnotationTool?
     private var currentStyle = AnnotationStyle(color: .red, lineWidth: 4)
@@ -104,6 +111,17 @@ final class SelectionToolbar: NSView {
         toolsRow.addArrangedSubview(undoButton)
         toolsRow.addArrangedSubview(redoButton)
         toolsRow.addArrangedSubview(separator())
+        // 影像轉換動作（選中封閉多邊形才顯示）——擺在裁切/存檔動作那側。
+        for (b, sel, help) in [
+            (cropButton, #selector(cropAction), "把選中的封閉多邊形外裁掉（去背），換成編輯中的新底圖"),
+            (perspectiveButton, #selector(perspectiveAction), "把選中的 4 角多邊形透視校正拉直成正矩形，換成新底圖")
+        ] {
+            b.target = self; b.action = sel
+            b.bezelStyle = .rounded; b.controlSize = .small
+            b.isHidden = true
+            setHelp(help, for: b)
+            toolsRow.addArrangedSubview(b)
+        }
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
         cancel.bezelStyle = .rounded
         cancel.controlSize = .small
@@ -245,6 +263,14 @@ final class SelectionToolbar: NSView {
     }
     @objc private func undoTapped() { onUndo?() }
     @objc private func redoTapped() { onRedo?() }
+    @objc private func cropAction() { onCrop?() }
+    @objc private func perspectiveAction() { onPerspective?() }
+
+    /// 依目前選取狀態顯示/隱藏影像轉換動作鈕（選中封閉多邊形＝可裁切；4 角＝可拉直）。
+    func setTransformActions(canCrop: Bool, canPerspective: Bool) {
+        cropButton.isHidden = !canCrop
+        perspectiveButton.isHidden = !canPerspective
+    }
     @objc private func colorTapped(_ sender: NSButton) {
         guard let id = sender.identifier?.rawValue,
               let color = AnnotationColor(rawValue: id) else { return }

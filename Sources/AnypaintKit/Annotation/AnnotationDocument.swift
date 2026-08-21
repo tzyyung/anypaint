@@ -74,6 +74,20 @@ public final class AnnotationDocument {
         objects.insert(a, at: 0)
     }
 
+    // MARK: 整體狀態存取（影像轉換的 surface undo 用——換底圖時要連標註一起存/還原）
+
+    /// 目前所有標註的複本（值型別，直接複製）。
+    public func snapshotObjects() -> [Annotation] { objects }
+
+    /// 以給定陣列整批取代標註並清空 undo/redo 與選取（surface 換底圖是外層一步，
+    /// 內層標註歷史語意已失效）。
+    public func restore(objects newObjects: [Annotation]) {
+        objects = newObjects
+        undoStack.removeAll()
+        redoStack.removeAll()
+        selectedID = nil
+    }
+
     // MARK: undo / redo
 
     public func undo() {
