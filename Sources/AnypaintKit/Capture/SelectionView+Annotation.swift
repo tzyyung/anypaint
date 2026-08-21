@@ -299,9 +299,11 @@ extension SelectionView {
         refreshTransformActions()
     }
 
-    /// 依目前選取狀態刷新「裁切／拉直」動作鈕顯隱。
+    /// 依目前選取狀態刷新「裁切／拉直」動作鈕顯隱。顯隱改變工具列寬度 → 重新 layout
+    /// （否則新現身的鈕在固定寬工具列裡被壓成 0 寬，見實機教訓）。
     func refreshTransformActions() {
         toolbar.setTransformActions(canCrop: canCropToPolygon, canPerspective: canPerspectiveCorrect)
+        if let sel = selection { layoutToolbar(for: sel) }
     }
 
     /// 序號編號查表（渲染時算、不存死——刪除/undo 天然正確）。
