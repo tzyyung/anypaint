@@ -325,6 +325,10 @@ extension SelectionView {
         annotations.selectedID = hit.id
         needsDisplay = true
         let menu = NSMenu()
+        // 鎖定/解鎖：右鍵是解鎖「畫圖工具下穿透的鎖定圖形」的可靠出口（左鍵穿透去畫,不搶）。
+        menu.addItem(makeContextMenuItem(title: isLocked(hit.id) ? "解鎖" : "鎖定",
+                                         action: #selector(contextToggleLock)))
+        menu.addItem(.separator())
         menu.addItem(makeContextMenuItem(title: "移到最前", action: #selector(contextBringToFront)))
         menu.addItem(makeContextMenuItem(title: "移到最後", action: #selector(contextSendToBack)))
         menu.addItem(makeContextMenuItem(title: "刪除", action: #selector(contextDelete)))
@@ -343,6 +347,10 @@ extension SelectionView {
         return item
     }
 
+    @objc private func contextToggleLock() {
+        guard let id = annotations.selectedID else { return }
+        toggleLock(id)   // 維持選取（若之後非 select 工具,rightMouseDown 收尾會 deselect）
+    }
     @objc private func contextBringToFront() {
         guard let id = annotations.selectedID else { return }
         annotations.bringToFront(id: id)
