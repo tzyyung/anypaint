@@ -104,6 +104,24 @@ extension SelectionView {
         return r
     }
 
+    /// hover 有效範圍＝圖形外框 ∪ 鎖鈕，外擴一點：滑鼠從圖形移向（圖形外的）鎖鈕途中不會脫離,
+    /// 否則鎖鈕一離開圖形就消失、永遠按不到（實機教訓）。
+    func annotationHoverRegion(for ann: Annotation) -> CGRect {
+        ann.bounds.union(annotationLockIconRect(for: ann)).insetBy(dx: -6, dy: -6)
+    }
+
+    /// select 工具下滑鼠位置對應的 hover 標註：優先命中圖形本體；否則若仍在「目前 hover 或選中」
+    /// 那顆的 hover 範圍內（含鎖鈕）就維持,讓鎖鈕構得到。
+    func annotationHover(at p: CGPoint) -> UUID? {
+        guard activeTool == .select else { return nil }
+        if let hit = annotations.hitTest(at: p) { return hit.id }
+        for id in [hoveredAnnotationID, annotations.selectedID].compactMap({ $0 }) {
+            if let ann = annotations.objects.first(where: { $0.id == id }),
+               annotationHoverRegion(for: ann).contains(p) { return id }
+        }
+        return nil
+    }
+
     /// 命中鎖/解鎖鈕 → 回該標註 id。
     func hitLockIcon(at p: CGPoint) -> UUID? {
         guard activeTool == .select else { return nil }
