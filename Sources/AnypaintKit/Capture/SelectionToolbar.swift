@@ -91,6 +91,7 @@ final class SelectionToolbar: NSView {
             (.highlighter, "highlighter", "螢光筆：半透明色塊"),
             (.pixelate, "squareshape.split.3x3", "馬賽克：遮住敏感內容"),
             (.blur, "drop.halffull", "模糊：高斯模糊遮住敏感內容（另一種遮法）"),
+            (.spotlight, "rays", "聚光：其餘變暗、只留框內明亮（強調重點；可多個）"),
             (.text, "textformat", "文字：點一下開始輸入"),
             (.counter, "1.circle", "序號：依序編號的圓圈"),
             (.measure, "ruler", "測量：拖出範圍量像素——斜拉另給對角線長度，細長條只給單邊"),

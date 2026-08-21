@@ -14,7 +14,25 @@ public enum AnnotationRenderer {
     public static func render(_ objects: [Annotation], in ctx: CGContext,
                               counterNumbers: [UUID: Int] = [:],
                               sourceProvider: ((CGRect) -> (image: CGImage, drawRect: CGRect)?)? = nil) {
+        // 聚光是畫布級：先把「畫布其餘變暗、只留所有 spotlight 矩形明亮」畫在最底,再疊其他標註。
+        let spots = objects.compactMap { a -> CGRect? in
+            if case .spotlight(let r) = a.shape { return r } else { return nil }
+        }
+        if !spots.isEmpty { drawSpotlightDim(rects: spots, in: ctx) }
         for a in objects { render(a, in: ctx, counterNumbers: counterNumbers, sourceProvider: sourceProvider) }
+    }
+
+    /// 聚光遮暗：畫布（＝目前 clip 外框）扣掉所有 spotlight 矩形,其餘鋪半透明黑（even-odd 挖洞）。
+    private static func drawSpotlightDim(rects: [CGRect], in ctx: CGContext) {
+        let canvas = ctx.boundingBoxOfClipPath
+        guard canvas.width > 0, canvas.height > 0 else { return }
+        ctx.saveGState()
+        ctx.setFillColor(CGColor(gray: 0, alpha: 0.55))
+        ctx.beginPath()
+        ctx.addRect(canvas)
+        for r in rects { ctx.addRect(r) }
+        ctx.fillPath(using: .evenOdd)   // 外框 XOR 各洞 → 洞內不填（明亮）
+        ctx.restoreGState()
     }
 
     static func render(_ a: Annotation, in ctx: CGContext, counterNumbers: [UUID: Int],
@@ -92,6 +110,9 @@ public enum AnnotationRenderer {
 
         case .blur(let rect):
             drawBlur(rect: rect, radiusPt: a.blurRadius, in: ctx, sourceProvider: sourceProvider)
+
+        case .spotlight:
+            break   // 效果＝畫布級遮暗,已在 render(_:) 開頭統一畫；這裡不畫本體。
 
         case .polygon(let pts, let closed):
             guard let first = pts.first else { break }

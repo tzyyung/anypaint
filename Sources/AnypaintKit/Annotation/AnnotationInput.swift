@@ -16,6 +16,7 @@ public enum AnnotationInput {
         case .arrow:    return .arrow(from: a, to: b)
         case .pixelate: return .pixelate(rect: CoordinateUtils.rect(from: a, to: b))
         case .blur:     return .blur(rect: CoordinateUtils.rect(from: a, to: b))
+        case .spotlight: return .spotlight(rect: CoordinateUtils.rect(from: a, to: b))
         // measure 不正規化成 rect：起點→終點就是使用者要量的那條線,對角線方向靠它決定。
         // pixelScale＝擷取端的 pointPixelScale（讀數要像素,混合 DPI 各自正確）。
         case .measure:  return .measure(from: a, to: b, pixelScale: pixelScale)

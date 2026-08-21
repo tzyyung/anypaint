@@ -39,7 +39,7 @@ extension SelectionView {
                 } else {
                     handleTextClick(at: p)
                 }
-            case .rect, .ellipse, .line, .arrow, .pixelate, .blur, .measure:
+            case .rect, .ellipse, .line, .arrow, .pixelate, .blur, .spotlight, .measure:
                 // 統一模型：點控制點＝編輯、點到圖形＝改選、點空白才畫新的。
                 if selectOrEditExistingBeforeDraw(at: p) { return }
                 shapeAnchor = p

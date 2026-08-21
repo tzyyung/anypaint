@@ -113,4 +113,24 @@ nonisolated func annotationGapTests() {
     var blLit = 0
     for i in stride(from: 3, to: bbuf.count, by: 4) where bbuf[i] > 0 { blLit += 1 }
     T.checkTrue("blur 渲染: 有非透明像素", blLit > 0)
+
+    // 8) spotlight：twoPointShape、幾何、畫布級遮暗（框內亮、框外暗）
+    if case .spotlight(let r)? = AnnotationInput.twoPointShape(tool: .spotlight,
+        from: CGPoint(x: 30, y: 40), to: CGPoint(x: 10, y: 10), pixelScale: 2) {
+        T.checkEq("spotlight: twoPoint 正規化", r, CGRect(x: 10, y: 10, width: 20, height: 30))
+    } else { T.checkTrue("spotlight: twoPoint", false) }
+    // 渲染到 60×60 context（無 clip→clip 外框＝整個 bitmap）,spotlight 只留中央 20×20 亮。
+    // 檢查：框外某點被遮暗（有暗像素）、框內中心維持透明（沒被遮）。
+    let sw = 60, sh = 60
+    var sbuf = [UInt8](repeating: 0, count: sw * sh * 4)
+    let spot = Annotation(shape: .spotlight(rect: CGRect(x: 20, y: 20, width: 20, height: 20)), style: style)
+    sbuf.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(data: raw.baseAddress, width: sw, height: sh, bitsPerComponent: 8,
+            bytesPerRow: sw * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        AnnotationRenderer.render([spot], in: ctx)
+    }
+    func alphaAt(_ x: Int, _ y: Int) -> UInt8 { sbuf[(y * sw + x) * 4 + 3] }
+    T.checkTrue("spotlight: 框外被遮暗（有像素）", alphaAt(5, 5) > 0)
+    T.checkTrue("spotlight: 框內維持明亮（未遮）", alphaAt(30, 30) == 0)
 }
