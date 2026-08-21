@@ -72,9 +72,9 @@ extension SelectionView {
                 hoverPath.stroke()
             }
 
-            // select 工具：選取物件的 chrome——白色虛線框＋（可縮放時）四角 handle，
-            // 拖曳中隱藏 handle（畫面乾淨，比照框選 handle 的既有慣例）。
-            if activeTool == .select, let selID = annotations.selectedID,
+            // 選取物件的 chrome——白色虛線框＋控制點/節點（任何工具下都顯示,統一模型：
+            // 畫圖工具下剛畫的仍選中可編輯）。拖曳中隱藏 handle（畫面乾淨）。
+            if let selID = annotations.selectedID,
                let selected = annotations.objects.first(where: { $0.id == selID }) {
                 let chrome = selected.bounds.insetBy(dx: -4, dy: -4)
                 let chromePath = NSBezierPath(rect: chrome)

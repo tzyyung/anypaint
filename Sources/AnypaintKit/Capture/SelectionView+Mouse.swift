@@ -42,15 +42,20 @@ extension SelectionView {
                     handleTextClick(at: p)
                 }
             case .rect, .ellipse, .line, .arrow, .pixelate, .measure:
+                // 統一模型：點控制點＝編輯、點到圖形＝改選、點空白才畫新的。
+                if selectOrEditExistingBeforeDraw(at: p) { return }
                 shapeAnchor = p
                 provisionalShape = makeShape(tool: tool, from: p, to: p)
                 needsDisplay = true
             case .freehand, .highlighter:
+                if selectOrEditExistingBeforeDraw(at: p) { return }
                 strokePoints = [p]
                 provisionalShape = (tool == .freehand) ? .freehand(points: strokePoints)
                                                        : .highlighter(points: strokePoints)
                 needsDisplay = true
             case .polygon:
+                // 成形中不搶點；draft 空時允許先編輯剛畫好的多邊形節點（點控制點＝編輯）。
+                if polygonDraft.isEmpty, tryGrabSelectedHandle(at: p) { needsDisplay = true; return }
                 // 逐點成形：雙擊收尾（≥3 點）；否則依 PolygonBuilder 決策加點/收尾/忽略。
                 if event.clickCount == 2, PolygonBuilder.canFinish(points: polygonDraft) {
                     finishPolygonDraft()
@@ -194,6 +199,21 @@ extension SelectionView {
     override func mouseUp(with event: NSEvent) {
         onInteraction?()
         let p = convert(event.locationInWindow, from: nil)
+        // 編輯拖曳（移動/縮放/節點）收尾——任何工具都可能（統一模型：畫圖工具下也能編輯既有圖形）。
+        if selectDragBegan {
+            syncUndoButtons()
+            selectDrag = nil
+            selectDragBegan = false
+            needsDisplay = true
+            return
+        }
+        // 抓了 handle/選了圖形但沒真的拖（純點一下）：非 select 工具要在這清掉 selectDrag,
+        // 否則殘留會讓下一次拖曳誤動到它。select 工具則往下走它自己的收尾（含雙擊重編輯）。
+        if selectDrag != nil, activeTool != .select {
+            selectDrag = nil
+            needsDisplay = true
+            return
+        }
         // select 工具收尾：清拖曳狀態＋同步 undo 按鈕；雙擊命中既有文字物件＝重編輯
         // （select 工具的入口，spec 原文）。
         if activeTool == .select {

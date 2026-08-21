@@ -36,18 +36,52 @@ extension SelectionView {
         autoSelectAfterDraw(id: a.id)   // 畫完自動選取→立刻可拖節點
     }
 
-    /// 畫完圖形後自動選取它（切到選取工具＋選中＋顯示樣式列/控制點），使用者不必再點「選取」。
-    /// 保留 hotAnnotationID（滾輪調粗細仍可用）。
+    /// 畫完圖形後自動選取它——**工具保持不變**（可連續畫），但把剛畫的設為選取,
+    /// 控制點/節點直接可拖（點控制點＝編輯、點空白＝畫下一個）。保留 hotAnnotationID（滾輪調粗細）。
     func autoSelectAfterDraw(id: UUID) {
-        guard let obj = annotations.objects.first(where: { $0.id == id }) else { return }
-        activeTool = .select
-        toolbar.setActiveTool(.select)
         annotations.selectedID = id
-        toolbar.setStyle(obj.style)
-        toolbar.setStyleRowVisible(true)
+        selectedPolygonNode = nil
         refreshTransformActions()
         if let sel = selection { layoutToolbar(for: sel) }
         needsDisplay = true
+    }
+
+    /// 嘗試抓取「目前選取圖形」的節點/控制點開始編輯（任何工具下都可,畫完直接微調用）。
+    /// 抓到＝設好 selectDrag 並回 true；沒抓到回 false（呼叫端續走畫新圖形）。鎖定則不給抓。
+    func tryGrabSelectedHandle(at p: CGPoint) -> Bool {
+        guard let selID = annotations.selectedID, !isLocked(selID),
+              let selected = annotations.objects.first(where: { $0.id == selID }) else { return false }
+        if let nodeIndex = hitPolygonNode(p, for: selected) {
+            selectedPolygonNode = nodeIndex
+            selectDrag = .draggingNode(id: selID, index: nodeIndex, startShape: selected.shape)
+            hotAnnotationID = selID
+            return true
+        }
+        if editablePolygon(of: selected) == nil, let handle = hitAnnotationHandle(p, for: selected) {
+            selectDrag = .resizing(id: selID, handle: handle, startBounds: selected.bounds, startShape: selected.shape)
+            hotAnnotationID = selID
+            return true
+        }
+        return false
+    }
+
+    /// 畫圖工具下：先讓「編輯/改選既有圖形」優先（統一模型：點控制點＝編輯、點到圖形＝改選）。
+    /// 回 true＝已處理（不要畫新的）；回 false＝點在空白,清掉選取,呼叫端去畫新圖形。
+    func selectOrEditExistingBeforeDraw(at p: CGPoint) -> Bool {
+        if tryGrabSelectedHandle(at: p) { needsDisplay = true; return true }
+        if let hit = annotations.hitTest(at: p), !isLocked(hit.id) {
+            annotations.selectedID = hit.id
+            selectedPolygonNode = nil
+            hotAnnotationID = hit.id
+            toolbar.setStyle(hit.style)
+            selectDrag = .moving(id: hit.id, startMouse: p, startShape: hit.shape)
+            refreshTransformActions()
+            needsDisplay = true
+            return true
+        }
+        // 空白 → 要畫新的：先清掉目前選取（控制點消失）。
+        if annotations.selectedID != nil { annotations.selectedID = nil; selectedPolygonNode = nil; refreshTransformActions() }
+        return false
     }
 
     /// 雙擊選中多邊形的邊 → 在該邊插入新節點（一步 undo）。非多邊形或離邊太遠＝不動作。
@@ -245,23 +279,8 @@ extension SelectionView {
     /// select 工具 mouseDown 路由：命中已選取物件的四角 handle → 進入縮放；
     /// 命中物件本體（含新命中）→ 選取＋進入移動候選；未命中 → 解除選取。
     func handleSelectDown(at p: CGPoint) {
-        // 已選取多邊形：角點節點優先於整體縮放——命中節點就各自拖那一點（鎖定則不給拖）。
-        if let selID = annotations.selectedID, !isLocked(selID),
-           let selected = annotations.objects.first(where: { $0.id == selID }),
-           let nodeIndex = hitPolygonNode(p, for: selected) {
-            selectedPolygonNode = nodeIndex
-            selectDrag = .draggingNode(id: selID, index: nodeIndex, startShape: selected.shape)
-            hotAnnotationID = selID
-            return
-        }
-        if let selID = annotations.selectedID, !isLocked(selID),
-           let selected = annotations.objects.first(where: { $0.id == selID }),
-           editablePolygon(of: selected) == nil,   // 多邊形不走 bbox 縮放（改用節點）
-           let handle = hitAnnotationHandle(p, for: selected) {
-            selectDrag = .resizing(id: selID, handle: handle, startBounds: selected.bounds, startShape: selected.shape)
-            hotAnnotationID = selID   // 重設熱狀態（mouseDown 開頭 clearHotAnnotation 已清，spec）
-            return
-        }
+        // 目前選取圖形的節點/控制點優先（鎖定不給拖）。
+        if tryGrabSelectedHandle(at: p) { return }
         guard let hit = annotations.hitTest(at: p) else {
             deselect()
             return
