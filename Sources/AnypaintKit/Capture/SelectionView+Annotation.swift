@@ -302,6 +302,7 @@ extension SelectionView {
         panel.onStyleChanged = { [weak self] style in self?.applyBackdropPreview(style) }
         panel.onCommit = { [weak self] in self?.commitBackdrop() }
         panel.onCancel = { [weak self] in self?.cancelBackdrop() }
+        panel.onLayoutRequest = { [weak self] in self?.layoutBackdropPanel() }   // 放開 slider 才重定位
         addSubview(panel)
         backdropPanel = panel
         applyBackdropPreview(panel.style)   // 套初始預覽
@@ -340,13 +341,19 @@ extension SelectionView {
         needsDisplay = true
     }
 
-    /// 面板固定在畫面左下角（開啟時擺一次就不動）。
-    /// 錨左下角而不是跟工具列：美化會改選區尺寸→工具列會移位；選區/工具列都在畫面中央，
-    /// 左下角是穩定且不會被撞到的位置，拖 slider 時面板不動才調得動。
+    /// 面板擺在工具列下方、水平對齊工具列（超出畫面就夾回）。
+    /// **只在開啟時與「放開 slider」後呼叫**——拖動中不重定位（見 DragEndSlider），
+    /// 否則邊距一變選區/工具列就移位，面板跟著在游標下抖動根本調不動（實機回報 2026-08-21）。
     private func layoutBackdropPanel() {
         guard let panel = backdropPanel else { return }
         let size = panel.fittingSize
-        panel.frame = CGRect(x: 16, y: 16, width: size.width, height: size.height)
+        let tb = toolbar.frame
+        var x = tb.minX
+        var y = tb.minY - size.height - 8   // 工具列下方
+        if y < 8 { y = tb.maxY + 8 }        // 下方放不下就改到上方
+        x = min(max(8, x), bounds.width - size.width - 8)
+        y = min(max(8, y), bounds.height - size.height - 8)
+        panel.frame = CGRect(x: x, y: y, width: size.width, height: size.height)
     }
 
     /// 命中既有文字物件（由上到下找第一個）；點擊路由與 hover 提示共用（驗收回饋 Fix 2；

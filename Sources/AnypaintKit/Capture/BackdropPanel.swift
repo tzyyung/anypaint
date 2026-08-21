@@ -1,5 +1,15 @@
 import AppKit
 
+/// 會在「放開拖曳」時回呼的 slider——NSSlider.mouseDown 內含 modal 追蹤迴圈，
+/// super 回來時滑鼠已放開。用來做「拖動時面板凍結、放開才重定位」。
+final class DragEndSlider: NSSlider {
+    var onDragEnd: (() -> Void)?
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)   // 追蹤迴圈直到放開才返回
+        onDragEnd?()
+    }
+}
+
 // MARK: - 美化背景面板（#1 Backdrop）
 
 /// 浮動面板：選背景預設、調邊距/圓角、開關陰影，每次變動即時回報 style（供上層即時預覽）。
@@ -11,12 +21,14 @@ final class BackdropPanel: NSView {
     var onCommit: (() -> Void)?
     /// 按「取消」＝還原成美化前。
     var onCancel: (() -> Void)?
+    /// 放開 slider 時要求上層重新定位面板（拖動中不動、放開才移，見 DragEndSlider）。
+    var onLayoutRequest: (() -> Void)?
 
     private(set) var style: BackdropStyle
     private var swatches: [BackdropBackground: NSButton] = [:]
-    private let paddingSlider = NSSlider()
+    private let paddingSlider = DragEndSlider()
     private let paddingValue = NSTextField(labelWithString: "")
-    private let cornerSlider = NSSlider()
+    private let cornerSlider = DragEndSlider()
     private let cornerValue = NSTextField(labelWithString: "")
     private let shadowSwitch = NSButton()
 
@@ -72,10 +84,12 @@ final class BackdropPanel: NSView {
         paddingSlider.maxValue = Double(BackdropStyle.paddingRange.upperBound)
         paddingSlider.target = self
         paddingSlider.action = #selector(paddingChanged)
+        paddingSlider.onDragEnd = { [weak self] in self?.onLayoutRequest?() }
         cornerSlider.minValue = Double(BackdropStyle.cornerRange.lowerBound)
         cornerSlider.maxValue = Double(BackdropStyle.cornerRange.upperBound)
         cornerSlider.target = self
         cornerSlider.action = #selector(cornerChanged)
+        cornerSlider.onDragEnd = { [weak self] in self?.onLayoutRequest?() }
         let paddingRow = sliderRow("邊距", paddingSlider, paddingValue)
         let cornerRow = sliderRow("圓角", cornerSlider, cornerValue)
 
