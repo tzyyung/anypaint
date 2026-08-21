@@ -63,10 +63,11 @@ nonisolated func calloutShapeTests() {
         from: CGPoint(x: 300, y: 200), to: CGPoint(x: 100, y: 100), pixelScale: 2) {
         T.checkEq("twoPoint: roundedRect 正規化", r, CGRect(x: 100, y: 100, width: 200, height: 100))
     } else { T.checkTrue("twoPoint: roundedRect", false) }
-    if case .callout(let cb, let ct)? = AnnotationInput.twoPointShape(tool: .callout,
+    if case .callout(let cb, let ct, let cs)? = AnnotationInput.twoPointShape(tool: .callout,
         from: CGPoint(x: 100, y: 100), to: CGPoint(x: 300, y: 200), pixelScale: 2) {
         T.checkEq("twoPoint: callout body", cb, CGRect(x: 100, y: 100, width: 200, height: 100))
         T.checkEq("twoPoint: callout 預設尾巴", ct, AnnotationGeometry.defaultCalloutApex(for: cb))
+        T.checkEq("twoPoint: callout 初始空字串", cs, "")
     } else { T.checkTrue("twoPoint: callout", false) }
 
     // 10) roundedRect shape 行為：bounds/isCornerResizable/move/scaled/hitTest。
@@ -88,23 +89,30 @@ nonisolated func calloutShapeTests() {
     // 11) callout shape 行為：bounds=body∪tail、move 兩者、scaled 兩者、hitTest（body＋尾端）。
     let coBody = CGRect(x: 100, y: 100, width: 100, height: 60)
     let coTail = CGPoint(x: 120, y: 40)   // body 下方
-    let co = Annotation(shape: .callout(body: coBody, tail: coTail), style: style)
+    let co = Annotation(shape: .callout(body: coBody, tail: coTail, string: "嗨"), style: style)
     T.checkEq("callout: bounds 含尾巴", co.bounds, coBody.union(CGRect(origin: coTail, size: .zero)))
     T.checkTrue("callout: 命中 body", co.hitTest(CGPoint(x: 150, y: 130)))
     T.checkTrue("callout: 命中尾端附近", co.hitTest(CGPoint(x: 120, y: 41)))
     T.checkTrue("callout: 遠處不命中", !co.hitTest(CGPoint(x: 500, y: 500)))
     var coMoved = co; coMoved.move(by: CGVector(dx: 10, dy: -5))
-    if case .callout(let b, let t) = coMoved.shape {
+    if case .callout(let b, let t, let s) = coMoved.shape {
         T.checkEq("callout: move body", b.origin, CGPoint(x: 110, y: 95))
         T.checkEq("callout: move tail", t, CGPoint(x: 130, y: 35))
+        T.checkEq("callout: move 保留文字", s, "嗨")
     } else { T.checkTrue("callout: move 型別", false) }
     var coScaled = co
     coScaled.scaled(from: coBody, to: CGRect(x: 100, y: 100, width: 200, height: 120))   // 2x
-    if case .callout(let b, let t) = coScaled.shape {
+    if case .callout(let b, let t, let s) = coScaled.shape {
         T.checkEq("callout: scaled body", b, CGRect(x: 100, y: 100, width: 200, height: 120))
         // tail 隨同映射：x 120→(120-100)*2+100=140；y 40→(40-100)*2+100=-20
         T.checkEq("callout: scaled tail", t, CGPoint(x: 140, y: -20))
+        T.checkEq("callout: scaled 保留文字", s, "嗨")
     } else { T.checkTrue("callout: scaled 型別", false) }
+    // calloutTextRect：body 內縮一段（避開圓角），太小回 .zero。
+    T.checkTrue("callout: 文字矩形在 body 內",
+                coBody.contains(AnnotationGeometry.calloutTextRect(body: coBody)))
+    T.checkEq("callout: 極小 body 無文字矩形",
+              AnnotationGeometry.calloutTextRect(body: CGRect(x: 0, y: 0, width: 6, height: 6)), .zero)
 
     // 12) 渲染：roundedRect / callout 各自畫出非透明像素（含尾巴段）。
     func litPixels(_ objects: [Annotation], _ w: Int, _ h: Int) -> Int {
@@ -123,10 +131,17 @@ nonisolated func calloutShapeTests() {
     T.checkTrue("roundedRect 渲染: 有非透明像素", litPixels([rrRender], 90, 70) > 0)
     // callout：body 在上、尾巴往下到 y≈10 → 需要夠高的畫布涵蓋尾巴段。
     let coRender = Annotation(shape: .callout(body: CGRect(x: 20, y: 60, width: 60, height: 40),
-                                              tail: CGPoint(x: 40, y: 15)), style: style)
+                                              tail: CGPoint(x: 40, y: 15), string: ""), style: style)
     let coLit = litPixels([coRender], 110, 120)
     let bodyOnlyLit = litPixels([Annotation(shape: .roundedRect(CGRect(x: 20, y: 60, width: 60, height: 40)),
                                             style: style)], 110, 120)
     T.checkTrue("callout 渲染: 有非透明像素", coLit > 0)
     T.checkTrue("callout 渲染: 比純圓角框多（尾巴段有畫）", coLit > bodyOnlyLit)
+    // 內嵌文字：有字比沒字多畫像素（文字有畫進 body）。用大 body 確保文字放得下。
+    let coNoText = Annotation(shape: .callout(body: CGRect(x: 10, y: 30, width: 160, height: 90),
+                                              tail: CGPoint(x: 40, y: 10), string: ""), style: style)
+    let coText = Annotation(shape: .callout(body: CGRect(x: 10, y: 30, width: 160, height: 90),
+                                            tail: CGPoint(x: 40, y: 10), string: "Hello callout"), style: style)
+    T.checkTrue("callout 渲染: 內嵌文字多畫像素",
+                litPixels([coText], 200, 140) > litPixels([coNoText], 200, 140))
 }

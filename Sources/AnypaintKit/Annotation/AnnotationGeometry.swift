@@ -139,4 +139,12 @@ public enum AnnotationGeometry {
         CGPoint(x: body.minX + body.width * 0.25,
                 y: body.minY - max(28, body.height * 0.6))
     }
+
+    /// Callout 內嵌文字的可用矩形：body 內縮一段（避開圓角與描邊）。內縮量隨圓角走、至少 8pt。
+    /// body 太小放不下＝回 .zero（呼叫端據此不畫字/不開編輯器）。
+    public static func calloutTextRect(body: CGRect) -> CGRect {
+        let pad = max(8, cornerRadius(for: body) * 0.6)
+        guard body.width > pad * 2 + 2, body.height > pad * 2 + 2 else { return .zero }
+        return body.insetBy(dx: pad, dy: pad)
+    }
 }

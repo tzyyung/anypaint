@@ -357,6 +357,14 @@ extension SelectionView {
         annotations.hitTextObject(at: p, threshold: 4)
     }
 
+    /// 命中既有 callout 的本體（由上而下找第一個 body 命中的）；供雙擊編輯內嵌文字。
+    func hitCalloutObject(at p: CGPoint) -> Annotation? {
+        for a in annotations.objects.reversed() {
+            if case .callout(let body, _, _) = a.shape, body.contains(p) { return a }
+        }
+        return nil
+    }
+
     /// select 工具 mouseDown 路由：命中已選取物件的四角 handle → 進入縮放；
     /// 命中物件本體（含新命中）→ 選取＋進入移動候選；未命中 → 解除選取。
     func handleSelectDown(at p: CGPoint) {
@@ -389,10 +397,45 @@ extension SelectionView {
         needsDisplay = true   // 重編輯時 draw 要立刻跳過原物件
     }
 
+    /// 開 callout 內嵌文字編輯器：定位在 body 的文字矩形、多行換行。無有效文字矩形＝不開。
+    func openCalloutEditor(for annotation: Annotation) {
+        guard case .callout(let body, _, let string) = annotation.shape else { return }
+        let rect = AnnotationGeometry.calloutTextRect(body: body)
+        guard rect.width > 1, rect.height > 1 else { return }
+        commitTextEditing()   // 一次只開一個
+        let color = NSColor(cgColor: annotation.style.color.cgColor) ?? .white
+        let editor = InlineTextView.makeWrapped(rect: rect, fontSize: annotation.style.textFontSize,
+                                                color: color, initialString: string)
+        editor.onCommit = { [weak self] in self?.commitTextEditing() }
+        addSubview(editor)
+        textEditor = editor
+        editingCalloutID = annotation.id
+        window?.makeFirstResponder(editor)
+        needsDisplay = true
+    }
+
     /// 完成文字編輯：非空→入庫（新建 add／重編輯 update，各一步 undo）；
-    /// 空字串→丟棄（重編輯＝刪除原物件）。結束後 first responder 還給自己。
+    /// 空字串→丟棄（重編輯＝刪除原物件）。callout 內嵌文字＝寫回 string（空字串保留框）。
+    /// 結束後 first responder 還給自己。
     func commitTextEditing() {
         guard let editor = textEditor else { return }
+        // callout 內嵌文字：寫回 string（不刪框；空字串＝清掉字但留框）。
+        if let cid = editingCalloutID {
+            let raw = editor.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let obj = annotations.objects.first(where: { $0.id == cid }),
+               case .callout(_, _, let old) = obj.shape, old != raw {
+                annotations.update(id: cid) { a in
+                    if case .callout(let b, let t, _) = a.shape { a.shape = .callout(body: b, tail: t, string: raw) }
+                }
+            }
+            editor.removeFromSuperview()
+            textEditor = nil
+            editingCalloutID = nil
+            window?.makeFirstResponder(self)
+            syncUndoButtons()
+            needsDisplay = true
+            return
+        }
         let string = editor.string.trimmingCharacters(in: .whitespacesAndNewlines)
         let origin = editor.textOrigin   // 驗收回饋 Fix 1：直接讀 make() 記錄的值，不從 frame 反推
         switch AnnotationInput.textCommitAction(trimmed: string, hasExistingID: editingTextID != nil) {

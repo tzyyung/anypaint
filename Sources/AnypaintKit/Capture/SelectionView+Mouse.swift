@@ -40,6 +40,10 @@ extension SelectionView {
                     handleTextClick(at: p)
                 }
             case .rect, .ellipse, .line, .arrow, .pixelate, .blur, .spotlight, .measure, .roundedRect, .callout:
+                // 對話框工具下雙擊既有對話框＝編輯內嵌文字（不畫新的）。
+                if tool == .callout, event.clickCount == 2, let hit = hitCalloutObject(at: p) {
+                    openCalloutEditor(for: hit); return
+                }
                 // 統一模型：點控制點＝編輯、點到圖形＝改選、點空白才畫新的。
                 if selectOrEditExistingBeforeDraw(at: p) { return }
                 shapeAnchor = p
@@ -165,7 +169,7 @@ extension SelectionView {
                     needsDisplay = true
                 }
             case .draggingCalloutTail(let id, let startShape):
-                guard case .callout(let body, let tail) = startShape else { break }
+                guard case .callout(let body, let tail, let string) = startShape else { break }
                 if selectDragBegan || p != tail {
                     if !selectDragBegan {
                         annotations.beginChange()
@@ -173,7 +177,7 @@ extension SelectionView {
                         syncUndoButtons()
                     }
                     annotations.updateWithoutSnapshot(id: id) { a in
-                        a.shape = .callout(body: body, tail: p)   // body 不動，只移尾端
+                        a.shape = .callout(body: body, tail: p, string: string)   // body 不動，只移尾端
                     }
                     NSCursor.closedHand.set()
                     needsDisplay = true
@@ -236,6 +240,8 @@ extension SelectionView {
             if event.clickCount == 2, let hit = hitTextObject(at: p),
                case .text(let origin, let string) = hit.shape {
                 openTextEditor(origin: origin, initialString: string, existing: hit)
+            } else if event.clickCount == 2, let hit = hitCalloutObject(at: p) {
+                openCalloutEditor(for: hit)   // 雙擊對話框 → 編輯內嵌文字
             } else if event.clickCount == 2 {
                 insertPolygonNodeIfHit(at: p)   // 雙擊選中多邊形的邊 → 插節點
             }
@@ -292,6 +298,8 @@ extension SelectionView {
                     syncUndoButtons()
                     hotAnnotationID = annotation.id   // 剛畫完的圖形進入熱狀態（spec）
                     autoSelectAfterDraw(id: annotation.id)   // 畫完自動選取→立刻可拖角/邊
+                    // 對話框畫完直接開內嵌文字編輯器（可立刻打字；空字串收尾＝只留框）。
+                    if case .callout = annotation.shape { openCalloutEditor(for: annotation) }
                 }
             }
             shapeAnchor = nil

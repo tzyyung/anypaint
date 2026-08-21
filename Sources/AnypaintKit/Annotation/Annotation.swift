@@ -106,8 +106,9 @@ public struct Annotation: Identifiable, Equatable {
         case polygon(points: [CGPoint], closed: Bool)
         /// 圓角矩形：同 rect 但四角圓角（半徑由 AnnotationGeometry.cornerRadius 導出）。
         case roundedRect(CGRect)
-        /// 對話框 callout：圓角本體 body ＋指向 tail 頂點的尾巴（尾巴端點可拖曳指向目標）。
-        case callout(body: CGRect, tail: CGPoint)
+        /// 對話框 callout：圓角本體 body ＋指向 tail 頂點的尾巴（尾巴端點可拖曳指向目標）
+        /// ＋內嵌文字 string（本體內自動換行；空字串＝只有框沒有字）。
+        case callout(body: CGRect, tail: CGPoint, string: String)
     }
 
     public let id: UUID
@@ -185,7 +186,7 @@ public struct Annotation: Identifiable, Equatable {
             return box.insetBy(dx: -half, dy: -half)
         case .roundedRect(let r):
             return r
-        case .callout(let body, let tail):
+        case .callout(let body, let tail, _):
             // 含尾巴頂點：body 與 tail 的聯集（選取/移動的外框要涵蓋尾巴）。
             return body.union(CGRect(origin: tail, size: .zero))
         }
@@ -209,7 +210,7 @@ public struct Annotation: Identifiable, Equatable {
             if closed, poly.pointInside(point) { return true }
             guard let e = poly.nearestEdge(to: point) else { return false }
             return e.distance <= threshold + style.lineWidth / 2
-        case .callout(let body, let tail):
+        case .callout(let body, let tail, _):
             // 命中 body（外擴）或尾巴頂點附近皆算選到。
             if body.insetBy(dx: -threshold, dy: -threshold).contains(point) { return true }
             return hypot(point.x - tail.x, point.y - tail.y) <= threshold + style.lineWidth
@@ -259,9 +260,9 @@ public struct Annotation: Identifiable, Equatable {
         case .roundedRect(var r):
             r.origin.x += delta.dx; r.origin.y += delta.dy
             shape = .roundedRect(r)
-        case .callout(var body, let tail):
+        case .callout(var body, let tail, let string):
             body.origin.x += delta.dx; body.origin.y += delta.dy
-            shape = .callout(body: body, tail: CGPoint(x: tail.x + delta.dx, y: tail.y + delta.dy))
+            shape = .callout(body: body, tail: CGPoint(x: tail.x + delta.dx, y: tail.y + delta.dy), string: string)
         }
     }
 
@@ -290,7 +291,7 @@ public struct Annotation: Identifiable, Equatable {
         case .highlighter(let pts): shape = .highlighter(points: pts.map(mapP))
         case .polygon(let pts, let closed): shape = .polygon(points: pts.map(mapP), closed: closed)
         case .roundedRect(let r): shape = .roundedRect(mapR(r))
-        case .callout(let body, let tail): shape = .callout(body: mapR(body), tail: mapP(tail))
+        case .callout(let body, let tail, let string): shape = .callout(body: mapR(body), tail: mapP(tail), string: string)
         case .text, .counter: break   // isCornerResizable guard 已擋，這裡保持 switch 完整
         }
     }

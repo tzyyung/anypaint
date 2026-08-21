@@ -5,6 +5,8 @@ import AppKit
 /// Esc（cancelOperation）與 Enter（insertNewline）都＝完成編輯。
 final class InlineTextView: NSTextView {
     var onCommit: (() -> Void)?
+    /// Enter 是否＝完成編輯。單行文字＝true（Enter 收尾）；callout 多行＝false（Enter 換行，Esc/點外面收尾）。
+    var commitsOnNewline = true
 
     /// make() 收到的文字框原點（渲染語意＝文字框左下，與 AnnotationRenderer/Annotation.Shape.text
     /// 的 origin 同一個座標）。commit 時直接讀這個值，不從 frame 反推——frame 已因基線對齊公式
@@ -12,7 +14,9 @@ final class InlineTextView: NSTextView {
     private(set) var textOrigin: CGPoint = .zero
 
     override func cancelOperation(_ sender: Any?) { onCommit?() }
-    override func insertNewline(_ sender: Any?) { onCommit?() }
+    override func insertNewline(_ sender: Any?) {
+        if commitsOnNewline { onCommit?() } else { super.insertNewline(sender) }
+    }
 
     /// 建立設定好樣式的編輯器。origin＝文字框左下（view 座標，渲染語意）。
     ///
@@ -44,6 +48,31 @@ final class InlineTextView: NSTextView {
         editor.allowsUndo = true
         editor.textContainerInset = .zero
         editor.textContainer?.lineFragmentPadding = 0
+        return editor
+    }
+
+    /// 多行自動換行編輯器（callout 內嵌文字用）。frame＝文字可用矩形（view 座標）；
+    /// 文字在框寬內自動換行、由上而下排（對齊 renderer 的 CTFramesetter 頂端排版）。
+    /// Enter＝換行（不收尾）；Esc／點框外／切工具才收尾。
+    static func makeWrapped(rect: CGRect, fontSize: CGFloat, color: NSColor,
+                            initialString: String) -> InlineTextView {
+        let editor = InlineTextView(frame: rect)
+        editor.textOrigin = rect.origin
+        editor.commitsOnNewline = false
+        editor.string = initialString
+        editor.font = NSFont.systemFont(ofSize: fontSize)
+        editor.textColor = color
+        editor.backgroundColor = NSColor(white: 0.1, alpha: 0.6)
+        editor.insertionPointColor = .white
+        editor.isRichText = false
+        editor.allowsUndo = true
+        editor.textContainerInset = .zero
+        editor.textContainer?.lineFragmentPadding = 0
+        // 固定寬、依框寬換行；高度不隨內容拉伸（超出就在框內捲動）。
+        editor.isHorizontallyResizable = false
+        editor.isVerticallyResizable = false
+        editor.textContainer?.widthTracksTextView = true
+        editor.textContainer?.size = CGSize(width: rect.width, height: rect.height)
         return editor
     }
 }

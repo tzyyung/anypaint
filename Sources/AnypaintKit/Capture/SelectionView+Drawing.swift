@@ -48,8 +48,18 @@ extension SelectionView {
                 NSGraphicsContext.current?.saveGraphicsState()
                 NSBezierPath(rect: rect).addClip()
                 if let cg = NSGraphicsContext.current?.cgContext {
+                    // 重編輯中的文字物件跳過（避免與編輯器重影）；編輯中的 callout 則保留框、只清掉字
+                    //（框要顯示，文字由編輯器覆蓋）。
+                    let toRender = annotations.objects.compactMap { obj -> Annotation? in
+                        if obj.id == editingTextID { return nil }
+                        if obj.id == editingCalloutID, case .callout(let b, let t, _) = obj.shape {
+                            var stripped = obj; stripped.shape = .callout(body: b, tail: t, string: "")
+                            return stripped
+                        }
+                        return obj
+                    }
                     AnnotationRenderer.render(
-                        annotations.objects.filter { $0.id != editingTextID },
+                        toRender,
                         in: cg, counterNumbers: counterNumbersMap(), sourceProvider: frozenImageProvider())
                     if let shape = provisionalShape {
                         AnnotationRenderer.render(
@@ -526,7 +536,7 @@ extension SelectionView {
 
     /// 若 annotation 是 callout，回傳尾巴頂點；否則 nil（供尾巴節點命中/繪製）。
     func calloutTailPoint(of annotation: Annotation) -> CGPoint? {
-        guard case .callout(_, let tail) = annotation.shape else { return nil }
+        guard case .callout(_, let tail, _) = annotation.shape else { return nil }
         return tail
     }
 

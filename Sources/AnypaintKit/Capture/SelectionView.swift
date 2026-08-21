@@ -136,6 +136,8 @@ final class SelectionView: NSView {
     var textEditor: InlineTextView?
     /// 重編輯中的既有文字物件（渲染時跳過避免重影；commit 時 update/remove）。
     var editingTextID: UUID?
+    /// 編輯中的 callout 內嵌文字物件 id（與 editingTextID 互斥；commit 時寫回 callout 的 string）。
+    var editingCalloutID: UUID?
     /// 文字工具 hover 中的既有文字物件（驗收回饋 Fix 2：畫虛線框＋openHand 游標）。
     var hoveredTextID: UUID?
     /// 文字拖移候選：mouseDown 命中既有文字時記錄；≥3pt 才轉為移動，否則 mouseUp＝重編輯

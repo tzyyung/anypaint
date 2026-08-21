@@ -126,7 +126,7 @@ public enum AnnotationRenderer {
             ctx.addPath(CGPath(roundedRect: r, cornerWidth: radius, cornerHeight: radius, transform: nil))
             ctx.strokePath()
 
-        case .callout(let body, let tail):
+        case .callout(let body, let tail, let string):
             // 本體圓角框（完整），再疊尾巴（base1→apex→base2，開放兩段）。
             let radius = AnnotationGeometry.cornerRadius(for: body)
             ctx.addPath(CGPath(roundedRect: body, cornerWidth: radius, cornerHeight: radius, transform: nil))
@@ -137,6 +137,11 @@ public enum AnnotationRenderer {
                 ctx.addLine(to: tail)
                 ctx.addLine(to: base2)
                 ctx.strokePath()
+            }
+            // 內嵌文字：本體內自動換行（CTFramesetter，頂端對齊）。
+            let textRect = AnnotationGeometry.calloutTextRect(body: body)
+            if !string.isEmpty, textRect.width > 1, textRect.height > 1 {
+                drawWrappedText(string, in: textRect, color: color, fontSize: a.textFontSize, in: ctx)
             }
 
         case .measure(let from, let to, let pixelScale):
@@ -226,6 +231,24 @@ public enum AnnotationRenderer {
         ctx.saveGState()
         ctx.textPosition = anchor
         CTLineDraw(line, ctx)
+        ctx.restoreGState()
+    }
+
+    /// 多行自動換行文字（CTFramesetter）：在 rect 內由上而下排、超出高度自動截斷。
+    /// callout 內嵌文字用；與 drawLine 一樣兩種 context（預覽/合成）的翻轉都由既有 text 標註驗過。
+    private static func drawWrappedText(_ string: String, in rect: CGRect, color: CGColor,
+                                       fontSize: CGFloat, in ctx: CGContext) {
+        let font = CTFontCreateUIFontForLanguage(.system, fontSize, nil)
+            ?? CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
+        let attr = NSAttributedString(string: string, attributes: [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): color
+        ])
+        let framesetter = CTFramesetterCreateWithAttributedString(attr)
+        let path = CGPath(rect: rect, transform: nil)
+        let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: 0), path, nil)
+        ctx.saveGState()
+        CTFrameDraw(frame, ctx)
         ctx.restoreGState()
     }
 
