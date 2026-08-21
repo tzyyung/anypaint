@@ -38,7 +38,7 @@ extension SelectionView {
 
             // 標註（含拖曳中的暫定形狀）疊在亮區上、裁到框內——畫面上看得到的
             // 才會被擷取（所見即所存；框外部分匯出時被裁掉，乾脆不畫）。
-            if !annotations.isEmpty || provisionalShape != nil {
+            if !annotations.isEmpty || provisionalShape != nil || !polygonDraft.isEmpty {
                 NSGraphicsContext.current?.saveGraphicsState()
                 NSBezierPath(rect: rect).addClip()
                 if let cg = NSGraphicsContext.current?.cgContext {
@@ -50,6 +50,7 @@ extension SelectionView {
                             [Annotation(shape: shape, style: currentStyle)], in: cg, sourceProvider: frozenImageProvider())
                     }
                 }
+                if !polygonDraft.isEmpty { drawPolygonDraft() }
                 NSGraphicsContext.current?.restoreGraphicsState()
             }
 
@@ -75,7 +76,20 @@ extension SelectionView {
                 chromePath.lineWidth = 1
                 NSColor.white.setStroke()
                 chromePath.stroke()
-                if selected.isCornerResizable, selectDrag == nil {
+                if let poly = editablePolygon(of: selected) {
+                    // 多邊形：畫每個角點節點 handle（角點各自拖），選中的節點以橘色標示。
+                    if selectDrag == nil || selectDragBegan == false {
+                        for (i, hp) in poly.points.enumerated() {
+                            let h = handleRect(at: hp)
+                            (i == selectedPolygonNode ? NSColor.systemOrange : NSColor.controlAccentColor).setFill()
+                            NSColor.white.setStroke()
+                            let path = NSBezierPath(rect: h)
+                            path.fill()
+                            path.lineWidth = 1
+                            path.stroke()
+                        }
+                    }
+                } else if selected.isCornerResizable, selectDrag == nil {
                     NSColor.controlAccentColor.setFill()
                     NSColor.white.setStroke()
                     for (_, hp) in annotationHandlePoints(chrome) {
@@ -330,6 +344,36 @@ extension SelectionView {
         }
     }
 
+    /// 多邊形成形中的預覽：已點的點連成折線（當前色），首點畫較大圈提示「點回這裡收尾」，
+    /// 其餘點畫小方塊。呼叫端已 clip 進選取框。
+    private func drawPolygonDraft() {
+        guard let first = polygonDraft.first else { return }
+        let color = NSColor(cgColor: currentStyle.color.cgColor) ?? .systemRed
+        if polygonDraft.count >= 2 {
+            let line = NSBezierPath()
+            line.move(to: first)
+            for p in polygonDraft.dropFirst() { line.line(to: p) }
+            line.lineWidth = currentStyle.lineWidth
+            line.lineJoinStyle = .round
+            line.lineCapStyle = .round
+            color.setStroke()
+            line.stroke()
+        }
+        // 節點方塊
+        for p in polygonDraft {
+            let h = handleRect(at: p)
+            color.setFill(); NSColor.white.setStroke()
+            let path = NSBezierPath(rect: h); path.fill(); path.lineWidth = 1; path.stroke()
+        }
+        // 首點高亮圈（可收尾時＝已 ≥3 點）
+        if PolygonBuilder.canFinish(points: polygonDraft) {
+            let r: CGFloat = 7
+            let ring = NSBezierPath(ovalIn: CGRect(x: first.x - r, y: first.y - r, width: r * 2, height: r * 2))
+            ring.lineWidth = 2
+            NSColor.white.setStroke(); ring.stroke()
+        }
+    }
+
     /// 在選取框上方畫「寬 × 高（像素）」小標籤；上方空間不足就畫在框內頂端。
     private func drawSizeBadge(for rect: CGRect) {
         let w = Int((rect.width * snapshot.scale).rounded())
@@ -401,6 +445,24 @@ extension SelectionView {
     /// 由拖出的四角 handle 算新 bounds；允許拖過頭翻轉，用 min/max 正規化（比照既有 resize 慣例）。
     func resizeAnnotationBounds(_ start: CGRect, handle: AnnotationHandle, to p: CGPoint) -> CGRect {
         SelectionGeometry.resizedBounds(start, corner: handle, to: p)
+    }
+
+    // MARK: 多邊形節點（角點各自拖、邊上插點）
+
+    /// 若 annotation 是多邊形，回傳其可編輯核心（供節點 handle 命中/繪製）；否則 nil。
+    func editablePolygon(of annotation: Annotation) -> EditablePolygon? {
+        guard case .polygon(let pts, let closed) = annotation.shape else { return nil }
+        return EditablePolygon(points: pts, closed: closed)
+    }
+
+    /// 命中多邊形的某個角點節點（回索引）；非多邊形或沒命中 → nil。
+    func hitPolygonNode(_ point: CGPoint, for annotation: Annotation) -> Int? {
+        guard let poly = editablePolygon(of: annotation) else { return nil }
+        // handle 命中框比繪製略大，好點（比照 handleSize）。
+        for (i, r) in poly.handleRects(size: handleSize + 4).enumerated() where r.contains(point) {
+            return i
+        }
+        return nil
     }
 
 }

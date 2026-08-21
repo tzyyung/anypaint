@@ -83,7 +83,8 @@ final class SelectionToolbar: NSView {
             (.pixelate, "squareshape.split.3x3", "馬賽克：遮住敏感內容"),
             (.text, "textformat", "文字：點一下開始輸入"),
             (.counter, "1.circle", "序號：依序編號的圓圈"),
-            (.measure, "ruler", "測量：拖出範圍量像素——斜拉另給對角線長度，細長條只給單邊")
+            (.measure, "ruler", "測量：拖出範圍量像素——斜拉另給對角線長度，細長條只給單邊"),
+            (.polygon, "pentagon", "多邊形：逐點點擊圈出斜的區塊，點回起點或雙擊收尾")
         ]
         for (tool, symbol, help) in symbols {
             let b = NSButton()

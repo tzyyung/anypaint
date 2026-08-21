@@ -47,6 +47,8 @@ final class SelectionView: NSView {
     var shapeAnchor: CGPoint?
     /// 畫筆/螢光筆的累積點（拖曳中）；mouseUp 成形。
     var strokePoints: [CGPoint] = []
+    /// 多邊形成形中的暫存點（空＝未在成形）；逐點點擊、點回起點或雙擊收尾。
+    var polygonDraft: [CGPoint] = []
     var currentStyle = AnnotationStyleStore.style(for: .rect)
     /// 滾輪調粗細的累積量（觸控板會送大量小 delta，湊滿閾值才跳一檔）。
     var lineWidthScrollAccum: CGFloat = 0
@@ -71,10 +73,14 @@ final class SelectionView: NSView {
     enum SelectDrag {
         case moving(id: UUID, startMouse: CGPoint, startShape: Annotation.Shape)
         case resizing(id: UUID, handle: AnnotationHandle, startBounds: CGRect, startShape: Annotation.Shape)
+        /// 多邊形單一節點拖曳（角點各自拖，非整體縮放）。
+        case draggingNode(id: UUID, index: Int, startShape: Annotation.Shape)
     }
     var selectDrag: SelectDrag?
     /// 首次實際位移才 beginChange()（比照 textDragBegan：整段移動/縮放合併一步 undo）。
     var selectDragBegan = false
+    /// 目前選中的多邊形節點索引（供 Delete 刪該節點；deselect 時清）。
+    var selectedPolygonNode: Int?
 
     /// 有選取物件（Task 4 keyMonitor 的 Esc 分層依賴）。
     var hasSelection: Bool { annotations.selectedID != nil }
@@ -85,6 +91,7 @@ final class SelectionView: NSView {
         clearHotAnnotation()
         selectDrag = nil
         selectDragBegan = false
+        selectedPolygonNode = nil
         if activeTool == .select {
             // select 工具下無選取＝隱藏樣式列（spec：選了繪製工具或選取了物件才出現）；
             // 高度變化要重新定位工具列（比照 onToolSelected 既有做法）。
@@ -177,6 +184,7 @@ final class SelectionView: NSView {
         toolbar.onToolSelected = { [weak self] tool in
             guard let self else { return }
             self.commitTextEditing()   // 編輯中切工具＝先落字，避免編輯器與工具狀態不同步
+            if !self.polygonDraft.isEmpty { self.polygonDraft = [] }   // 切工具＝放棄未收尾的多邊形
             self.activeTool = tool
             if tool != .select { self.deselect() }   // 切離 select（含取消作用）＝清選取，
                                                      // 否則殘留的隱形選取會劣化 Esc 並讓 Delete 靜默刪物件

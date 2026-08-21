@@ -46,6 +46,17 @@ extension SelectionView {
                 provisionalShape = (tool == .freehand) ? .freehand(points: strokePoints)
                                                        : .highlighter(points: strokePoints)
                 needsDisplay = true
+            case .polygon:
+                // 逐點成形：雙擊收尾（≥3 點）；否則依 PolygonBuilder 決策加點/收尾/忽略。
+                if event.clickCount == 2, PolygonBuilder.canFinish(points: polygonDraft) {
+                    finishPolygonDraft()
+                } else {
+                    switch PolygonBuilder.clickAction(points: polygonDraft, newPoint: p, closeThreshold: 8) {
+                    case .addPoint(let np): polygonDraft.append(np); needsDisplay = true
+                    case .close: finishPolygonDraft()
+                    case .ignore: break
+                    }
+                }
             }
             return
         }
@@ -131,6 +142,20 @@ extension SelectionView {
                     }
                     needsDisplay = true
                 }
+            case .draggingNode(let id, let index, let startShape):
+                guard case .polygon(let pts, let closed) = startShape else { break }
+                if selectDragBegan || p != pts[index] {
+                    if !selectDragBegan {
+                        annotations.beginChange()
+                        selectDragBegan = true
+                        syncUndoButtons()
+                    }
+                    let moved = EditablePolygon(points: pts, closed: closed).movingNode(index, to: p)
+                    annotations.updateWithoutSnapshot(id: id) { a in
+                        a.shape = .polygon(points: moved.points, closed: moved.closed)
+                    }
+                    needsDisplay = true
+                }
             }
             return
         }
@@ -174,6 +199,8 @@ extension SelectionView {
             if event.clickCount == 2, let hit = hitTextObject(at: p),
                case .text(let origin, let string) = hit.shape {
                 openTextEditor(origin: origin, initialString: string, existing: hit)
+            } else if event.clickCount == 2 {
+                insertPolygonNodeIfHit(at: p)   // 雙擊選中多邊形的邊 → 插節點
             }
             needsDisplay = true
             return
@@ -382,14 +409,18 @@ extension SelectionView {
             if let id = annotations.selectedID { annotations.bringToFront(id: id); syncUndoButtons(); needsDisplay = true }
         case .sendToBack:
             if let id = annotations.selectedID { annotations.sendToBack(id: id); syncUndoButtons(); needsDisplay = true }
-        case .escape:        // 分層：編輯中完成編輯 → 有選取解除選取 → 否則取消（spec）
-            if isEditingText { commitTextEditing() }
+        case .escape:        // 分層：多邊形成形中取消 draft → 編輯中完成編輯 → 有選取解除選取 → 否則取消（spec）
+            if !polygonDraft.isEmpty { polygonDraft = []; needsDisplay = true }
+            else if isEditingText { commitTextEditing() }
             else if hasSelection { deselect() }
             else { onCancel?() }
         case .copy: confirm()
         case .paste: pinConfirm()   // Shift+Enter → 貼（spec 截圖完直接貼）
         case .delete:
-            if let id = annotations.selectedID {
+            // 多邊形選中節點優先：刪節點（保底 ≥3）；沒有選中節點才刪整個物件。
+            if deleteSelectedPolygonNodeIfAny() {
+                if let hp = hoverPoint { cursor(at: hp).set() }
+            } else if let id = annotations.selectedID {
                 annotations.remove(id: id); deselect(); syncUndoButtons(); needsDisplay = true
                 // 刪除可能解鎖框（annotations 變空）→ 依上次游標位置重算,讓控制點/游標立即復原。
                 if let hp = hoverPoint { cursor(at: hp).set() }

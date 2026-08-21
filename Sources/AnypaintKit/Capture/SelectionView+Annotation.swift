@@ -24,6 +24,51 @@ extension SelectionView {
         needsDisplay = true
     }
 
+    /// 多邊形成形收尾：≥3 點且框內才入庫；清空 draft。
+    func finishPolygonDraft() {
+        defer { polygonDraft = []; needsDisplay = true }
+        guard PolygonBuilder.canFinish(points: polygonDraft) else { return }
+        let a = Annotation(shape: .polygon(points: polygonDraft, closed: true), style: currentStyle)
+        guard AnnotationInput.shapeInSelection(bounds: a.bounds, selection: selection) else { return }
+        annotations.add(a)
+        syncUndoButtons()
+        hotAnnotationID = a.id
+    }
+
+    /// 雙擊選中多邊形的邊 → 在該邊插入新節點（一步 undo）。非多邊形或離邊太遠＝不動作。
+    func insertPolygonNodeIfHit(at p: CGPoint) {
+        guard let selID = annotations.selectedID,
+              let selected = annotations.objects.first(where: { $0.id == selID }),
+              let poly = editablePolygon(of: selected),
+              let edge = poly.nearestEdge(to: p),
+              edge.distance <= handleSize + 4 else { return }
+        let inserted = poly.insertingNode(at: edge.index, point: p)
+        annotations.update(id: selID) { a in
+            a.shape = .polygon(points: inserted.points, closed: inserted.closed)
+        }
+        selectedPolygonNode = edge.index + 1   // 新節點選中，可立即拖或 Delete
+        syncUndoButtons()
+        needsDisplay = true
+    }
+
+    /// 刪除多邊形目前選中的節點（保底 ≥3 點，一步 undo）。回傳是否有刪（供 Delete 路由決定是否改刪整個物件）。
+    @discardableResult
+    func deleteSelectedPolygonNodeIfAny() -> Bool {
+        guard let idx = selectedPolygonNode,
+              let selID = annotations.selectedID,
+              let selected = annotations.objects.first(where: { $0.id == selID }),
+              let poly = editablePolygon(of: selected) else { return false }
+        let removed = poly.removingNode(idx)
+        guard removed.points.count != poly.points.count else { return false }   // 3 點時擋下＝不算刪
+        annotations.update(id: selID) { a in
+            a.shape = .polygon(points: removed.points, closed: removed.closed)
+        }
+        selectedPolygonNode = nil
+        syncUndoButtons()
+        needsDisplay = true
+        return true
+    }
+
     /// 命中既有文字物件（由上到下找第一個）；點擊路由與 hover 提示共用（驗收回饋 Fix 2；
     /// threshold 統一 4，與 hover 虛線框 inset 一致——清理項）。
     func hitTextObject(at p: CGPoint) -> Annotation? {
@@ -33,8 +78,18 @@ extension SelectionView {
     /// select 工具 mouseDown 路由：命中已選取物件的四角 handle → 進入縮放；
     /// 命中物件本體（含新命中）→ 選取＋進入移動候選；未命中 → 解除選取。
     func handleSelectDown(at p: CGPoint) {
+        // 已選取多邊形：角點節點優先於整體縮放——命中節點就各自拖那一點。
         if let selID = annotations.selectedID,
            let selected = annotations.objects.first(where: { $0.id == selID }),
+           let nodeIndex = hitPolygonNode(p, for: selected) {
+            selectedPolygonNode = nodeIndex
+            selectDrag = .draggingNode(id: selID, index: nodeIndex, startShape: selected.shape)
+            hotAnnotationID = selID
+            return
+        }
+        if let selID = annotations.selectedID,
+           let selected = annotations.objects.first(where: { $0.id == selID }),
+           editablePolygon(of: selected) == nil,   // 多邊形不走 bbox 縮放（改用節點）
            let handle = hitAnnotationHandle(p, for: selected) {
             selectDrag = .resizing(id: selID, handle: handle, startBounds: selected.bounds, startShape: selected.shape)
             hotAnnotationID = selID   // 重設熱狀態（mouseDown 開頭 clearHotAnnotation 已清，spec）
@@ -45,6 +100,7 @@ extension SelectionView {
             return
         }
         annotations.selectedID = hit.id
+        selectedPolygonNode = nil   // 點到物件本體（非節點）＝清掉節點選取
         hotAnnotationID = hit.id   // 重設熱狀態（同上）
         toolbar.setStyle(hit.style)
         toolbar.setStyleRowVisible(true)   // 選取了物件＝樣式列出現（spec）
