@@ -558,6 +558,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         case "openSettings":
             openSettings()
             return ["ok": true]
+        case "beginFraming":
+            // 測試專用：等同按截圖快鍵進入框選 overlay（供 UI 稽核 CGEvent 驅動標註流程；
+            // 快鍵在無頭/合成事件下不一定觸發，用 RPC 直接進，比照 automation-channel 原則）。
+            beginCapture()
+            NSApp.activate(ignoringOtherApps: true)
+            return ["ok": true]
         case "micDevices":
             let devices = AudioInputDeviceList.all().map {
                 ["uniqueID": $0.uniqueID, "name": $0.name, "isDefault": $0.isDefault] as [String: Any]
