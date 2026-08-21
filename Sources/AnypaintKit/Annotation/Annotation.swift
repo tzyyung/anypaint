@@ -97,6 +97,9 @@ public struct Annotation: Identifiable, Equatable {
         /// 這個框在哪個螢幕畫的就該用那個螢幕的值（混合 DPI 多螢幕），縮放時它不變。
         /// 這也讓 renderer 不必為了測量多一個參數。
         case measure(from: CGPoint, to: CGPoint, pixelScale: CGFloat)
+        /// 多邊形/斜框：任意角度的封閉或開放折線，角點可各自拖、邊上可插節點。
+        /// closed=true → 封閉區塊（斜框），false → 折線。
+        case polygon(points: [CGPoint], closed: Bool)
     }
 
     public let id: UUID
@@ -130,7 +133,7 @@ public struct Annotation: Identifiable, Equatable {
         switch shape {
         case .text, .counter:
             return false
-        case .rect, .ellipse, .pixelate, .line, .arrow, .freehand, .highlighter, .measure:
+        case .rect, .ellipse, .pixelate, .line, .arrow, .freehand, .highlighter, .measure, .polygon:
             return true
         }
     }
@@ -165,6 +168,10 @@ public struct Annotation: Identifiable, Equatable {
             // 端點正規化矩形（比照 line/arrow）——寬或高可為 0（量單軸間距時）。
             return CGRect(x: min(a.x, b.x), y: min(a.y, b.y),
                           width: abs(b.x - a.x), height: abs(b.y - a.y))
+        case .polygon(let pts, let closed):
+            let box = EditablePolygon(points: pts, closed: closed).boundingBox
+            let half = style.lineWidth / 2
+            return box.insetBy(dx: -half, dy: -half)
         }
     }
 
@@ -181,6 +188,11 @@ public struct Annotation: Identifiable, Equatable {
             let fat = path.copy(strokingWithWidth: effectiveStrokeWidth + threshold * 2,
                                 lineCap: .round, lineJoin: .round, miterLimit: 10)
             return fat.contains(point)
+        case .polygon(let pts, let closed):
+            let poly = EditablePolygon(points: pts, closed: closed)
+            if closed, poly.pointInside(point) { return true }
+            guard let e = poly.nearestEdge(to: point) else { return false }
+            return e.distance <= threshold + style.lineWidth / 2
         }
     }
 
@@ -215,6 +227,9 @@ public struct Annotation: Identifiable, Equatable {
             shape = .measure(from: CGPoint(x: a.x + delta.dx, y: a.y + delta.dy),
                              to: CGPoint(x: b.x + delta.dx, y: b.y + delta.dy),
                              pixelScale: sc)   // 平移不改 scale
+        case .polygon(let pts, let closed):
+            shape = .polygon(points: pts.map { CGPoint(x: $0.x + delta.dx, y: $0.y + delta.dy) },
+                             closed: closed)
         }
     }
 
@@ -239,6 +254,7 @@ public struct Annotation: Identifiable, Equatable {
         case .arrow(let a, let b): shape = .arrow(from: mapP(a), to: mapP(b))
         case .freehand(let pts):    shape = .freehand(points: pts.map(mapP))
         case .highlighter(let pts): shape = .highlighter(points: pts.map(mapP))
+        case .polygon(let pts, let closed): shape = .polygon(points: pts.map(mapP), closed: closed)
         case .text, .counter: break   // isCornerResizable guard 已擋，這裡保持 switch 完整
         }
     }

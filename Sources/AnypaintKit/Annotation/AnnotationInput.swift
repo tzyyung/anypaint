@@ -17,7 +17,8 @@ public enum AnnotationInput {
         // measure 不正規化成 rect：起點→終點就是使用者要量的那條線,對角線方向靠它決定。
         // pixelScale＝擷取端的 pointPixelScale（讀數要像素,混合 DPI 各自正確）。
         case .measure:  return .measure(from: a, to: b, pixelScale: pixelScale)
-        case .text, .counter, .freehand, .highlighter, .select: return nil
+        // polygon 逐點成形（走 PolygonBuilder），非兩點；同 text/counter 回 nil。
+        case .text, .counter, .freehand, .highlighter, .select, .polygon: return nil
         }
     }
 

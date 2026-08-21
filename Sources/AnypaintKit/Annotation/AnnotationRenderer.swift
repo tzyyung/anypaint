@@ -88,6 +88,13 @@ public enum AnnotationRenderer {
         case .pixelate(let rect):
             drawPixelate(rect: rect, blockSize: a.pixelateBlockSize, in: ctx, sourceProvider: sourceProvider)
 
+        case .polygon(let pts, let closed):
+            guard let first = pts.first else { break }
+            ctx.move(to: first)
+            for p in pts.dropFirst() { ctx.addLine(to: p) }
+            if closed { ctx.closePath() }
+            ctx.strokePath()
+
         case .measure(let from, let to, let pixelScale):
             let box = CGRect(x: min(from.x, to.x), y: min(from.y, to.y),
                              width: abs(to.x - from.x), height: abs(to.y - from.y))
