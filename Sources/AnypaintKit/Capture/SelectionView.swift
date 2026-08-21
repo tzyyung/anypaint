@@ -15,8 +15,12 @@ final class SelectionView: NSView {
         let backgroundImage: NSImage
         let objects: [Annotation]
         let selection: CGRect?
+        let hasAlpha: Bool
     }
     var surfaceUndoStack: [SurfaceState] = []
+    /// 目前底圖是否含透明（裁切去背後為 true）→ draw 在選區內先鋪棋盤格,讓透明處看得出來,
+    /// 且複製/存檔會保留透明（螢幕原始快照不透明,恆 false）。
+    var surfaceHasAlpha = false
 
     var selection: CGRect?
     let handleSize: CGFloat = 8

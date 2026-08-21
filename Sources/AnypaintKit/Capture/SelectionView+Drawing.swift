@@ -27,7 +27,13 @@ extension SelectionView {
         }
 
         if let rect = selection, rect.width > 0, rect.height > 0 {
-            backgroundImage.draw(in: rect, from: rect, operation: .copy, fraction: 1.0)
+            if surfaceHasAlpha {
+                // 去背底圖：先鋪棋盤格,再把（含透明的）底圖 sourceOver 疊上 → 透明處看得見格子。
+                drawTransparencyCheckerboard(in: rect)
+                backgroundImage.draw(in: rect, from: rect, operation: .sourceOver, fraction: 1.0)
+            } else {
+                backgroundImage.draw(in: rect, from: rect, operation: .copy, fraction: 1.0)
+            }
             NSColor.controlAccentColor.setStroke()
             let path = NSBezierPath(rect: rect)
             path.lineWidth = 1.5
@@ -371,6 +377,24 @@ extension SelectionView {
             let ring = NSBezierPath(ovalIn: CGRect(x: first.x - r, y: first.y - r, width: r * 2, height: r * 2))
             ring.lineWidth = 2
             NSColor.white.setStroke(); ring.stroke()
+        }
+    }
+
+    /// 透明棋盤格（去背底圖的透明處背景，只用於畫面顯示，不進輸出）。
+    private func drawTransparencyCheckerboard(in rect: CGRect) {
+        NSColor(white: 0.28, alpha: 1).setFill()
+        rect.fill()
+        NSColor(white: 0.42, alpha: 1).setFill()
+        let s: CGFloat = 8
+        var y = rect.minY
+        var row = 0
+        while y < rect.maxY {
+            var x = rect.minX + (row % 2 == 0 ? 0 : s)
+            while x < rect.maxX {
+                NSRect(x: x, y: y, width: min(s, rect.maxX - x), height: min(s, rect.maxY - y)).fill()
+                x += 2 * s
+            }
+            y += s; row += 1
         }
     }
 

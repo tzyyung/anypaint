@@ -107,8 +107,9 @@ extension SelectionView {
         replaceSurface(with: corrected)
     }
 
-    /// 就地換底圖：把 corrected（snapshot.scale 像素）嵌進整螢幕暗底畫布中央,
-    /// selection＝該影像區,清標註,存一層 surface undo。
+    /// 就地換底圖：把 corrected（snapshot.scale 像素）嵌進整螢幕**透明**畫布中央,
+    /// selection＝該影像區,清標註,存一層 surface undo。畫布用 clear 填 → 保留 corrected 的透明
+    /// （裁切去背要靠這個；螢幕擷取那份不透明,嵌進去仍不透明）。
     func replaceSurface(with corrected: CGImage) {
         let scale = snapshot.scale
         let fullW = snapshot.cgImage.width, fullH = snapshot.cgImage.height
@@ -116,8 +117,7 @@ extension SelectionView {
             data: nil, width: fullW, height: fullH, bitsPerComponent: 8, bytesPerRow: 0,
             space: snapshot.cgImage.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
-        ctx.setFillColor(CGColor(gray: 0.12, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: fullW, height: fullH))
+        ctx.clear(CGRect(x: 0, y: 0, width: fullW, height: fullH))   // 透明底,不是暗底
         let cw = min(corrected.width, fullW), ch = min(corrected.height, fullH)
         let ox = (fullW - cw) / 2, oy = (fullH - ch) / 2   // ctx 左下原點
         ctx.interpolationQuality = .high
@@ -125,7 +125,9 @@ extension SelectionView {
         guard let newFull = ctx.makeImage() else { return }
 
         surfaceUndoStack.append(SurfaceState(snapshot: snapshot, backgroundImage: backgroundImage,
-                                             objects: annotations.snapshotObjects(), selection: selection))
+                                             objects: annotations.snapshotObjects(), selection: selection,
+                                             hasAlpha: surfaceHasAlpha))
+        surfaceHasAlpha = true
         snapshot = DisplaySnapshot(displayID: snapshot.displayID, cgImage: newFull, screen: snapshot.screen,
                                    frameGlobal: snapshot.frameGlobal, scale: scale, windows: [])
         backgroundImage = NSImage(cgImage: newFull, size: snapshot.pointSize)
@@ -152,6 +154,7 @@ extension SelectionView {
         backgroundImage = s.backgroundImage
         annotations.restore(objects: s.objects)
         selection = s.selection
+        surfaceHasAlpha = s.hasAlpha
         selectedPolygonNode = nil
         if let sel = selection { layoutToolbar(for: sel) }
         syncUndoButtons()
