@@ -144,10 +144,9 @@ extension SelectionView {
         ann.bounds.union(annotationLockIconRect(for: ann)).insetBy(dx: -6, dy: -6)
     }
 
-    /// select 工具下滑鼠位置對應的 hover 標註：優先命中圖形本體；否則若仍在「目前 hover 或選中」
-    /// 那顆的 hover 範圍內（含鎖鈕）就維持,讓鎖鈕構得到。
+    /// 滑鼠位置對應的 hover 標註：優先命中圖形本體；否則若仍在「目前 hover 或選中」那顆的
+    /// hover 範圍內（含鎖鈕）就維持,讓鎖鈕構得到。**不限工具**——即選即編下畫圖工具也要能鎖。
     func annotationHover(at p: CGPoint) -> UUID? {
-        guard activeTool == .select else { return nil }
         if let hit = annotations.hitTest(at: p) { return hit.id }
         for id in [hoveredAnnotationID, annotations.selectedID].compactMap({ $0 }) {
             if let ann = annotations.objects.first(where: { $0.id == id }),
@@ -156,9 +155,8 @@ extension SelectionView {
         return nil
     }
 
-    /// 命中鎖/解鎖鈕 → 回該標註 id。
+    /// 命中鎖/解鎖鈕 → 回該標註 id（不限工具）。
     func hitLockIcon(at p: CGPoint) -> UUID? {
-        guard activeTool == .select else { return nil }
         for id in lockIconTargets() {
             guard let ann = annotations.objects.first(where: { $0.id == id }) else { continue }
             if annotationLockIconRect(for: ann).contains(p) { return id }

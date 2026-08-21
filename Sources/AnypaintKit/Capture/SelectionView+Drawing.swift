@@ -383,9 +383,8 @@ extension SelectionView {
         }
     }
 
-    /// 畫鎖/解鎖鈕（懸停或選中的標註右上角）：鎖定橘底 🔒、解鎖深底 🔓。
+    /// 畫鎖/解鎖鈕（懸停或選中的標註右上角）：鎖定橘底 🔒、解鎖深底 🔓。不限工具。
     private func drawLockIcons() {
-        guard activeTool == .select else { return }
         for id in lockIconTargets() {
             guard let ann = annotations.objects.first(where: { $0.id == id }) else { continue }
             let r = annotationLockIconRect(for: ann)

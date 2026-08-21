@@ -24,13 +24,11 @@ extension SelectionView {
         }
         // 標註工具作用中 → 依工具型態路由
         if let tool = activeTool, selection != nil {
+            // 鎖/解鎖鈕優先於一切（任何工具下都可點，即選即編下畫圖工具也能鎖/解鎖）。
+            if let lockID = hitLockIcon(at: p) { toggleLock(lockID); return }
             switch tool {
             case .select:
-                if let lockID = hitLockIcon(at: p) {
-                    toggleLock(lockID)   // 點鎖/解鎖鈕：切換鎖定,不進選取/移動
-                } else {
-                    handleSelectDown(at: p)
-                }
+                handleSelectDown(at: p)
             case .counter:
                 addCounter(at: p)
             case .text:
