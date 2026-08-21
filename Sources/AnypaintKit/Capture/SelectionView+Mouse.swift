@@ -26,7 +26,11 @@ extension SelectionView {
         if let tool = activeTool, selection != nil {
             switch tool {
             case .select:
-                handleSelectDown(at: p)
+                if let lockID = hitLockIcon(at: p) {
+                    toggleLock(lockID)   // 點鎖/解鎖鈕：切換鎖定,不進選取/移動
+                } else {
+                    handleSelectDown(at: p)
+                }
             case .counter:
                 addCounter(at: p)
             case .text:
@@ -237,6 +241,7 @@ extension SelectionView {
                 annotations.add(annotation)
                 syncUndoButtons()
                 hotAnnotationID = annotation.id
+                autoSelectAfterDraw(id: annotation.id)   // 畫完自動選取
             }
             return
         }
@@ -253,6 +258,7 @@ extension SelectionView {
                     annotations.add(annotation)
                     syncUndoButtons()
                     hotAnnotationID = annotation.id   // 剛畫完的圖形進入熱狀態（spec）
+                    autoSelectAfterDraw(id: annotation.id)   // 畫完自動選取→立刻可拖角/邊
                 }
             }
             shapeAnchor = nil

@@ -87,6 +87,12 @@ extension SelectionView {
             hoveredTextID = newHover
             needsDisplay = true
         }
+        // select 工具：懸停標註 → 記錄以顯示鎖/解鎖鈕（含鎖定的,才能解鎖）。變化才重繪。
+        let newAnnHover = (activeTool == .select) ? annotations.hitTest(at: p)?.id : nil
+        if newAnnHover != hoveredAnnotationID {
+            hoveredAnnotationID = newAnnHover
+            needsDisplay = true
+        }
         updateWindowCandidate(at: p)
         let prev = hoverPoint
         hoverPoint = p
@@ -95,6 +101,10 @@ extension SelectionView {
     override func mouseExited(with event: NSEvent) {
         if hoveredTextID != nil {
             hoveredTextID = nil
+            needsDisplay = true
+        }
+        if hoveredAnnotationID != nil {
+            hoveredAnnotationID = nil
             needsDisplay = true
         }
         if windowCandidate != nil {

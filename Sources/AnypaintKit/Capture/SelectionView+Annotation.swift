@@ -33,6 +33,21 @@ extension SelectionView {
         annotations.add(a)
         syncUndoButtons()
         hotAnnotationID = a.id
+        autoSelectAfterDraw(id: a.id)   // 畫完自動選取→立刻可拖節點
+    }
+
+    /// 畫完圖形後自動選取它（切到選取工具＋選中＋顯示樣式列/控制點），使用者不必再點「選取」。
+    /// 保留 hotAnnotationID（滾輪調粗細仍可用）。
+    func autoSelectAfterDraw(id: UUID) {
+        guard let obj = annotations.objects.first(where: { $0.id == id }) else { return }
+        activeTool = .select
+        toolbar.setActiveTool(.select)
+        annotations.selectedID = id
+        toolbar.setStyle(obj.style)
+        toolbar.setStyleRowVisible(true)
+        refreshTransformActions()
+        if let sel = selection { layoutToolbar(for: sel) }
+        needsDisplay = true
     }
 
     /// 雙擊選中多邊形的邊 → 在該邊插入新節點（一步 undo）。非多邊形或離邊太遠＝不動作。
@@ -67,6 +82,47 @@ extension SelectionView {
         syncUndoButtons()
         needsDisplay = true
         return true
+    }
+
+    // MARK: 鎖定（滑鼠移到圖形上出現鎖/解鎖鈕；鎖上不可動,預設解鎖）
+
+    /// 目前該顯示鎖/解鎖鈕的標註（懸停的＋選中的，去重）。
+    func lockIconTargets() -> [UUID] {
+        var ids: [UUID] = []
+        if let h = hoveredAnnotationID { ids.append(h) }
+        if let s = annotations.selectedID, s != hoveredAnnotationID { ids.append(s) }
+        return ids
+    }
+
+    /// 鎖/解鎖鈕的位置（標註外框右上角外側；夾進畫面）。繪製與命中共用。
+    func annotationLockIconRect(for annotation: Annotation) -> CGRect {
+        let b = annotation.bounds
+        let size: CGFloat = 24
+        var r = CGRect(x: b.maxX - size / 2, y: b.maxY + 4, width: size, height: size)
+        r.origin.x = min(max(2, r.origin.x), bounds.width - size - 2)
+        r.origin.y = min(max(2, r.origin.y), bounds.height - size - 2)
+        return r
+    }
+
+    /// 命中鎖/解鎖鈕 → 回該標註 id。
+    func hitLockIcon(at p: CGPoint) -> UUID? {
+        guard activeTool == .select else { return nil }
+        for id in lockIconTargets() {
+            guard let ann = annotations.objects.first(where: { $0.id == id }) else { continue }
+            if annotationLockIconRect(for: ann).contains(p) { return id }
+        }
+        return nil
+    }
+
+    /// 切換鎖定：鎖上時若正選中它就解除選取（鎖了不該留可拖的控制點）。
+    func toggleLock(_ id: UUID) {
+        if lockedAnnotations.contains(id) {
+            lockedAnnotations.remove(id)
+        } else {
+            lockedAnnotations.insert(id)
+            if annotations.selectedID == id { deselect() }
+        }
+        needsDisplay = true
     }
 
     // MARK: 影像轉換（非矩形裁切／透視校正）——就地換底圖,可 undo
@@ -171,8 +227,8 @@ extension SelectionView {
     /// select 工具 mouseDown 路由：命中已選取物件的四角 handle → 進入縮放；
     /// 命中物件本體（含新命中）→ 選取＋進入移動候選；未命中 → 解除選取。
     func handleSelectDown(at p: CGPoint) {
-        // 已選取多邊形：角點節點優先於整體縮放——命中節點就各自拖那一點。
-        if let selID = annotations.selectedID,
+        // 已選取多邊形：角點節點優先於整體縮放——命中節點就各自拖那一點（鎖定則不給拖）。
+        if let selID = annotations.selectedID, !isLocked(selID),
            let selected = annotations.objects.first(where: { $0.id == selID }),
            let nodeIndex = hitPolygonNode(p, for: selected) {
             selectedPolygonNode = nodeIndex
@@ -180,7 +236,7 @@ extension SelectionView {
             hotAnnotationID = selID
             return
         }
-        if let selID = annotations.selectedID,
+        if let selID = annotations.selectedID, !isLocked(selID),
            let selected = annotations.objects.first(where: { $0.id == selID }),
            editablePolygon(of: selected) == nil,   // 多邊形不走 bbox 縮放（改用節點）
            let handle = hitAnnotationHandle(p, for: selected) {
@@ -192,6 +248,7 @@ extension SelectionView {
             deselect()
             return
         }
+        if isLocked(hit.id) { return }   // 鎖定的圖形不可選取/移動（解鎖走懸停的鎖鈕）
         annotations.selectedID = hit.id
         selectedPolygonNode = nil   // 點到物件本體（非節點）＝清掉節點選取
         hotAnnotationID = hit.id   // 重設熱狀態（同上）

@@ -108,6 +108,9 @@ extension SelectionView {
                 }
             }
 
+            // 鎖/解鎖鈕（懸停或選中的標註；select 工具下）
+            drawLockIcons()
+
             // 拖曳中不畫控制點（畫面乾淨）；靜止時畫 8 個控制點
             if drag == nil, !frameLocked {
                 NSColor.controlAccentColor.setFill()
@@ -380,6 +383,23 @@ extension SelectionView {
         }
     }
 
+    /// 畫鎖/解鎖鈕（懸停或選中的標註右上角）：鎖定橘底 🔒、解鎖深底 🔓。
+    private func drawLockIcons() {
+        guard activeTool == .select else { return }
+        for id in lockIconTargets() {
+            guard let ann = annotations.objects.first(where: { $0.id == id }) else { continue }
+            let r = annotationLockIconRect(for: ann)
+            let locked = isLocked(id)
+            (locked ? NSColor.systemOrange.withAlphaComponent(0.95)
+                    : NSColor(white: 0.1, alpha: 0.85)).setFill()
+            NSBezierPath(roundedRect: r, xRadius: 5, yRadius: 5).fill()
+            let emoji = locked ? "🔒" : "🔓"
+            let s = NSAttributedString(string: emoji, attributes: [.font: NSFont.systemFont(ofSize: 13)])
+            let sz = s.size()
+            s.draw(at: CGPoint(x: r.midX - sz.width / 2, y: r.midY - sz.height / 2))
+        }
+    }
+
     /// 透明棋盤格（去背底圖的透明處背景，只用於畫面顯示，不進輸出）。
     private func drawTransparencyCheckerboard(in rect: CGRect) {
         NSColor(white: 0.28, alpha: 1).setFill()
@@ -454,21 +474,22 @@ extension SelectionView {
         SelectionGeometry.hitHandleIndex(point, in: r, size: handleSize).map { Handle.allCases[$0] }
     }
 
-    // MARK: select 工具：選取物件的四角 handle（僅 isCornerResizable 物件；比照框選 handle 樣式）
-    // AnnotationHandle 直接用 SelectionGeometry.Corner（四角語意相同,零轉換）。
-    typealias AnnotationHandle = SelectionGeometry.Corner
+    // MARK: select 工具：選取物件的 8 向 handle（僅 isCornerResizable 物件；比照框選 handle 樣式）
+    // 用 8 向 ResizeEdge（四角＋四邊中點）——與框選框同一套，矩形類可拖角改寬高、拖邊改單軸。
+    typealias AnnotationHandle = SelectionGeometry.ResizeEdge
     private func annotationHandlePoints(_ r: CGRect) -> [(AnnotationHandle, CGPoint)] {
-        SelectionGeometry.cornerPoints(r)
+        Array(zip(SelectionGeometry.ResizeEdge.allCases, SelectionGeometry.handlePoints(r)))
     }
     /// 命中選取物件的縮放 handle（chrome＝bounds 外擴 4pt，與 draw() 畫的虛線框同一矩形）。
     func hitAnnotationHandle(_ point: CGPoint, for annotation: Annotation) -> AnnotationHandle? {
         guard annotation.isCornerResizable else { return nil }
-        return SelectionGeometry.hitCorner(point, in: annotation.bounds.insetBy(dx: -4, dy: -4),
-                                           size: handleSize)
+        return SelectionGeometry.hitHandleIndex(point, in: annotation.bounds.insetBy(dx: -4, dy: -4),
+                                                size: handleSize)
+            .map { SelectionGeometry.ResizeEdge.allCases[$0] }
     }
-    /// 由拖出的四角 handle 算新 bounds；允許拖過頭翻轉，用 min/max 正規化（比照既有 resize 慣例）。
+    /// 由拖出的 handle 算新 bounds；允許拖過頭翻轉，用 min/max 正規化（比照既有 resize 慣例）。
     func resizeAnnotationBounds(_ start: CGRect, handle: AnnotationHandle, to p: CGPoint) -> CGRect {
-        SelectionGeometry.resizedBounds(start, corner: handle, to: p)
+        SelectionGeometry.resized(start, edge: handle, to: p)
     }
 
     // MARK: 多邊形節點（角點各自拖、邊上插點）
