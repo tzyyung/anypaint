@@ -4,7 +4,7 @@ import CoreGraphics
 /// 標註工具（階段 2：四種繪製工具；階段 3–5 再加 text/counter/freehand/highlighter/pixelate/select，
 /// 加 case 時編譯器會點名 toolbar 的 symbol 對照表）。
 public enum AnnotationTool: String, CaseIterable {
-    case select, rect, ellipse, line, arrow, text, counter, freehand, highlighter, pixelate, measure, polygon
+    case select, rect, ellipse, line, arrow, text, counter, freehand, highlighter, pixelate, measure, polygon, blur
 }
 
 /// 每種工具各自記住上次的樣式（UserDefaults；spec 定案「每工具各自記」）。

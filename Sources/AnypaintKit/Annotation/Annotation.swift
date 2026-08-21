@@ -88,6 +88,8 @@ public struct Annotation: Identifiable, Equatable {
         case freehand(points: [CGPoint])
         case highlighter(points: [CGPoint])
         case pixelate(rect: CGRect)
+        /// 高斯模糊遮蔽（非破壞,取樣原始底圖；同 pixelate 但模糊感）。
+        case blur(rect: CGRect)
         /// 測量：畫出範圍與對角線，烙上像素讀數（寬×高，斜拉時另給對角線長度）。
         ///
         /// 存**起點與終點**而不是正規化矩形：拖曳方向就是使用者心裡要量的那條線，
@@ -127,13 +129,16 @@ public struct Annotation: Identifiable, Equatable {
     /// 馬賽克格子大小（pt）：由線寬導出，滾輪熱狀態可調粒度（spec 修訂）。
     public var pixelateBlockSize: CGFloat { max(4, style.lineWidth * 2) }
 
+    /// 高斯模糊半徑（pt）：由線寬導出，滾輪熱狀態可調強度。
+    public var blurRadius: CGFloat { max(3, style.lineWidth * 1.5) }
+
     /// 四角 handle 可否縮放：text/counter 大小由 lineWidth 導出（滾輪調），不給 handle（spec 修訂）。
     /// 完整列舉、不用 default——未來加 case 時編譯器點名。
     public var isCornerResizable: Bool {
         switch shape {
         case .text, .counter:
             return false
-        case .rect, .ellipse, .pixelate, .line, .arrow, .freehand, .highlighter, .measure, .polygon:
+        case .rect, .ellipse, .pixelate, .blur, .line, .arrow, .freehand, .highlighter, .measure, .polygon:
             return true
         }
     }
@@ -162,7 +167,7 @@ public struct Annotation: Identifiable, Equatable {
             }
             let half = effectiveStrokeWidth / 2
             return path.boundingBoxOfPath.insetBy(dx: -half, dy: -half)
-        case .pixelate(let r):
+        case .pixelate(let r), .blur(let r):
             return r
         case .measure(let a, let b, _):
             // 端點正規化矩形（比照 line/arrow）——寬或高可為 0（量單軸間距時）。
@@ -178,7 +183,7 @@ public struct Annotation: Identifiable, Equatable {
     /// 點選命中：面積類用外框外擴 threshold；線段類算點到線段距離（spec）。
     public func hitTest(_ point: CGPoint, threshold: CGFloat = 8) -> Bool {
         switch shape {
-        case .rect, .ellipse, .counter, .text, .pixelate, .measure:
+        case .rect, .ellipse, .counter, .text, .pixelate, .blur, .measure:
             return bounds.insetBy(dx: -threshold, dy: -threshold).contains(point)
         case .line(let a, let b), .arrow(let a, let b):
             let d = AnnotationGeometry.distance(from: point, toSegmentFrom: a, to: b)
@@ -223,6 +228,9 @@ public struct Annotation: Identifiable, Equatable {
         case .pixelate(var r):
             r.origin.x += delta.dx; r.origin.y += delta.dy
             shape = .pixelate(rect: r)
+        case .blur(var r):
+            r.origin.x += delta.dx; r.origin.y += delta.dy
+            shape = .blur(rect: r)
         case .measure(let a, let b, let sc):
             shape = .measure(from: CGPoint(x: a.x + delta.dx, y: a.y + delta.dy),
                              to: CGPoint(x: b.x + delta.dx, y: b.y + delta.dy),
@@ -249,6 +257,7 @@ public struct Annotation: Identifiable, Equatable {
         case .rect(let r):      shape = .rect(mapR(r))
         case .ellipse(let r):   shape = .ellipse(mapR(r))
         case .pixelate(let r):  shape = .pixelate(rect: mapR(r))
+        case .blur(let r):      shape = .blur(rect: mapR(r))
         case .measure(let a, let b, let sc): shape = .measure(from: mapP(a), to: mapP(b), pixelScale: sc)
         case .line(let a, let b):  shape = .line(from: mapP(a), to: mapP(b))
         case .arrow(let a, let b): shape = .arrow(from: mapP(a), to: mapP(b))

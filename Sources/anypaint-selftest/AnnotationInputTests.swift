@@ -21,6 +21,9 @@ nonisolated func annotationInputTests() {
     if case .pixelate? = AnnotationInput.twoPointShape(tool: .pixelate, from: a, to: b, pixelScale: 2) {
         T.checkTrue("twoPoint: pixelate", true)
     } else { T.checkTrue("twoPoint: pixelate", false) }
+    if case .blur(let r)? = AnnotationInput.twoPointShape(tool: .blur, from: a, to: b, pixelScale: 2) {
+        T.checkEq("twoPoint: blur 正規化", r, CGRect(x: 10, y: 10, width: 20, height: 30))
+    } else { T.checkTrue("twoPoint: blur", false) }
     // measure：保留起訖 + pixelScale 綁進 shape
     if case .measure(let f, let t, let sc)? = AnnotationInput.twoPointShape(tool: .measure, from: a, to: b, pixelScale: 2) {
         T.checkTrue("twoPoint: measure 保留起訖", f == a && t == b)

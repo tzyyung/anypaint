@@ -1,6 +1,8 @@
 import Foundation
 import CoreGraphics
 import CoreText
+import CoreImage
+import CoreImage.CIFilterBuiltins
 
 /// 把標註畫進任意 CGContext。畫面預覽（SelectionView.draw）與最終擷取合成
 /// 共用這一份 → 所見即所存。座標原點/翻轉由呼叫端的 context 決定，
@@ -87,6 +89,9 @@ public enum AnnotationRenderer {
 
         case .pixelate(let rect):
             drawPixelate(rect: rect, blockSize: a.pixelateBlockSize, in: ctx, sourceProvider: sourceProvider)
+
+        case .blur(let rect):
+            drawBlur(rect: rect, radiusPt: a.blurRadius, in: ctx, sourceProvider: sourceProvider)
 
         case .polygon(let pts, let closed):
             guard let first = pts.first else { break }
@@ -210,6 +215,31 @@ public enum AnnotationRenderer {
         ctx.saveGState()
         ctx.interpolationQuality = .none       // 放大用 nearest-neighbor → 方格
         ctx.draw(tiny, in: drawRect)
+        ctx.restoreGState()
+    }
+
+    /// 非破壞高斯模糊：取原始底圖該區 → CIGaussianBlur → 畫回。取不到＝半透明灰佔位（同 pixelate）。
+    /// radiusPt 為點,轉成 crop 的像素半徑（crop 是像素、drawRect 是點）。clampedToExtent 避免邊緣透明。
+    private static func drawBlur(rect: CGRect, radiusPt: CGFloat, in ctx: CGContext,
+                                sourceProvider: ((CGRect) -> (image: CGImage, drawRect: CGRect)?)?) {
+        guard rect.width >= 1, rect.height >= 1 else { return }
+        guard let (crop, drawRect) = sourceProvider?(rect), drawRect.width >= 1, drawRect.height >= 1 else {
+            ctx.setFillColor(CGColor(gray: 0.5, alpha: 0.6))
+            ctx.fill(rect)
+            return
+        }
+        let pxPerPt = CGFloat(crop.width) / drawRect.width
+        let radiusPx = max(1, radiusPt * pxPerPt)
+        let source = CIImage(cgImage: crop)
+        let filter = CIFilter.gaussianBlur()
+        filter.inputImage = source.clampedToExtent()   // 夾住邊緣,模糊才不會吃進透明
+        filter.radius = Float(radiusPx)
+        guard let out = filter.outputImage else { return }
+        let ciCtx = CIContext(options: nil)
+        guard let blurred = ciCtx.createCGImage(out, from: source.extent) else { return }   // 裁回原尺寸
+        ctx.saveGState()
+        ctx.interpolationQuality = .high
+        ctx.draw(blurred, in: drawRect)
         ctx.restoreGState()
     }
 

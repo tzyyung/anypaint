@@ -83,4 +83,34 @@ nonisolated func annotationGapTests() {
     T.checkEq("nextSelection: current 不在命中清單→最上層",
               AnnotationInput.nextSelection(hits: [id0, id1], current: id2), id0)
     T.checkTrue("nextSelection: 空→nil", AnnotationInput.nextSelection(hits: [], current: id0) == nil)
+
+    // 7) blur：半徑公式＋形狀幾何（bounds/move/scaled）＋渲染有像素（有 sourceProvider）
+    let bl = Annotation(shape: .blur(rect: CGRect(x: 10, y: 10, width: 40, height: 30)),
+                        style: AnnotationStyle(color: .red, lineWidth: 4))
+    T.checkEq("blur: bounds=rect", bl.bounds, CGRect(x: 10, y: 10, width: 40, height: 30))
+    T.checkEq("blur: 半徑=max(3,線寬×1.5)", bl.blurRadius, 6)
+    T.checkTrue("blur: 角點可縮放", bl.isCornerResizable)
+    var blMoved = bl; blMoved.move(by: CGVector(dx: 5, dy: 5))
+    if case .blur(let r) = blMoved.shape { T.checkEq("blur: move", r.origin, CGPoint(x: 15, y: 15)) }
+    else { T.checkTrue("blur: move 型別", false) }
+    // 渲染：給一個純色 sourceProvider,模糊後仍應有非透明像素畫回。
+    let src = { () -> CGImage in
+        let cc = CGContext(data: nil, width: 40, height: 30, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        cc.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)); cc.fill(CGRect(x: 0, y: 0, width: 40, height: 30))
+        return cc.makeImage()!
+    }()
+    let bw = 60, bh = 50
+    var bbuf = [UInt8](repeating: 0, count: bw * bh * 4)
+    bbuf.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(data: raw.baseAddress, width: bw, height: bh, bitsPerComponent: 8,
+            bytesPerRow: bw * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        AnnotationRenderer.render([bl], in: ctx, sourceProvider: { _ in
+            (image: src, drawRect: CGRect(x: 10, y: 10, width: 40, height: 30)) })
+    }
+    var blLit = 0
+    for i in stride(from: 3, to: bbuf.count, by: 4) where bbuf[i] > 0 { blLit += 1 }
+    T.checkTrue("blur 渲染: 有非透明像素", blLit > 0)
 }
