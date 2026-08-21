@@ -89,6 +89,8 @@ final class SelectionView: NSView {
         case resizing(id: UUID, handle: AnnotationHandle, startBounds: CGRect, startShape: Annotation.Shape)
         /// 多邊形單一節點拖曳（角點各自拖，非整體縮放）。
         case draggingNode(id: UUID, index: Int, startShape: Annotation.Shape)
+        /// callout 尾巴頂點拖曳（只移動 tail apex、body 不動）。
+        case draggingCalloutTail(id: UUID, startShape: Annotation.Shape)
     }
     var selectDrag: SelectDrag?
     /// 首次實際位移才 beginChange()（比照 textDragBegan：整段移動/縮放合併一步 undo）。

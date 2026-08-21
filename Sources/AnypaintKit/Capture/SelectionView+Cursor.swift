@@ -61,6 +61,7 @@ extension SelectionView {
         guard let id = annotations.selectedID, !isLocked(id),
               let sel = annotations.objects.first(where: { $0.id == id }) else { return nil }
         if hitPolygonNode(point, for: sel) != nil { return .openHand }
+        if hitCalloutTail(point, for: sel) { return .openHand }
         if let h = hitAnnotationHandle(point, for: sel) {
             return nsCursor(for: .resize(SelectionGeometry.resizeAxis(for: h)))
         }

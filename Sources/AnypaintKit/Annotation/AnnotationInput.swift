@@ -17,6 +17,10 @@ public enum AnnotationInput {
         case .pixelate: return .pixelate(rect: CoordinateUtils.rect(from: a, to: b))
         case .blur:     return .blur(rect: CoordinateUtils.rect(from: a, to: b))
         case .spotlight: return .spotlight(rect: CoordinateUtils.rect(from: a, to: b))
+        case .roundedRect: return .roundedRect(CoordinateUtils.rect(from: a, to: b))
+        case .callout:
+            let body = CoordinateUtils.rect(from: a, to: b)
+            return .callout(body: body, tail: AnnotationGeometry.defaultCalloutApex(for: body))
         // measure 不正規化成 rect：起點→終點就是使用者要量的那條線,對角線方向靠它決定。
         // pixelScale＝擷取端的 pointPixelScale（讀數要像素,混合 DPI 各自正確）。
         case .measure:  return .measure(from: a, to: b, pixelScale: pixelScale)

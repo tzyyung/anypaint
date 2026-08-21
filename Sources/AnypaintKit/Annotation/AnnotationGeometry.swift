@@ -92,4 +92,51 @@ public enum AnnotationGeometry {
         if dx >= 0 { return dy >= 0 ? "↗" : "↘" }
         return dy >= 0 ? "↖" : "↙"
     }
+
+    /// 圓角矩形的圓角半徑（點）：隨框短邊成比例（1/4），上限 28pt。
+    /// 0.25×短邊 ≤ 0.5×短邊，永遠不會超過短邊一半（不會意外變成膠囊）。
+    public static func cornerRadius(for rect: CGRect) -> CGFloat {
+        let minSide = min(abs(rect.width), abs(rect.height))
+        return min(minSide * 0.25, 28)
+    }
+
+    /// Callout 尾巴基座寬（點）：隨 body 短邊成比例（0.3），夾在 [12, 48]。
+    public static func calloutBaseWidth(for body: CGRect) -> CGFloat {
+        min(max(min(abs(body.width), abs(body.height)) * 0.3, 12), 48)
+    }
+
+    /// Callout 尾巴基座：回傳尾巴貼在 body 邊上的兩個基點（沿該邊排列，中間會拉出 apex）。
+    /// apex 落在 body 內 → 無尾巴（回 nil）。座標系＝view 座標（y 向上，minY 為底邊）。
+    ///
+    /// 貼哪條邊：比較 apex 對 body 的**水平溢出量**與**垂直溢出量**，大的那個決定主邊
+    /// （純垂直外側→貼上/下邊、純水平外側→貼左/右邊、斜角→溢出多的邊）。
+    /// 基座中心＝apex 在該邊上的投影，夾限使基座不越出邊界；邊太短放不下就置中。
+    public static func calloutTailBase(body: CGRect, apex: CGPoint, baseWidth: CGFloat)
+        -> (CGPoint, CGPoint)? {
+        if body.contains(apex) { return nil }
+        let half = baseWidth / 2
+        let outLeft = apex.x < body.minX, outRight = apex.x > body.maxX
+        let outBelow = apex.y < body.minY, outAbove = apex.y > body.maxY
+        let dxOut = outLeft ? (body.minX - apex.x) : (outRight ? (apex.x - body.maxX) : 0)
+        let dyOut = outBelow ? (body.minY - apex.y) : (outAbove ? (apex.y - body.maxY) : 0)
+        if dxOut >= dyOut {
+            // 貼左/右垂直邊 → 基點沿 y 排列
+            let edgeX = outLeft ? body.minX : body.maxX
+            let lo = body.minY + half, hi = body.maxY - half
+            let cy = lo <= hi ? min(max(apex.y, lo), hi) : body.midY
+            return (CGPoint(x: edgeX, y: cy - half), CGPoint(x: edgeX, y: cy + half))
+        } else {
+            // 貼上/下水平邊 → 基點沿 x 排列
+            let edgeY = outBelow ? body.minY : body.maxY
+            let lo = body.minX + half, hi = body.maxX - half
+            let cx = lo <= hi ? min(max(apex.x, lo), hi) : body.midX
+            return (CGPoint(x: cx - half, y: edgeY), CGPoint(x: cx + half, y: edgeY))
+        }
+    }
+
+    /// Callout 預設尾巴頂點：新畫出 body 時尾巴指向左下（從底邊左側 1/4 處往下拉）。
+    public static func defaultCalloutApex(for body: CGRect) -> CGPoint {
+        CGPoint(x: body.minX + body.width * 0.25,
+                y: body.minY - max(28, body.height * 0.6))
+    }
 }

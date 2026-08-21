@@ -39,7 +39,7 @@ extension SelectionView {
                 } else {
                     handleTextClick(at: p)
                 }
-            case .rect, .ellipse, .line, .arrow, .pixelate, .blur, .spotlight, .measure:
+            case .rect, .ellipse, .line, .arrow, .pixelate, .blur, .spotlight, .measure, .roundedRect, .callout:
                 // 統一模型：點控制點＝編輯、點到圖形＝改選、點空白才畫新的。
                 if selectOrEditExistingBeforeDraw(at: p) { return }
                 shapeAnchor = p
@@ -162,6 +162,20 @@ extension SelectionView {
                         a.shape = .polygon(points: moved.points, closed: moved.closed)
                     }
                     NSCursor.closedHand.set()   // 拖節點中＝握拳（對應 hover 的開手）
+                    needsDisplay = true
+                }
+            case .draggingCalloutTail(let id, let startShape):
+                guard case .callout(let body, let tail) = startShape else { break }
+                if selectDragBegan || p != tail {
+                    if !selectDragBegan {
+                        annotations.beginChange()
+                        selectDragBegan = true
+                        syncUndoButtons()
+                    }
+                    annotations.updateWithoutSnapshot(id: id) { a in
+                        a.shape = .callout(body: body, tail: p)   // body 不動，只移尾端
+                    }
+                    NSCursor.closedHand.set()
                     needsDisplay = true
                 }
             }

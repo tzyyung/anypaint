@@ -85,7 +85,8 @@ final class SelectionToolbar: NSView {
         toolsRow.spacing = 4
         let symbols: [(AnnotationTool, String, String)] = [
             (.select, "cursorarrow", "選取：點已畫好的標註來搬移、改樣式或刪除"),
-            (.rect, "rectangle", "矩形"), (.ellipse, "circle", "橢圓"),
+            (.rect, "rectangle", "矩形"), (.roundedRect, "app", "圓角矩形"),
+            (.ellipse, "circle", "橢圓"),
             (.line, "line.diagonal", "直線"), (.arrow, "arrow.up.right", "箭頭"),
             (.freehand, "pencil", "畫筆：手繪線條"),
             (.highlighter, "highlighter", "螢光筆：半透明色塊"),
@@ -95,7 +96,8 @@ final class SelectionToolbar: NSView {
             (.text, "textformat", "文字：點一下開始輸入"),
             (.counter, "1.circle", "序號：依序編號的圓圈"),
             (.measure, "ruler", "測量：拖出範圍量像素——斜拉另給對角線長度，細長條只給單邊"),
-            (.polygon, "pentagon", "多邊形：逐點點擊圈出斜的區塊，點回起點或雙擊收尾")
+            (.polygon, "pentagon", "多邊形：逐點點擊圈出斜的區塊，點回起點或雙擊收尾"),
+            (.callout, "bubble.left", "對話框：拖出圓角框，選取後可拖尾巴端點指向目標")
         ]
         for (tool, symbol, help) in symbols {
             let b = NSButton()

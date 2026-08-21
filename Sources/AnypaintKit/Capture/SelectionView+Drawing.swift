@@ -109,6 +109,16 @@ extension SelectionView {
                         path.stroke()
                     }
                 }
+                // callout 尾巴頂點：橘色節點 handle（與縮放 handle 區分,提示可拖曳指向目標）。
+                if !locked, selectDrag == nil, let tail = calloutTailPoint(of: selected) {
+                    let h = handleRect(at: tail)
+                    NSColor.systemOrange.setFill()
+                    NSColor.white.setStroke()
+                    let path = NSBezierPath(ovalIn: h)
+                    path.fill()
+                    path.lineWidth = 1
+                    path.stroke()
+                }
             }
 
             // 鎖/解鎖鈕（懸停或選中的標註；select 工具下）
@@ -510,6 +520,20 @@ extension SelectionView {
             return i
         }
         return nil
+    }
+
+    // MARK: callout 尾巴節點（尾端可拖曳指向目標）
+
+    /// 若 annotation 是 callout，回傳尾巴頂點；否則 nil（供尾巴節點命中/繪製）。
+    func calloutTailPoint(of annotation: Annotation) -> CGPoint? {
+        guard case .callout(_, let tail) = annotation.shape else { return nil }
+        return tail
+    }
+
+    /// 命中 callout 尾巴頂點（命中框比繪製略大，比照多邊形節點）。
+    func hitCalloutTail(_ point: CGPoint, for annotation: Annotation) -> Bool {
+        guard let tail = calloutTailPoint(of: annotation) else { return false }
+        return handleRect(at: tail).insetBy(dx: -4, dy: -4).contains(point)
     }
 
 }

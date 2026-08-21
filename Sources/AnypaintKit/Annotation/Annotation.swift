@@ -104,6 +104,10 @@ public struct Annotation: Identifiable, Equatable {
         /// 多邊形/斜框：任意角度的封閉或開放折線，角點可各自拖、邊上可插節點。
         /// closed=true → 封閉區塊（斜框），false → 折線。
         case polygon(points: [CGPoint], closed: Bool)
+        /// 圓角矩形：同 rect 但四角圓角（半徑由 AnnotationGeometry.cornerRadius 導出）。
+        case roundedRect(CGRect)
+        /// 對話框 callout：圓角本體 body ＋指向 tail 頂點的尾巴（尾巴端點可拖曳指向目標）。
+        case callout(body: CGRect, tail: CGPoint)
     }
 
     public let id: UUID
@@ -140,7 +144,7 @@ public struct Annotation: Identifiable, Equatable {
         switch shape {
         case .text, .counter:
             return false
-        case .rect, .ellipse, .pixelate, .blur, .spotlight, .line, .arrow, .freehand, .highlighter, .measure, .polygon:
+        case .rect, .ellipse, .pixelate, .blur, .spotlight, .line, .arrow, .freehand, .highlighter, .measure, .polygon, .roundedRect, .callout:
             return true
         }
     }
@@ -179,13 +183,18 @@ public struct Annotation: Identifiable, Equatable {
             let box = EditablePolygon(points: pts, closed: closed).boundingBox
             let half = style.lineWidth / 2
             return box.insetBy(dx: -half, dy: -half)
+        case .roundedRect(let r):
+            return r
+        case .callout(let body, let tail):
+            // 含尾巴頂點：body 與 tail 的聯集（選取/移動的外框要涵蓋尾巴）。
+            return body.union(CGRect(origin: tail, size: .zero))
         }
     }
 
     /// 點選命中：面積類用外框外擴 threshold；線段類算點到線段距離（spec）。
     public func hitTest(_ point: CGPoint, threshold: CGFloat = 8) -> Bool {
         switch shape {
-        case .rect, .ellipse, .counter, .text, .pixelate, .blur, .spotlight, .measure:
+        case .rect, .ellipse, .counter, .text, .pixelate, .blur, .spotlight, .measure, .roundedRect:
             return bounds.insetBy(dx: -threshold, dy: -threshold).contains(point)
         case .line(let a, let b), .arrow(let a, let b):
             let d = AnnotationGeometry.distance(from: point, toSegmentFrom: a, to: b)
@@ -200,6 +209,10 @@ public struct Annotation: Identifiable, Equatable {
             if closed, poly.pointInside(point) { return true }
             guard let e = poly.nearestEdge(to: point) else { return false }
             return e.distance <= threshold + style.lineWidth / 2
+        case .callout(let body, let tail):
+            // 命中 body（外擴）或尾巴頂點附近皆算選到。
+            if body.insetBy(dx: -threshold, dy: -threshold).contains(point) { return true }
+            return hypot(point.x - tail.x, point.y - tail.y) <= threshold + style.lineWidth
         }
     }
 
@@ -243,6 +256,12 @@ public struct Annotation: Identifiable, Equatable {
         case .polygon(let pts, let closed):
             shape = .polygon(points: pts.map { CGPoint(x: $0.x + delta.dx, y: $0.y + delta.dy) },
                              closed: closed)
+        case .roundedRect(var r):
+            r.origin.x += delta.dx; r.origin.y += delta.dy
+            shape = .roundedRect(r)
+        case .callout(var body, let tail):
+            body.origin.x += delta.dx; body.origin.y += delta.dy
+            shape = .callout(body: body, tail: CGPoint(x: tail.x + delta.dx, y: tail.y + delta.dy))
         }
     }
 
@@ -270,6 +289,8 @@ public struct Annotation: Identifiable, Equatable {
         case .freehand(let pts):    shape = .freehand(points: pts.map(mapP))
         case .highlighter(let pts): shape = .highlighter(points: pts.map(mapP))
         case .polygon(let pts, let closed): shape = .polygon(points: pts.map(mapP), closed: closed)
+        case .roundedRect(let r): shape = .roundedRect(mapR(r))
+        case .callout(let body, let tail): shape = .callout(body: mapR(body), tail: mapP(tail))
         case .text, .counter: break   // isCornerResizable guard 已擋，這裡保持 switch 完整
         }
     }

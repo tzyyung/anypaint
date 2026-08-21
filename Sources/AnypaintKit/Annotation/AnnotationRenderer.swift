@@ -121,6 +121,24 @@ public enum AnnotationRenderer {
             if closed { ctx.closePath() }
             ctx.strokePath()
 
+        case .roundedRect(let r):
+            let radius = AnnotationGeometry.cornerRadius(for: r)
+            ctx.addPath(CGPath(roundedRect: r, cornerWidth: radius, cornerHeight: radius, transform: nil))
+            ctx.strokePath()
+
+        case .callout(let body, let tail):
+            // 本體圓角框（完整），再疊尾巴（base1→apex→base2，開放兩段）。
+            let radius = AnnotationGeometry.cornerRadius(for: body)
+            ctx.addPath(CGPath(roundedRect: body, cornerWidth: radius, cornerHeight: radius, transform: nil))
+            ctx.strokePath()
+            if let (base1, base2) = AnnotationGeometry.calloutTailBase(
+                body: body, apex: tail, baseWidth: AnnotationGeometry.calloutBaseWidth(for: body)) {
+                ctx.move(to: base1)
+                ctx.addLine(to: tail)
+                ctx.addLine(to: base2)
+                ctx.strokePath()
+            }
+
         case .measure(let from, let to, let pixelScale):
             let box = CGRect(x: min(from.x, to.x), y: min(from.y, to.y),
                              width: abs(to.x - from.x), height: abs(to.y - from.y))

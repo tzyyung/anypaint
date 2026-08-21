@@ -57,6 +57,12 @@ extension SelectionView {
             hotAnnotationID = selID
             return true
         }
+        // callout 尾巴頂點優先於縮放 handle（頂點常落在縮放框邊附近，先讓拖尾巴贏）。
+        if hitCalloutTail(p, for: selected) {
+            selectDrag = .draggingCalloutTail(id: selID, startShape: selected.shape)
+            hotAnnotationID = selID
+            return true
+        }
         if editablePolygon(of: selected) == nil, let handle = hitAnnotationHandle(p, for: selected) {
             selectDrag = .resizing(id: selID, handle: handle, startBounds: selected.bounds, startShape: selected.shape)
             hotAnnotationID = selID
