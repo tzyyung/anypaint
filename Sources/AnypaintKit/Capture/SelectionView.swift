@@ -229,14 +229,15 @@ final class SelectionView: NSView {
         toolbar.onStyleChanged = { [weak self] style in
             guard let self else { return }
             self.currentStyle = style
-            if self.activeTool == .select {
-                // select＋有選取＝改選取物件本身的樣式（單發快照），不寫入每工具記憶（spec）。
-                if let id = self.annotations.selectedID {
-                    self.annotations.update(id: id) { $0.style = style }
-                    self.syncUndoButtons()
-                    self.needsDisplay = true
-                }
-            } else if let tool = self.activeTool {
+            // 有選取的圖形 → 直接改它的樣式（任何工具下,單發快照 undo）。統一模型：畫完仍選中,
+            // 改色/粗細就該套到它,不必先切「選取」。
+            if let id = self.annotations.selectedID, !self.isLocked(id) {
+                self.annotations.update(id: id) { $0.style = style }
+                self.syncUndoButtons()
+                self.needsDisplay = true
+            }
+            // 畫圖工具：也記住供下次畫（不覆蓋已套到選取物件那步）。
+            if let tool = self.activeTool, tool != .select {
                 AnnotationStyleStore.save(style, for: tool)
             }
             self.onInteraction?()

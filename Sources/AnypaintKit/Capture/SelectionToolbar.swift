@@ -60,6 +60,8 @@ final class SelectionToolbar: NSView {
     }()
     private let undoButton = NSButton()
     private let redoButton = NSButton()
+    /// 線條粗細加減鈕（上下箭頭；滾輪之外的另一種調法）。
+    private let lineWidthStepper = NSStepper()
     /// 影像轉換動作鈕（選中封閉多邊形才顯示；4 角時才顯示「拉直」）。
     private let cropButton = NSButton(title: "裁切", target: nil, action: nil)
     private let perspectiveButton = NSButton(title: "拉直", target: nil, action: nil)
@@ -176,8 +178,17 @@ final class SelectionToolbar: NSView {
         styleRow.addArrangedSubview(separator())
         // 滾輪調粗細是隱藏功能（SelectionView.scrollWheel，工具作用中每 5 單位 ±1pt），
         // 不寫出來沒人會發現。
-        setHelp("線條粗細——工具作用中滾動滑鼠滾輪即可調整", for: lineWidthLabel)
+        setHelp("線條粗細——滾動滑鼠滾輪，或按右側上下鈕調整", for: lineWidthLabel)
         styleRow.addArrangedSubview(lineWidthLabel)
+        lineWidthStepper.minValue = Double(AnnotationStyle.clampLineWidth(1))
+        lineWidthStepper.maxValue = Double(AnnotationStyle.clampLineWidth(24))
+        lineWidthStepper.increment = 1
+        lineWidthStepper.valueWraps = false
+        lineWidthStepper.integerValue = Int(currentStyle.lineWidth.rounded())
+        lineWidthStepper.target = self
+        lineWidthStepper.action = #selector(lineWidthStepped)
+        setHelp("線條粗細加減（上下鈕）", for: lineWidthStepper)
+        styleRow.addArrangedSubview(lineWidthStepper)
         styleRow.isHidden = true
 
         let stack = NSStackView(views: [toolsRow, styleRow, hintLabel])
@@ -238,6 +249,7 @@ final class SelectionToolbar: NSView {
         currentStyle = style
         for (c, b) in colorButtons { b.layer?.borderWidth = (c == style.color) ? 2 : 0 }
         lineWidthLabel.stringValue = "\(Int(style.lineWidth.rounded())) pt"
+        lineWidthStepper.integerValue = Int(style.lineWidth.rounded())
     }
 
     func setUndoState(canUndo: Bool, canRedo: Bool) {
@@ -270,6 +282,11 @@ final class SelectionToolbar: NSView {
     func setTransformActions(canCrop: Bool, canPerspective: Bool) {
         cropButton.isHidden = !canCrop
         perspectiveButton.isHidden = !canPerspective
+    }
+    @objc private func lineWidthStepped(_ sender: NSStepper) {
+        currentStyle.lineWidth = AnnotationStyle.clampLineWidth(CGFloat(sender.integerValue))
+        setStyle(currentStyle)            // 同步標籤/夾限
+        onStyleChanged?(currentStyle)     // 套到選取的圖形＋記住供下次畫（見 SelectionView）
     }
     @objc private func colorTapped(_ sender: NSButton) {
         guard let id = sender.identifier?.rawValue,
