@@ -96,8 +96,8 @@ agent）不必操作滑鼠鍵盤就能查狀態、截自己的 UI、以及驅動
 | `recordingStopped` | `{outputURL: "<path>"}` | 正常停止（手動鈕／倒數到／看門狗／stream error 五條路徑共用）且收檔成功 |
 | `recordingAborted` | `{}` | 取消（Esc／取消鈕／`abortRecord` 命令），母帶被丟棄 |
 | `recordingFailed` | `{reason: "<字串>"}` | 三條失敗路徑各自發一次：`startFailed: <error>`（`RecordFrameSource.start` 的 await 拋錯，例如 TCC 拒絕、`noDisplays`）、`finishFailed: <error>`（`stopAndFinish()` 失敗，包含 `RecordError.noFrames`／`.writerFailed`）、`finishingTimeout`（`.finishing` 的 30 秒看門狗放生——`stopAndFinish()` 鏈路卡死時的最後防線）。三者都與對應的 `onFinished?(nil, …)` 回呼同一次失敗綁在一起，不是額外的獨立事件流 |
-| `captureCompleted` | `{copied: true, path?: "<path>"}` | `captureRegion` 擷取+裁切+複製剪貼簿完成；`save:true` 且寫檔成功時才有 `path` |
-| `textRecognized` | `{text: "<辨識結果>"}` | `recognizeText` OCR 完成（空結果時 `text` 為空字串，同時文字已進剪貼簿） |
+| `captureCompleted` | `{copied: <Bool>, path?: "<path>"}` | `captureRegion` 擷取+裁切+複製剪貼簿完成；`save:true` 且寫檔成功時才有 `path`。**`copied` 是真實結果**（2026-08-22 起；先前恆為 `true`）——`false` 代表寫剪貼簿兩次都失敗，剪貼簿當下是空的。RPC 路徑刻意不彈警示（`runModal` 會卡死 CFMessagePort callback），要靠這個欄位判斷 |
+| `textRecognized` | `{text: "<辨識結果>", copied: <Bool>}` | `recognizeText` OCR 完成（空結果時 `text` 為空字串）。`copied` 同上：`false` 代表文字沒進剪貼簿，**不要因為拿到 `text` 就假設剪貼簿裡有** |
 | `captureFailed` | `{reason: "<字串>"}` | `captureRegion`/`recognizeText` 的擷取或裁切失敗（`captureOrCrop`）、或 OCR 失敗（`ocr: <error>`）、或錄影存檔失敗（`recordSave`） |
 | `recordSaved` | `{path: "<path>"}` | `startRecord{direct:true}`（錄影）停止後，MP4 已存到 `recordSaveDirectory`（預設 `~/Movies/anypaint/`） |
 

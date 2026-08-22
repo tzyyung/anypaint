@@ -515,9 +515,17 @@ extension SelectionView {
         let text = AppSettings.colorPickerShowsRGB
             ? ColorSampler.rgbString(r: rgb.r, g: rgb.g, b: rgb.b)
             : ColorSampler.hexString(r: rgb.r, g: rgb.g, b: rgb.b)
+        // 失敗時絕不能還顯示「已複製」——那句話會變成謊話。清空與寫入綁在同一次嘗試裡，
+        // 失敗重試一次（`writeObjects`／`setString` 回 false 的成因見 PinboardService.attemptWrite）。
         let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(text, forType: .string)
+        let outcome = PinboardService.attemptWrite { _ in
+            pb.clearContents()
+            return pb.setString(text, forType: .string)
+        }
+        guard outcome == .ok else {
+            showCopiedToast("複製沒有成功，請再按一次")
+            return
+        }
         showCopiedToast("已複製 \(text)")
     }
 

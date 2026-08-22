@@ -128,9 +128,12 @@ Carbon 熱鍵本來就不看哪個視窗持有鍵盤焦點。
 三件實測結論：
 
 1. **只放 PNG 不犧牲相容性**——macOS 會在有人索取 `public.tiff` 時**即時從 PNG 合成**
-   （`pasteboard.data(forType: .tiff)` 仍有值），而合成的那份**不在 `item.types` 裡**，
-   所以剪貼簿觀察者掃不到它。`NSImage(pasteboard:)`、`readObjects(forClasses:[NSImage.self])`
-   都照樣讀得到。
+   （`pasteboard.data(forType: .tiff)` 仍有值）。`NSImage(pasteboard:)`、
+   `readObjects(forClasses:[NSImage.self])` 都照樣讀得到。
+   **合成的那份在哪看得到，取決於用哪個 API**（2026-08-22 實測修正）：`pasteboard.types`
+   **會**列出 `public.tiff`；只有逐個 item 去看 `item.types` 才看不到。所以先前寫的
+   「剪貼簿觀察者掃不到它」講得太絕——只對逐 item 列舉的觀察者成立，用 `pasteboard.types`
+   查的工具兩種寫法看起來完全一樣。省下的是**傳輸量**（不必整份 TIFF），不是「隱形」。
 2. **`rep.size` 必須設成點數尺寸**，不是多餘賦值：PNG 以它寫入解析度。少了它，接收端讀回的
    點數會等於像素數，Retina 截圖貼到其他 app **變成兩倍大**。
 3. 為什麼在意 20 MB：剪貼簿上的**每個觀察者**都要把宣告的型別整份讀一次（通用剪貼簿會把
@@ -151,6 +154,27 @@ promise：`writeObjects([NSImage])` 不是（NSImage 沒實作 `writingOptions`�
 
 **注意 `CaptureSaver.writePNG(cgImage:to:)` 不寫 DPI**（`CGImageDestination` 直寫原生像素），
 所以不能拿它產生的檔案位元組直接充剪貼簿——尺寸會跑掉。剪貼簿那份要在記憶體另外編碼。
+
+### 寫剪貼簿一定要看回傳值——失敗時剪貼簿已經被你清空了（2026-08-22）
+`writeObjects` 與 `setString` 都回 `Bool`。而複製的標準寫法是「先 `clearContents()`、再寫入」
+——**寫入失敗時舊內容已經沒了、新內容也沒進去，剪貼簿是空的**。曾經全庫 7 個寫入點的回傳值
+全部被丟掉，症狀是使用者按了「複製」、框選照常關掉、貼上卻什麼都沒有，畫面上零跡象。
+
+- 回 false 的已知成因：**別的行程在清空與寫入之間取得剪貼簿所有權**（有文獻的實例：
+  alacritty#5824）。這是間歇性的，所以「多按幾次才成功」是這個缺陷的典型體感。
+  `PinboardService.attemptWrite` 因此**失敗重試一次**，兩次都失敗才算失敗。
+- 唯一出口是 `PinboardService.attemptWrite`／`writeImage`／`copy`，回 `CopyOutcome`。
+  **清空必須跟寫入綁在同一次嘗試裡**，否則重試時第一次的清空已經生效、狀態就對不上。
+- 失敗必須講出來（`ProblemReporter`）。**但 RPC 路徑不可以**——`runModal` 會卡死
+  CFMessagePort callback（同 `docs/automation.md` 不在該 callback 上做互動式詢問的理由），
+  自動化改用事件 payload 的 `copied` 欄位回報。
+- 提示的**顯示順序**有坑：框選視窗 level 是 `.screenSaver`(1000)，`NSAlert` 是一般視窗
+  ——要先關掉框選再顯示，否則警示被蓋在後面完全看不到。
+- 有 toast 的路徑（取色）要記得：失敗時**不能還顯示「已複製」**，那句話會變成謊話。
+
+**「複製成功但貼不出來」不是這條**：本機複製與遠端貼上是兩件事。實測 60/60 本機複製都成功
+而使用者仍貼不出來的案例，瓶頸在 TeamViewer 的剪貼簿同步（見 memory
+`teamviewer-clipboard-deadlock`）。所以這個修法的價值是**讓兩者可以被分辨**，不是修好貼上。
 
 ### 生命週期方法的隱性副作用
 `present()` 開頭呼叫 `dismiss()` 當「清乾淨」，而 `dismiss()` 會把回呼設成 nil ——

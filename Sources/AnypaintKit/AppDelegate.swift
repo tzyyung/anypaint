@@ -180,22 +180,22 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         overlayController.present(
             snapshots: snapshots,
             onSelect: { [weak self] image in
-                self?.pinboard.copy(image: image)
+                self?.copyOrReport(image)
                 self?.output.autoSaveIfEnabled(image: image, vars: vars)
             },
             onSave: { [weak self] image in
-                self?.pinboard.copy(image: image)   // 剪貼簿先有——寫檔失敗也不白截（spec）
+                self?.copyOrReport(image)           // 剪貼簿先有——寫檔失敗也不白截（spec）
                 self?.output.saveExpanding(template: AppSettings.quickSavePathTemplate,
                                             image: image, vars: vars, quiet: false)
                 self?.output.autoSaveIfEnabled(image: image, vars: vars)
             },
             onSaveAs: { [weak self] image in
-                self?.pinboard.copy(image: image)   // 對話框取消也不白截（spec）
+                self?.copyOrReport(image)           // 對話框取消也不白截（spec）
                 self?.output.saveWithPanel(image: image, vars: vars)
                 self?.output.autoSaveIfEnabled(image: image, vars: vars)
             },
             onOpen: { [weak self] image in
-                self?.pinboard.copy(image: image)   // 剪貼簿先有——寫檔或開啟失敗也不白截
+                self?.copyOrReport(image)           // 剪貼簿先有——寫檔或開啟失敗也不白截
                 self?.output.saveAndOpen(image: image, vars: vars)
                 self?.output.autoSaveIfEnabled(image: image, vars: vars)
             },
@@ -203,7 +203,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.recognizeText(in: image, near: frame)
             },
             onPin: { [weak self] image, frame in
-                self?.pinboard.copy(image: image)                    // 決策：貼＝同時複製
+                self?.copyOrReport(image)                            // 決策：貼＝同時複製
                 self?.pinController.pin(image: image, frame: frame)
                 self?.output.autoSaveIfEnabled(image: image, vars: vars)
             },
@@ -278,7 +278,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 controller.showText("未偵測到文字或 QR 碼")
             case .success(let recognition):
                 let text = recognition.joined
-                self?.pinboard.copy(text: text)
+                self?.copyOrReport(text: text)
                 controller.showText(text)
             case .failure(let error):
                 controller.showText("辨識失敗：\(error.localizedDescription)")
@@ -625,8 +625,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             let pointSize = CoordinateUtils.pointSize(pixelWidth: cropped.width, pixelHeight: cropped.height,
                                                       scale: self.captureScale(for: globalRect))
             let image = NSImage(cgImage: cropped, size: pointSize)
-            self.pinboard.copy(image: image)
-            var payload: [String: Any] = ["copied": true]
+            // RPC 路徑不彈警示（`runModal` 會卡死 CFMessagePort callback，見 docs/automation.md）
+            // ——把真實結果放進事件，讓呼叫端自己判斷。
+            let copied = self.pinboard.copy(image: image) == .ok
+            var payload: [String: Any] = ["copied": copied]
             let vars = CaptureVars.makeVars(title: CaptureVars.currentFrontTitle())
             if save, let url = self.output.saveExpanding(template: AppSettings.quickSavePathTemplate,
                                                          image: image, vars: vars, quiet: true) {
@@ -645,8 +647,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             do {
                 let text = (try TextRecognizer.recognizeContentSync(cgImage: cropped)).joined
-                self.pinboard.copy(text: text)
-                UITestServer.shared?.emit("textRecognized", ["text": text])
+                // RPC 路徑同樣不彈警示，改用事件回報是否真的進了剪貼簿。
+                let copied = self.pinboard.copy(text: text) == .ok
+                UITestServer.shared?.emit("textRecognized", ["text": text, "copied": copied])
             } catch {
                 UITestServer.shared?.emit("captureFailed", ["reason": "ocr: \(error)"])
             }
@@ -671,6 +674,28 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 解析 `"x,y,w,h"`（AppKit 全域座標，點）。四段都要是合法數字，否則回 nil。
     // MARK: - 權限
+
+    // MARK: - 複製失敗要講出來
+
+    /// 複製並在失敗時告知使用者。
+    ///
+    /// 為什麼要有這個包裝：`copy` 先清空剪貼簿再寫入，寫入失敗時剪貼簿已經空了，而框選在這個
+    /// 回呼被呼叫之前就已經 dismiss（`SelectionOverlayController.finish` 先 dismiss 再呼叫
+    /// handler），畫面上沒有任何地方可以顯示提示。不講的話使用者只會看到「貼上沒東西」，
+    /// 無從分辨是這裡沒複製到、還是貼上那一端的問題。
+    ///
+    /// 警示延到下一輪 runloop：呼叫端在複製之後還有存檔／開啟等動作，先讓它們照原本時序跑完，
+    /// 不要被一個 modal 卡在中間。
+    private func copyOrReport(_ image: NSImage) {
+        guard pinboard.copy(image: image) == .failed else { return }
+        DispatchQueue.main.async { ProblemReporter.reportCopyFailed() }
+    }
+
+    /// 同上，文字版（辨識文字／QR 的結果）。
+    private func copyOrReport(text: String) {
+        guard pinboard.copy(text: text) == .failed else { return }
+        DispatchQueue.main.async { ProblemReporter.reportCopyFailed() }
+    }
 
     private func showPermissionAlert() {
         let alert = NSAlert()

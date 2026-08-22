@@ -635,7 +635,9 @@ final class RecordPreviewWindow: NSWindow {
             guard let self else { return }
             do {
                 let result = try await generator.image(at: time)
-                self.pinboard.copyLarge(cgImage: result.image, scale: self.captureScale)
+                if self.pinboard.copyLarge(cgImage: result.image, scale: self.captureScale) == .failed {
+                    DispatchQueue.main.async { ProblemReporter.reportCopyFailed() }
+                }
                 self.setStatus("快照已複製（⌘⇧V 可貼出）")
             } catch {
                 self.setStatus("拍快照失敗：\(error)")

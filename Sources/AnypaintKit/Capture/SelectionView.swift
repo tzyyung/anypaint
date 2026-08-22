@@ -319,11 +319,23 @@ final class SelectionView: NSView {
         return NSImage(cgImage: final, size: pointSize)
     }
 
+    /// 有選區、但 `currentCroppedImage()` 拿不到影像時的收尾。
+    ///
+    /// 原本這六個出口都是直接 `onCancel?()`——框選靜靜關掉，什麼都沒複製、沒存檔，也沒有任何
+    /// 說明。使用者只會看到「按了複製卻貼不出東西」，無從分辨是這裡失敗還是貼上那一端的問題。
+    ///
+    /// **順序不能顛倒**：框選視窗的 level 是 `.screenSaver`（1000），`NSAlert` 是一般視窗
+    /// ——不先關掉框選，警示會被蓋在後面完全看不到。
+    private func cancelWithCropFailure() {
+        onCancel?()
+        DispatchQueue.main.async { ProblemReporter.reportCropFailed() }
+    }
+
     func confirm() {
         commitTextEditing()
         guard let sel = selection, sel.width > minSize, sel.height > minSize else { return }
         guard let image = currentCroppedImage() else {
-            onCancel?()   // 有框但裁切失敗 → 維持原行為：取消
+            cancelWithCropFailure()   // 有框但裁切失敗 → 取消，並且要講出來
             return
         }
         onConfirm?(image)
@@ -335,7 +347,7 @@ final class SelectionView: NSView {
         commitTextEditing()
         guard let sel = selection, sel.width > minSize, sel.height > minSize else { return }
         guard let image = currentCroppedImage() else {
-            onCancel?()   // 有框但裁切失敗 → 維持與 confirm() 一致：取消
+            cancelWithCropFailure()   // 有框但裁切失敗 → 取消，並且要講出來
             return
         }
         onPin?(image, sel)
@@ -346,7 +358,7 @@ final class SelectionView: NSView {
         commitTextEditing()
         guard hasValidSelection else { return }
         guard let image = currentCroppedImage() else {
-            onCancel?()   // 有框但裁切失敗 → 維持與 confirm() 一致：取消
+            cancelWithCropFailure()   // 有框但裁切失敗 → 取消，並且要講出來
             return
         }
         onSave?(image)
@@ -357,7 +369,7 @@ final class SelectionView: NSView {
         commitTextEditing()
         guard hasValidSelection else { return }
         guard let image = currentCroppedImage() else {
-            onCancel?()   // 有框但裁切失敗 → 維持與 confirm() 一致：取消
+            cancelWithCropFailure()   // 有框但裁切失敗 → 取消，並且要講出來
             return
         }
         onSaveAs?(image)
@@ -368,7 +380,7 @@ final class SelectionView: NSView {
         commitTextEditing()
         guard hasValidSelection else { return }
         guard let image = currentCroppedImage() else {
-            onCancel?()   // 有框但裁切失敗 → 維持與 confirm() 一致：取消
+            cancelWithCropFailure()   // 有框但裁切失敗 → 取消，並且要講出來
             return
         }
         onOpen?(image)
@@ -382,7 +394,7 @@ final class SelectionView: NSView {
         commitTextEditing()
         guard let sel = selection, sel.width > minSize, sel.height > minSize else { return }
         guard let image = currentCroppedImage() else {
-            onCancel?()   // 有框但裁切失敗 → 維持與 confirm() 一致：取消
+            cancelWithCropFailure()   // 有框但裁切失敗 → 取消，並且要講出來
             return
         }
         onRecognizeText?(image, sel)

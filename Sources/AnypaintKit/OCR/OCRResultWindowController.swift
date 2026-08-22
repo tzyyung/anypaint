@@ -69,9 +69,16 @@ public final class OCRResultWindowController: NSWindowController {
     }
 
     @objc private func copyAll() {
+        // 成功時安靜（按了就是複製了），失敗才說話——失敗時剪貼簿已被清空，不講使用者不會知道。
         let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(textView.string, forType: .string)
+        let text = textView.string
+        let outcome = PinboardService.attemptWrite { _ in
+            pb.clearContents()
+            return pb.setString(text, forType: .string)
+        }
+        if outcome == .failed {
+            DispatchQueue.main.async { ProblemReporter.reportCopyFailed() }
+        }
     }
 
     public func closeWindow() {

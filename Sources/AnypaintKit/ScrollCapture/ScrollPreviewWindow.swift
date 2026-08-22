@@ -128,7 +128,9 @@ final class ScrollPreviewWindow: NSWindow {
 
     /// 複製：影像＋暫存 PNG 檔案 URL 雙型別（大圖降級，spec §8）；不關窗。
     @objc private func copyAction() {
-        pinboard.copyLarge(cgImage: cgImage, scale: scale)
+        if pinboard.copyLarge(cgImage: cgImage, scale: scale) == .failed {
+            DispatchQueue.main.async { ProblemReporter.reportCopyFailed() }
+        }
     }
 
     /// 存檔：快速儲存樣板路徑直寫＋掛自動儲存；不關窗。
