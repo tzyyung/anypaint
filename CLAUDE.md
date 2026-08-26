@@ -155,6 +155,36 @@ promise：`writeObjects([NSImage])` 不是（NSImage 沒實作 `writingOptions`�
 **注意 `CaptureSaver.writePNG(cgImage:to:)` 不寫 DPI**（`CGImageDestination` 直寫原生像素），
 所以不能拿它產生的檔案位元組直接充剪貼簿——尺寸會跑掉。剪貼簿那份要在記憶體另外編碼。
 
+### 放上剪貼簿的型別可以被任何行程事後認領走，而且完全隱形（2026-08-23 實測）
+`-[NSPasteboard addTypes:owner:]` 讓**任何**行程把**已經存在**的型別登記成「由我提供」，
+覆蓋原本放好的真實位元組。實測（具名剪貼簿，兩個角色在同一支程式裡模擬）：
+
+```
+我方 writeObjects 放真實位元組 → 讀 public.png → REAL-PNG-BYTES
+別人 addTypes([.png], owner: 自己)
+  changeCount                 → 1 → 1（完全沒有前進）
+  再讀 public.png             → HIJACKED（拿到的是對方提供的）
+```
+
+三個必須記住的性質：
+
+1. **不必 `clearContents`** 就能認領別人的型別（`addTypes` 是加，不是取代整份內容）。
+2. **`changeCount` 不變** ⇒ 這件事**偵測不到**。任何「watch changeCount 判斷剪貼簿有沒有被動過」
+   的邏輯都看不見它。
+3. **被認領的一方沒有防禦手段**——剪貼簿沒有所有權保護，也沒有「鎖住我的型別」的 API。
+
+**推論一：換圖片格式繞不開這件事。** 不論宣告 `public.png` 還是 `public.tiff`，對方都能認領同一個
+型別；改格式只是換一個照樣能被認領的標籤。（2026-08-23 對照實測：TIFF 與 PNG 在 TeamViewer 下
+行為完全相同。）不要再嘗試「改寫剪貼簿格式來避開第三方工具」。
+
+**推論二：複製成功 ≠ 使用者貼到的是我們那張。** 認領成立後交出來的是對方產生的資料。
+`copy` 回 `.ok` 只能保證「我們確實把位元組放上去了」，不保證後續沒有人接手。
+所以 `CopyOutcome` 的語意要講清楚，不要在 UI 上宣稱「已成功複製到剪貼簿，可以貼上了」這種
+我們保證不了的事。
+
+實例見 memory `teamviewer-clipboard-deadlock`：TeamViewer 認領 `public.png` 後在履行自己掛的
+promise 時重入死鎖，導致任何 app 貼上都卡住——anypaint 不在阻塞鏈上，也無法防止。
+
 ### 寫剪貼簿一定要看回傳值——失敗時剪貼簿已經被你清空了（2026-08-22）
 `writeObjects` 與 `setString` 都回 `Bool`。而複製的標準寫法是「先 `clearContents()`、再寫入」
 ——**寫入失敗時舊內容已經沒了、新內容也沒進去，剪貼簿是空的**。曾經全庫 7 個寫入點的回傳值
